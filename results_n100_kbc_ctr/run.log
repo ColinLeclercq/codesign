@@ -1,0 +1,230 @@
+=== launch 1790588324
+controller order 7 -> 8 (from the seed catalogue)
+warm start from results_ne100/K_B_C_s0_ne100.npz
+pool: 2 workers for the |Omega| constraints; stability certificate SERIAL
+band [-30.00, 30.00]; controller poles |Im| <= 20.00 (3/2 x max seed |Im|, band = 3/2 x wmax)
+controller poles NOT constrained in |Im| (--ctrl-imcap off); the band follows the closed-loop spectrum at each accepted design, from [-30.00, 30.00]
+stage-1 flags: select-cons=on ctrl-imcap=off ctrl-stab=on cont-anchor=defer opt-tol=1e-10
+start gamma=10.990169, |Omega|=155
+lu_counter: factorisations and solves are being counted
+warm start -> trust radius 0
+oracle: position-robust (union Galerkin, input basis b 12, c 12)
+continuation anchor verified: alpha=-0.0719, watching 8 near-line eigenvalue(s)
+    oracle: +2 anchor(s) (certified peaks) -> dim 41
+    start peaks re-derived on the reduced model: 1 within 5 % (0 new): [3.315]
+    sigma2 enrolled at 0 of 155 frequencies
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    oracle: reduced at the witness 9.805464 vs certified 9.805464 (rel 1.3e-14)
+    dump: results_n100_kbc_ctr/dump_1790588324/outer_000.npz  (|Omega|=155, 1 active, balance residual 2.367e+03)
+  outer 0: |Omega|=155  t=9.805464  certified=9.805464  best=9.805464  (+2 freq, 4 calls)
+    inner budget -> 20 (certified/t = 1.000)
+    oracle: +4 anchor(s) (certified peaks) -> dim 81
+    sigma2 enrolled at 0 of 157 frequencies
+    sqp refine: working set +1 -> |Omega|=158
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 2 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 9.465461 vs certified 9.465461 (rel 1.9e-14)
+    dump: results_n100_kbc_ctr/dump_1790588324/outer_001.npz  (|Omega|=158, 3 active, balance residual 5.643e+02)
+  outer 1: |Omega|=158  t=9.465461  certified=9.465461  best=9.465461  (+1 freq, 8 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +4 anchor(s) (certified peaks) -> dim 89
+    sigma2 enrolled at 0 of 159 frequencies
+    sqp refine: working set +1 -> |Omega|=160
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 4 member(s) moved to their tops, 0 merged
+    tau governor: 1 homotopy split(s), gate passed -- no cap
+    oracle: reduced at the witness 8.969086 vs certified 8.969086 (rel 6.2e-14)
+    dump: results_n100_kbc_ctr/dump_1790588324/outer_002.npz  (|Omega|=160, 4 active, balance residual 6.044e+02)
+  outer 2: |Omega|=160  t=8.969086  certified=8.969086  best=8.969086  (+0 freq, 7 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +5 anchor(s) (certified peaks) -> dim 91
+    sigma2 enrolled at 0 of 160 frequencies
+    sqp refine: working set +1 -> |Omega|=161
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    oracle: reduced at the witness 8.969086 vs certified 8.969086 (rel 5.1e-14)
+    dump: results_n100_kbc_ctr/dump_1790588324/outer_003.npz  (|Omega|=161, 4 active, balance residual 6.044e+02)
+  outer 3: |Omega|=161  t=8.969086  certified=8.969086  best=8.969086  (+0 freq, 7 calls)
+    inner budget -> 40 (certified/t = 1.000)
+  no new frequency (1/3) -- continuing with the current Omega
+    sigma2 enrolled at 0 of 161 frequencies
+    sqp refine: working set +1 -> |Omega|=162
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 3 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 8.754365 vs certified 8.754365 (rel 3.9e-15)
+    dump: results_n100_kbc_ctr/dump_1790588324/outer_004.npz  (|Omega|=162, 6 active, balance residual 2.564e+02)
+  outer 4: |Omega|=162  t=8.754365  certified=8.754365  best=8.754365  (+1 freq, 8 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +5 anchor(s) (certified peaks) -> dim 91
+    sigma2 enrolled at 0 of 163 frequencies
+    sqp refine: working set +1 -> |Omega|=164
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    oracle: reduced at the witness 8.754365 vs certified 8.754365 (rel 9.7e-15)
+    dump: results_n100_kbc_ctr/dump_1790588324/outer_005.npz  (|Omega|=164, 7 active, balance residual 2.055e+02)
+  outer 5: |Omega|=164  t=8.754365  certified=8.754365  best=8.754365  (+0 freq, 6 calls)
+    inner budget -> 40 (certified/t = 1.000)
+  no new frequency (1/3) -- continuing with the current Omega
+    sigma2 enrolled at 0 of 164 frequencies
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 5 member(s) moved to their tops, 0 merged
+    tau governor: 1 homotopy split(s), gate passed -- no cap
+    oracle: reduced at the witness 8.282325 vs certified 8.282325 (rel 3.2e-15)
+    dump: results_n100_kbc_ctr/dump_1790588324/outer_006.npz  (|Omega|=164, 6 active, balance residual 2.408e+02)
+  outer 6: |Omega|=164  t=8.282325  certified=8.282325  best=8.282325  (+1 freq, 5 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +5 anchor(s) (certified peaks) -> dim 93
+    sigma2 enrolled at 0 of 165 frequencies
+    sqp refine: working set +17 -> |Omega|=182
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 6 member(s) moved to their tops, 0 merged
+    tau governor: 5 homotopy split(s), gate passed -- no cap
+    oracle: reduced at the witness 7.906621 vs certified 7.906621 (rel 7.2e-14)
+    dump: results_n100_kbc_ctr/dump_1790588324/outer_007.npz  (|Omega|=182, 15 active, balance residual 4.389e+00)
+  outer 7: |Omega|=182  t=7.906621  certified=7.906621  best=7.906621  (+1 freq, 109 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +6 anchor(s) (certified peaks) -> dim 93
+    sigma2 row at w=-0.5294: sigma1=7.9031 sigma2=7.8674 gap=0.0045 (active)
+    sigma2 row at w=-0.5078: sigma1=7.9031 sigma2=7.8755 gap=0.0035 (active)
+    sigma2 row at w=-0.5000: sigma1=7.9009 sigma2=7.8582 gap=0.0054 (active)
+    sigma2 enrolled at 3 of 183 frequencies
+    sqp refine: working set +38 -> |Omega|=221
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 8 member(s) moved to their tops, 0 merged
+    continuation (reduced) REJECTS: homotopy midpoint is infeasible (alpha=-0.0093)
+    continuation refused, but the winding count right of Re=-eps is 0 (1007 pts): UNCONDITIONALLY stable at the margin, accepted, chain restarted
+    tau governor: 1 homotopy split(s), gate passed -- no cap
+    oracle: reduced at the witness 7.561396 vs certified 7.561396 (rel 1.9e-13)
+    dump: results_n100_kbc_ctr/dump_1790588324/outer_008.npz  (|Omega|=221, 22 active, balance residual 2.537e+01)
+  outer 8: |Omega|=221  t=7.561396  certified=7.561396  best=7.561396  (+3 freq, 124 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +8 anchor(s) (certified peaks) -> dim 93
+    sigma2 row at w=-0.5183: sigma1=7.5292 sigma2=7.4591 gap=0.0093
+    sigma2 row at w=-0.5078: sigma1=7.5282 sigma2=7.4583 gap=0.0093
+    sigma2 row at w=-0.5000: sigma1=7.5249 sigma2=7.4481 gap=0.0102
+    sigma2 enrolled at 3 of 224 frequencies
+    sqp refine: working set +33 -> |Omega|=257
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 10 member(s) moved to their tops, 0 merged
+    continuation (reduced) REJECTS: homotopy midpoint is infeasible (alpha=+0.0435)
+    continuation refused, but the winding count right of Re=-eps is 0 (847 pts): UNCONDITIONALLY stable at the margin, accepted, chain restarted
+    tau governor: 1 homotopy split(s), gate passed -- no cap
+    oracle: reduced at the witness 6.861210 vs certified 6.861210 (rel 1.3e-15)
+    dump: results_n100_kbc_ctr/dump_1790588324/outer_009.npz  (|Omega|=257, 8 active, balance residual 1.460e+04)
+  outer 9: |Omega|=257  t=6.861210  certified=6.861210  best=6.861210  (+3 freq, 122 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +8 anchor(s) (certified peaks) -> dim 95
+    sigma2 row at w=-0.5149: sigma1=6.7522 sigma2=6.4866 gap=0.0393
+    sigma2 row at w=-0.5078: sigma1=6.7510 sigma2=6.4922 gap=0.0383
+    sigma2 row at w=-0.5000: sigma1=6.7469 sigma2=6.4936 gap=0.0375
+    sigma2 enrolled at 3 of 260 frequencies
+    sqp refine: working set +34 -> |Omega|=294
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 10 member(s) moved to their tops, 0 merged
+    continuation (reduced) REJECTS: homotopy midpoint is infeasible (alpha=-0.0450)
+    continuation refused, but the winding count right of Re=-eps is 0 (843 pts): UNCONDITIONALLY stable at the margin, accepted, chain restarted
+    tau governor: 1 homotopy split(s), gate passed -- no cap
+    oracle: reduced at the witness 6.570821 vs certified 6.570821 (rel 3.8e-14)
+    dump: results_n100_kbc_ctr/dump_1790588324/outer_010.npz  (|Omega|=294, 112 active, balance residual 8.930e+00)
+  outer 10: |Omega|=294  t=6.570821  certified=6.570821  best=6.570821  (+4 freq, 125 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +10 anchor(s) (certified peaks) -> dim 105
+    sigma2 row at w=-0.5147: sigma1=6.5541 sigma2=6.2591 gap=0.0450
+    sigma2 row at w=-0.5078: sigma1=6.5534 sigma2=6.2658 gap=0.0439
+    sigma2 row at w=-0.5000: sigma1=6.5509 sigma2=6.2682 gap=0.0432
+    sigma2 enrolled at 3 of 298 frequencies
+    sqp refine: working set +13 -> |Omega|=311
+    sqp: stalled solve -- quasi-Newton matrix and radius reset for the next round
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 11 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 6.526981 vs certified 6.526981 (rel 7.3e-15)
+    dump: results_n100_kbc_ctr/dump_1790588324/outer_011.npz  (|Omega|=311, 135 active, balance residual 9.006e+00)
+  outer 11: |Omega|=311  t=6.526981  certified=6.526981  best=6.526981  (+2 freq, 81 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +10 anchor(s) (certified peaks) -> dim 109
+    sigma2 row at w=-0.5122: sigma1=6.5270 sigma2=6.2416 gap=0.0437 (active)
+    sigma2 row at w=-0.5078: sigma1=6.5267 sigma2=6.2451 gap=0.0431 (active)
+    sigma2 row at w=-0.5000: sigma1=6.5246 sigma2=6.2473 gap=0.0425 (active)
+    sigma2 enrolled at 3 of 313 frequencies
+    sqp refine: working set +18 -> |Omega|=331
+    sqp: stalled solve -- quasi-Newton matrix and radius reset for the next round
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 15 member(s) moved to their tops, 0 merged
+    tau governor: 5 homotopy split(s), gate passed -- no cap
+    oracle: reduced at the witness 6.464121 vs certified 6.464121 (rel 8.7e-14)
+    dump: results_n100_kbc_ctr/dump_1790588324/outer_012.npz  (|Omega|=331, 193 active, balance residual 8.876e+00)
+  outer 12: |Omega|=331  t=6.464121  certified=6.464121  best=6.464121  (+6 freq, 102 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +12 anchor(s) (certified peaks) -> dim 113
+    sigma2 row at w=-0.5122: sigma1=6.4637 sigma2=6.1884 gap=0.0426 (active)
+    sigma2 row at w=-0.5078: sigma1=6.4639 sigma2=6.1917 gap=0.0421 (active)
+    sigma2 row at w=-0.5000: sigma1=6.4628 sigma2=6.1935 gap=0.0417 (active)
+    sigma2 enrolled at 3 of 337 frequencies
+    sqp refine: working set +35 -> |Omega|=372
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 23 member(s) moved to their tops, 0 merged
+    tau governor: 4 homotopy split(s), gate passed -- no cap
+    oracle: reduced at the witness 6.427585 vs certified 6.427585 (rel 6.9e-16)
+    dump: results_n100_kbc_ctr/dump_1790588324/outer_013.npz  (|Omega|=372, 101 active, balance residual 8.838e+00)
+  outer 13: |Omega|=372  t=6.427585  certified=6.427585  best=6.427585  (+8 freq, 124 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +13 anchor(s) (certified peaks) -> dim 117
+    sigma2 row at w=-0.5078: sigma1=6.4189 sigma2=6.1463 gap=0.0425
+    sigma2 row at w=-0.5046: sigma1=6.4190 sigma2=6.1475 gap=0.0423
+    sigma2 row at w=-0.5000: sigma1=6.4187 sigma2=6.1476 gap=0.0422
+    sigma2 enrolled at 3 of 380 frequencies
+    sqp refine: working set +15 -> |Omega|=395
+    sqp: stalled solve -- quasi-Newton matrix and radius reset for the next round
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 26 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 6.411549 vs certified 6.411549 (rel 4.4e-14)
+    dump: results_n100_kbc_ctr/dump_1790588324/outer_014.npz  (|Omega|=395, 182 active, balance residual 8.289e+00)
+  outer 14: |Omega|=395  t=6.411549  certified=6.411549  best=6.411549  (+2 freq, 95 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +12 anchor(s) (certified peaks) -> dim 117
+    sigma2 row at w=-0.5078: sigma1=6.4115 sigma2=6.1402 gap=0.0423 (active)
+    sigma2 row at w=-0.5061: sigma1=6.4115 sigma2=6.1410 gap=0.0422 (active)
+    sigma2 row at w=-0.5000: sigma1=6.4110 sigma2=6.1419 gap=0.0420 (active)
+    sigma2 enrolled at 3 of 397 frequencies
+    sqp: stalled solve -- quasi-Newton matrix and radius reset for the next round
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 21 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 6.409732 vs certified 6.409732 (rel 1.7e-14)
+    dump: results_n100_kbc_ctr/dump_1790588324/outer_015.npz  (|Omega|=397, 189 active, balance residual 8.574e+00)
+  outer 15: |Omega|=397  t=6.409725  certified=6.409732  best=6.409732  (+2 freq, 76 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +12 anchor(s) (certified peaks) -> dim 117
+    sigma2 row at w=-0.5078: sigma1=6.4097 sigma2=6.1389 gap=0.0422 (active)
+    sigma2 row at w=-0.5063: sigma1=6.4097 sigma2=6.1396 gap=0.0421 (active)
+    sigma2 row at w=-0.5000: sigma1=6.4091 sigma2=6.1407 gap=0.0419 (active)
+    sigma2 enrolled at 3 of 398 frequencies
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 19 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 6.408029 vs certified 6.408029 (rel 1.5e-15)
+    dump: results_n100_kbc_ctr/dump_1790588324/outer_016.npz  (|Omega|=398, 191 active, balance residual 8.572e+00)
+  outer 16: |Omega|=398  t=6.407716  certified=6.408029  best=6.408029  (+0 freq, 85 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +12 anchor(s) (certified peaks) -> dim 117
+    sigma2 row at w=-0.5078: sigma1=6.4077 sigma2=6.1371 gap=0.0422 (active)
+    sigma2 row at w=-0.5065: sigma1=6.4077 sigma2=6.1378 gap=0.0421 (active)
+    sigma2 row at w=-0.5000: sigma1=6.4071 sigma2=6.1389 gap=0.0419 (active)
+    sigma2 enrolled at 3 of 398 frequencies
+    sqp: stalled solve -- quasi-Newton matrix and radius reset for the next round
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 17 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 6.405826 vs certified 6.405826 (rel 1.2e-14)
+    dump: results_n100_kbc_ctr/dump_1790588324/outer_017.npz  (|Omega|=398, 194 active, balance residual 8.570e+00)
+  outer 17: |Omega|=398  t=6.405825  certified=6.405826  best=6.405826  (+0 freq, 76 calls)
+    inner budget -> 40 (certified/t = 1.000)
+  PROGRESS STOP: 0.089 % over the last 3 rounds (< 0.15 %)
+winding certificate: 0 eigenvalues right of Re=-0.0250 (935 pts) -- UNCONDITIONALLY stable with eps/2 margin
+{"case": "K+B+C", "gamma": 6.405825541405711, "alpha": -0.16304881169097962, "n_active": 1, "outer": 18, "nOmega": 398, "calls": 1164, "seconds": 1003.6}
+gamma 6.405826  active peaks 46 at [-6.12  -2.613 -2.608 -2.602 -2.565 -1.436 -1.408 -1.396 -0.966 -0.964
+ -0.961 -0.71  -0.702 -0.508 -0.507 -0.25  -0.243 -0.237  0.359  0.361
+  0.367  0.368  1.314  1.325  1.334  2.534  2.538  2.544  2.551  2.552
+  2.557  2.559  2.561  2.562  2.565  2.569  2.571  2.573  2.574  2.58
+  2.582  2.584  2.587  2.589  3.946 12.039]  cluster Re [-0.05 -0.05]  block H lambda_min +1.15e-14  alpha -0.1630 (row inactive)
+rho on the sigma hull only: 1.162e+01 = 3.78e-03 x gradient scale
+rho KKT (hull + block PSD multiplier): 9.461e-02 = 3.08e-05 x gradient scale   [Solved; |Lambda| 1.58e+04; lambda [0.012 0.    0.    0.    0.03  0.01  0.    0.036 0.    0.    0.019 0.039
+ 0.    0.    0.723 0.    0.    0.049 0.037 0.    0.    0.    0.    0.
+ 0.026 0.002 0.    0.    0.    0.    0.    0.    0.    0.    0.    0.
+ 0.    0.    0.    0.    0.    0.    0.    0.011 0.004 0.003]]
+rho KKT with the pair ON its face (S rows: mu_u, mu_a >= 0, mu_b free): 9.391e-02 = 3.06e-05 x gradient scale   [Solved; sep 6.9e-06, exc -1.0e-06; mu [ 1.1096 10.0993  0.8391]]

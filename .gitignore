@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+dump_*/
+*_ckpt.*
+*.tar.gz
+runs_old/
+logs/
+harness_out/
+cleanup_evidence/

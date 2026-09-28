@@ -1,0 +1,15 @@
+{
+ "record": "results/K_FB_FC_s0_ne200.npz",
+ "nu": 277.9609056931906,
+ "a_c": 4199.74641780364,
+ "beta": 1.0,
+ "gamma_c": 1.0000000000000004,
+ "W": 8399.49283560728,
+ "tail_bound": 0.00012603482843824787,
+ "gamma_band": 3.925456520446499,
+ "w_star": 0.3728108784025547,
+ "certified": true,
+ "gamma_record": 3.9253888166353397,
+ "global_certified": true,
+ "method": "dense"
+}

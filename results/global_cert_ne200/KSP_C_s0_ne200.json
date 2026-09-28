@@ -1,0 +1,15 @@
+{
+ "record": "results/KSP_C_s0_ne200.npz",
+ "nu": 277.9609056931906,
+ "a_c": 111.81050772773128,
+ "beta": 1.0,
+ "gamma_c": 0.9999999999999999,
+ "W": 555.9218113863813,
+ "tail_bound": 0.004493757919883151,
+ "gamma_band": 9.660158347157003,
+ "w_star": NaN,
+ "certified": true,
+ "gamma_record": 9.660158356817162,
+ "global_certified": true,
+ "method": "dense"
+}

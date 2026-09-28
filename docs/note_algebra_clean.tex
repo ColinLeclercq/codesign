@@ -1,0 +1,1500 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{mathptmx}
+\usepackage{amsmath,amssymb}
+\usepackage[margin=2.6cm]{geometry}
+\usepackage{booktabs}
+\usepackage[activate=false]{microtype}
+\usepackage{xcolor}
+\definecolor{revP}{RGB}{20,60,170}
+\newcommand{\revP}[1]{#1}
+\definecolor{revQ}{RGB}{140,30,120}
+\newcommand{\revQ}[1]{{\color{revQ}#1}}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+\usepackage{enumitem}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\newcommand{\eps}{\varepsilon}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\Mcl}{M_{\mathrm{cl}}}
+\newcommand{\Acl}{A_{\mathrm{cl}}}
+\newcommand{\hp}{^{\mathsf H}}
+\newcommand{\Rcl}{R_{\mathrm{cl}}}   % conjugate transpose
+\newcommand{\tp}{^{\mathsf T}}   % plain transpose
+\setlength{\parskip}{3pt}
+
+\title{The algebra behind the oracle\\[3pt]
+{\large Companion note: sparse $+$ low-rank structure in the $H_\infty$ value, its
+gradients, and the spectral abscissa}}
+\author{C.~Leclercq \and E.~Cl\'ement}
+\date{September 7, 2026}
+
+\begin{document}
+\maketitle
+
+\noindent
+{\small [This is the consolidated edition of the note: four rounds of review questions (August 31 -- September 3) have been folded into the exposition, so nothing here is answered in the margin --- everything is introduced in order, and the decisions the review produced are collected in \S\ref{sec:todo}.  \revP{The
+September 6 edition adds \S\ref{sec:proj}, a projection-based reduced model for the inner
+loop, GL-validated and cavity-untested, with the matching to-do items.  \revQ{The September 7 edition credits the
+optimise-and-enrich loop to Aliyev, Benner, Mengi and Voigt (2019), adds the two
+mechanisms of Mengi (2022, 2023) for the watch list and the margin constraint, and
+completes the citation of the disk certificate (Schwerdtner, Mengi and Voigt 2020);
+these passages are set in this colour.}]}\par\smallskip
+
+The optimisation note treated the oracle as a black box.  This note opens the box.  The
+message can be stated up front: \emph{every} quantity the optimiser consumes --- the gain
+$\sigma_1(\omega)$, its gradient with respect to \emph{all} design parameters at once, the
+location and polish of peaks, the certified global maximum, the stability margin, its
+certificate, and its gradient --- reduces to three primitive operations:
+\begin{center}
+\fbox{\parbox{0.9\textwidth}{
+\textbf{(P1)} one sparse LU factorisation, per complex point $s$, of the inverse of the
+\emph{plant resolvent} $R(s)=(sM-A)^{-1}$ --- i.e.\ of the sparse matrix $R(s)^{-1}=sM-A$
+(the resolvent itself is never formed; ``applying $R$'' means triangular solves);\\
+\textbf{(P2)} triangular solves with that factorisation (and its conjugate transpose);\\
+\textbf{(P3)} dense arithmetic on objects of size $r$ or $2$ (the controller order and the
+coupling rank).}}
+\end{center}
+Nothing in the pipeline ever factorises, stores, or differentiates a matrix of closed-loop
+size.  This is what ``exploiting sparse $+$ low-rank'' means concretely, and it is the
+property that ports to the cavity, where (P1) becomes a sparse multifrontal factorisation
+of the linearised Navier--Stokes operator and (P2)--(P3) are unchanged.
+
+%======================================================================
+\section{The one structural fact}\label{sec:structure}
+\label{sec:structure}
+
+Plant ($n$ complex states, $M$ symmetric positive definite mass matrix, $A$ sparse):
+\[
+M\dot q = Aq + b\,u + d,\qquad y = c\hp q,
+\]
+with actuator $b\in\C^n$, sensor $c\in\C^n$ (Gaussians of the positions, or free fields
+through a fixed smoothing map), and $d$ the full-field disturbance.  Controller (order
+$r=8$; $A_c$ tridiagonal with rows $(d_c,e_c,f_c)$; input matrix $B_c$ \emph{fixed};
+output row $n\tp$ and direct gain $K$ free where the case allows):
+\[
+\dot x_c = A_c x_c + B_c\, y,\qquad u = n\tp x_c + K\,y .
+\]
+Substituting $u$ and $y$, the closed-loop pencil on the stacked state
+$(q,x_c)\in\C^{n+r}$ is
+\[
+\Mcl=\begin{bmatrix} M & 0\\ 0 & I_r\end{bmatrix},
+\qquad
+\Acl=
+\underbrace{\begin{bmatrix} A & 0\\ 0 & A_c\end{bmatrix}}_{\text{sparse }\oplus\text{ small}}
+\;+\;
+\underbrace{\begin{bmatrix} b & 0\\ 0 & B_c\end{bmatrix}}_{U\in\C^{(n+r)\times 2}}
+\underbrace{\begin{bmatrix} K c\hp & n\tp\\ c\hp & 0\end{bmatrix}}_{V\in\C^{2\times(n+r)}}.
+\]
+\begin{equation}
+\boxed{\;\Acl \;=\; \mathrm{blkdiag}(A,\,A_c)\;+\;UV,\qquad \mathrm{rank}(UV)\le 2.\;}
+\label{eq:structure}
+\end{equation}
+Every formula below is a consequence of \eqref{eq:structure}.
+
+\paragraph{More actuators and sensors.}  The rank-2 structure is the $1{\times}1$ case of a
+general fact.  With actuator matrix
+$B_a\in\C^{n\times n_a}$, sensor matrix $C_s\in\C^{n\times n_s}$ (so $y=C_s\hp q\in\C^{n_s}$,
+$u\in\C^{n_a}$) and a MIMO controller ($B_c\in\R^{r\times n_s}$, $N\in\C^{n_a\times r}$,
+$K\in\C^{n_a\times n_s}$), the coupling term of \eqref{eq:structure} becomes
+$U\in\C^{(n+r)\times(n_a+n_s)}$, $V\in\C^{(n_a+n_s)\times(n+r)}$:
+$\mathrm{rank}(UV)\le n_a+n_s$ --- still tiny.  Everything upgrades by replacing scalars
+with small matrices: the controller collapses to the $n_a\times n_s$ transfer
+\emph{matrix} $\mathsf K(s)=K+N(sI-A_c)^{-1}B_c$; Sherman--Morrison becomes Woodbury with
+an $(n_a{+}n_s)$-sized capacity matrix; the plant transfer is
+$\mathsf G(s)=C_s\hp R(s)B_a\in\C^{n_s\times n_a}$ ($n_a$ solves on one factorisation);
+and the winding scalar becomes the \emph{return-difference determinant},
+$f(s)=\det\bigl(I-\mathsf K(s)\mathsf G(s)\bigr)$ ($n_s\times n_s$, dense-tiny), with the
+factorisation \eqref{eq:factorised} and the count formula \eqref{eq:count} holding
+verbatim.  Costs: the LU is unchanged; triangular solves multiply by $n_a$ (forward) and
+$n_s$ (adjoint); gradients still come from one forward/adjoint \emph{pair of blocks} per
+frequency.  The capability is scheduled (\S\ref{sec:todo}, item~7).
+
+%======================================================================
+\section{Every closed-loop solve is a plant solve}
+\label{sec:solve}
+
+Let $s\in\C$ (on the frequency axis, $s=i\omega$) and consider the closed-loop system
+$(s\Mcl-\Acl)\bigl(\begin{smallmatrix}q\\x_c\end{smallmatrix}\bigr)
+=\bigl(\begin{smallmatrix}r_q\\r_c\end{smallmatrix}\bigr)$.
+Eliminate the controller states from the second block row:
+$x_c=(sI-A_c)^{-1}\bigl(r_c+B_c\,c\hp q\bigr)$ --- an $r\times r$ dense solve, primitive
+(P3).  Substituting into the first row collapses the whole controller to a single scalar,
+its transfer function at $s$:
+\begin{equation}
+\boxed{\;k(s)\;=\;K + n\tp (sI-A_c)^{-1}B_c,\;}
+\label{eq:ks}
+\end{equation}
+and the plant-level system becomes
+$\bigl(R(s)^{-1} - k(s)\,b\,c\hp\bigr)\,q = \tilde r$, with $R(s)=(sM-A)^{-1}$ the plant
+resolvent.  A rank-one perturbation of a factorised matrix is solved by the
+Sherman--Morrison identity:
+\begin{equation}
+\boxed{\;
+\bigl(R^{-1} - k\,bc\hp\bigr)^{-1}
+= R + \frac{k\; Rb\; c\hp R}{\,1-k\,G(s)\,},
+\qquad G(s) = c\hp R(s)\, b .
+\;}
+\label{eq:sherman}
+\end{equation}
+So one closed-loop solve costs: one sparse LU of $R(s)^{-1}$ (P1, done once per $s$ and
+reused for everything), two or three triangular solves (P2: applying $R$ to $\tilde r$
+and to $b$; $G=c\hp Rb$ comes free from the second), and scalars (P3).  Adjoint systems
+$(\,\cdot\,)\hp x = y$ use the \emph{same} factorisation via transposed-conjugate
+triangular solves --- no second LU.
+
+Note the scalar in the denominator of \eqref{eq:sherman},
+\[
+f(s) \;=\; 1 - k(s)\,G(s),
+\]
+the \emph{return difference} of the SISO loop.  Keep it in mind: it reappears as the star
+of the stability certificate in \S\ref{sec:winding}.  (Numerically, $|f|$ small means the
+solve is ill-conditioned --- which happens exactly when $s$ approaches a closed-loop
+eigenvalue, as \S\ref{sec:winding} makes precise.)
+
+%======================================================================
+\section{The $H_\infty$ value: $\sigma_1(\omega)$ as an eigenvalue}
+\label{sec:sigma}
+
+The performance channel is full-field: disturbance $d$ into the plant equation, output the
+plant state $q$ measured in the energy norm $\|q\|_M^2=q\hp Mq$.  With
+$\Pi=[\,I_n\;\;0\,]$ the extractor of plant states, the (weighted) transfer operator at
+frequency $\omega$ is
+\[
+T(\omega)\;=\;M^{1/2}\,\Pi\,(i\omega \Mcl-\Acl)^{-1}\,\Pi\tp M^{1/2}
+\;\in\;\C^{n\times n},
+\qquad
+\sigma_1(\omega)=\|T(\omega)\|_2 .
+\]
+We never form $T$; we need only its largest singular value, i.e.\ the largest eigenvalue
+of the Hermitian positive semidefinite operator $T\hp T$.  Unwinding the square roots,
+$\sigma_1^2$ is the largest eigenvalue of
+\begin{equation}
+\boxed{\;
+W(\omega)\;=\;M\,\Rcl(\omega)\hp\,M\,\Rcl(\omega),
+\qquad
+\Rcl(\omega)=\Pi(i\omega\Mcl-\Acl)^{-1}\Pi\tp ,
+\;}
+\label{eq:W}
+\end{equation}
+understood as an operator on $\C^n$ (self-adjoint in the $M^{-1}$ inner product; the code
+applies it verbatim: solve, multiply by $M$, adjoint-solve, multiply by $M$).  One
+application of $W$ = two solves of \S\ref{sec:solve} on one factorisation.  The largest
+eigenvalue is obtained by power/Lanczos iteration on $W$, \emph{warm-started} with the
+converged eigenvector from the neighbouring frequency --- across an exchange set the
+vectors vary slowly in $\omega$, and the warm start cuts the iteration count to a
+handful.  The converged eigenvector $v$ (the worst disturbance shape) and its image
+give the singular pair $(u,\sigma_1,v)$ of $T$ that the gradients need next.
+
+Cost of one oracle value: one LU $+$ $O(10)$ triangular solves.  On the 1-D GL mesh the LU
+is $O(n)$; at cavity scale it is the sparse factorisation of a shifted Navier--Stokes
+operator --- expensive, which is why the outer method was shaped so that \emph{many
+independent frequencies} are evaluated concurrently.
+
+%======================================================================
+\section{Gradients of $\sigma_1$: all parameters from one solve pair}
+\label{sec:grads}
+
+Fix $\omega$ and suppose $\sigma_1$ is a \emph{simple} singular value of $T$ (the solver
+monitors the gap $\sigma_1-\sigma_2$; more on ties in \S\ref{sec:subgrad}).  With unit
+singular vectors $u,v$ ($Tv=\sigma_1 u$), first-order perturbation theory gives the exact
+directional derivative
+\[
+\delta\sigma_1 \;=\; \mathrm{Re}\,\bigl[\,u\hp\,(\delta T)\,v\,\bigr].
+\]
+Since only $\Acl$ depends on the design, $\delta\bigl((i\omega\Mcl-\Acl)^{-1}\bigr)
+=(i\omega\Mcl-\Acl)^{-1}\,\delta\Acl\,(i\omega\Mcl-\Acl)^{-1}$, and defining the two
+\emph{solved vectors} (one forward, one adjoint solve --- both on the factorisation
+already computed for the value):
+\[
+\tilde v=(i\omega\Mcl-\Acl)^{-1}\Pi\tp M^{1/2}v \in\C^{n+r},
+\qquad
+\tilde u=(i\omega\Mcl-\Acl)^{-\mathsf H}\Pi\tp M^{1/2}u \in\C^{n+r},
+\]
+we obtain the master formula
+\begin{equation}
+\boxed{\;\delta\sigma_1 \;=\; \mathrm{Re}\,\bigl[\,\tilde u\hp\,(\delta \Acl)\,\tilde v\,\bigr].\;}
+\label{eq:master}
+\end{equation}
+Everything now follows from the \emph{structure} \eqref{eq:structure} of $\Acl$: each
+design parameter perturbs $\Acl$ in a known sparse or low-rank pattern, so
+\eqref{eq:master} evaluates to inner products of pieces of $\tilde u,\tilde v$.  Write
+$\tilde v=(\tilde v_p,\tilde v_c)$ and $\tilde u=(\tilde u_p,\tilde u_c)$ for the plant
+and controller components.  Then (for a complex parameter $p$ we record the complex
+sensitivity $\zeta_p$ defined by $\delta\sigma_1=\mathrm{Re}[\bar\zeta_p\,\delta p]$; the
+real gradient with respect to $(\mathrm{Re}\,p,\mathrm{Im}\,p)$ is
+$(\mathrm{Re}\,\zeta_p,\mathrm{Im}\,\zeta_p)$):
+
+\begin{center}
+\small
+\begin{tabular}{lll}
+\toprule
+parameter & enters $\Acl$ as & sensitivity from \eqref{eq:master} \\
+\midrule
+gain $K$ & $\delta K\,[\,b;0\,][\,c\hp\;0\,]$ &
+ $\bar\zeta_K=(\tilde u_p\hp b)\,(c\hp\tilde v_p)$ \\[2pt]
+output row $n$ & $[\,b;0\,][\,0\;\;\delta n\tp\,]$ &
+ $\bar\zeta_{n_j}=(\tilde u_p\hp b)\,(\tilde v_c)_j$ \\[2pt]
+$A_c$ entries $(d_c,e_c,f_c)$ & $\delta(A_c)_{jk}$ in the controller block &
+ $\bar\zeta_{jk}=(\tilde u_c)^*_j\,(\tilde v_c)_k$ \quad (tridiagonal $jk$ only) \\[2pt]
+actuator $b$ & $\delta b\,[\,Kc\hp\tilde v_p + n\tp\tilde v_c\,]$ direction &
+ $\nabla_b$-vector $\;\propto\; \overline{\tilde u_p}\,\cdot
+ \bigl(Kc\hp\tilde v_p + n\tp\tilde v_c\bigr)$ \\[2pt]
+sensor $c$ & $[\,\tilde u_p\hp bK + \tilde u_c\hp B_c\,]\,\delta c\hp$ direction &
+ $\nabla_c$-vector $\;\propto\; \tilde v_p\,\cdot
+ \overline{\bigl(K\,\tilde u_p\hp b + \tilde u_c\hp B_c\bigr)}$ \\[2pt]
+position $x_a$ & chain rule through $b=g(x_a)$ &
+ $\partial\sigma/\partial x_a = \mathrm{Re}\bigl[\,\zeta_b\hp\, g'(x_a)\,\bigr]$
+ \ (similarly $x_s$) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent
+Free fields are optimised through a fixed linear smoothing (Sobolev) map
+$b=\Sigma\,\beta$; the chain rule multiplies $\nabla_b$ by the constant $\Sigma\hp$.
+The point to internalise is the \textbf{cost}: the entire gradient --- all
+$\mathrm{NZ}$ real parameters, whether $\mathrm{NZ}=2$ (a position case) or
+$\mathrm{NZ}=1659$ (a two-field case) --- costs \emph{two} triangular solve sets beyond
+the value, independent of $\mathrm{NZ}$.  This is the adjoint-state economy, and it is why
+the field cases are affordable at all.
+
+%======================================================================
+\section{Frequency derivatives, peak location, and polishing}
+
+The same master formula with $\theta$ frozen and $\omega$ varied
+($\delta(i\omega\Mcl-\Acl) = i\,\delta\omega\,\Mcl$) gives
+\[
+\frac{\partial\sigma_1}{\partial\omega}
+= \mathrm{Re}\bigl[\,\tilde u\hp(-i\Mcl)\tilde v\,\bigr]
+= \mathrm{Im}\bigl[\,\tilde u\hp \Mcl\,\tilde v\,\bigr]:
+\]
+one inner product per frequency, no extra solve.  A peak is a zero of
+$\partial_\omega\sigma_1$; Newton's iteration on this scalar (second derivative by
+differencing the first, or one extra solve) polishes each located peak to $10^{-10}$ in a
+few oracle calls, warm-started along the iteration.  Peak \emph{location} starts from the
+exchange set and from a coarse scan; \emph{missed} peaks are the certificate's job:
+
+%======================================================================
+\section{Certifying the global maximum}\label{sec:cert}
+\label{sec:cert}
+
+The optimiser must never trust a locally found maximum (v6, \S5).  The certified question
+is: \emph{given a level $\gamma$, does $\sigma_1(\omega)<\gamma$ hold for all $\omega$ in
+the band?}  The classical equivalence that turns this analytic question into an algebraic
+one: $\gamma$ is a singular value of $T(\omega)$ if and only if the structured pencil
+\begin{equation}
+\boxed{\;
+\mathcal P_\gamma(\lambda)\;=\;
+\begin{bmatrix} \; -A & \;\gamma^{-1}\,\hat B\hat B\hp \\[2pt]
+ -\gamma^{-1}\,\hat C\hp\hat C & \;-A\hp \end{bmatrix}
+-\lambda
+\begin{bmatrix} -M & 0\\ 0 & M\hp\end{bmatrix}
+\;}
+\label{eq:pencil}
+\end{equation}
+(written here for the closed-loop realisation, $\hat B,\hat C$ the weighted input/output
+maps of \S\ref{sec:sigma}) is singular at $\lambda=i\omega$.  Consequently: if the pencil
+has \emph{no eigenvalue} on a segment of the imaginary axis, then $\sigma_1\ne\gamma$
+throughout that segment, and a single sample below $\gamma$ certifies the whole segment
+below $\gamma$.  The oracle therefore covers the band by \textbf{eigenvalue-free disks}:
+at a test point $i\omega_0$, a structure-preserving shift-invert Arnoldi iteration finds
+the pencil eigenvalue nearest to $i\omega_0$; its distance is a certified radius within
+which the level is not crossed.  Each shift-invert solve is a bordered sparse system that
+reduces, once again, to (P1)--(P3) --- plant factorisations plus rank-$O(1)$ algebra.
+Adaptive placement of test points sweeps the band; wherever a disk cannot be certified,
+the iteration has \emph{found} an axis-near eigenvalue, i.e.\ located a frequency where
+$\sigma_1$ reaches $\gamma$ --- exactly the ``missed peak'' the exchange needs.  Bisection
+on $\gamma$ (warm-started from the incumbent level) certifies the maximum itself to
+relative tolerance $10^{-6}$ at a cost of $O(10^2)$ shift-invert solves per design.
+
+%======================================================================
+\section{Stability: value, certificate, and the return difference}
+\label{sec:winding}
+
+\subsection{The value}
+The margin constraint is $\alpha(\theta)\le-\eps$ with
+$\alpha=\max_j\mathrm{Re}\,\lambda_j(\Acl,\Mcl)$.  During optimisation the pipeline does
+not recompute the whole spectrum; it \emph{tracks} the few dangerous eigenvalues by
+shift-invert (inverse) iteration, shifting at each accepted step to the eigenvalue's
+previous location --- each iteration a bordered solve on the plant factorisation.  At
+benchmark scale a dense generalized eigensolve provides ground truth; at cavity scale it
+will not exist, which is why a certificate is required:
+
+\subsection{The certificate: count eigenvalues without computing them}
+Take determinants in the block form of $s\Mcl-\Acl$ and eliminate the controller block
+(Schur complement), then apply the matrix determinant lemma to the remaining rank-one
+term --- the same two moves as \S\ref{sec:solve}, now on determinants:
+\begin{align}
+\det(s\Mcl-\Acl)
+&= \det(sI-A_c)\,\det\!\bigl(R(s)^{-1}-k(s)\,bc\hp\bigr) \notag\\
+&= \det(sI-A_c)\;\det R(s)^{-1}\;\bigl(1-k(s)\,G(s)\bigr) .
+\label{eq:factorised}
+\end{align}
+
+The passage from $R\,bc\hp$ to the scalar $G$ is the \emph{matrix determinant lemma}, in two
+lines.  Factor
+out: $\det(R^{-1}-k\,bc\hp)=\det R^{-1}\cdot\det(I-k\,(Rb)\,c\hp)$.  Now
+$(Rb)\,c\hp$ is a rank-one matrix; its eigenvalues are $c\hp(Rb)=G$ (eigenvector $Rb$)
+and $0$ with multiplicity $n-1$, so
+$\det(I-k\,(Rb)c\hp)=\prod_i(1-k\lambda_i)=1-k\,G$.  The row and column vectors trade
+places inside the determinant exactly because a rank-one matrix's only nonzero
+eigenvalue is the scalar ``row times column''.
+\begin{equation}
+\boxed{\;\det(s\Mcl-\Acl)\;=\;\det R(s)^{-1}\,\det(sI-A_c)\;f(s),
+\qquad f(s)=1-k(s)G(s).\;}
+\end{equation}
+The closed-loop spectrum is the union of the plant spectrum, the (open) controller
+spectrum, and the zeros of the scalar $f$ --- with the crucial feature that the poles of
+$f$ are exactly the plant and controller eigenvalues, so the products cancel where they
+must.
+
+Why the poles of $f$ must sit exactly at the open-loop eigenvalues: count orders at one
+point.  Let $\lambda_p$ be a simple \emph{plant} eigenvalue
+that is \emph{not} a closed-loop eigenvalue.  The left side $\det(s\Mcl-\Acl)$ is a
+polynomial, finite and nonzero at $\lambda_p$.  On the right, $\det R(s)^{-1}=\det(sM-A)$
+vanishes to first order at $\lambda_p$ --- so $f$ must blow up to first order there to
+keep the product finite, and indeed it does: $G(s)=c\hp R(s)b$ has a simple pole at every
+plant eigenvalue (the resolvent blows up), hence so does $f=1-kG$.  The same argument at
+controller eigenvalues, where $k(s)$ carries the pole.  Nothing is being arranged; the
+factorisation \eqref{eq:factorised} is an identity between a polynomial and a product of
+two vanishing factors and one blowing factor, and the orders must balance --- which is
+precisely why the pole count $P_{\mathrm{plant}}+P_{\mathrm{ctrl}}$ appears in the count
+formula \eqref{eq:count}: the argument principle counts $f$'s zeros \emph{minus} its
+poles, and the poles are exactly the open-loop eigenvalues the two determinant factors
+account for.  Now apply the argument principle to $f$ on the boundary of the half-plane
+$\{\mathrm{Re}\,s>\ell\}$ (the vertical line $\mathrm{Re}\,s=\ell$ closed by a large arc):
+zeros minus poles of $f$ inside equals the winding number of $f$ along the contour, hence
+\begin{equation}
+\boxed{\;
+\#\{\lambda_{\mathrm{cl}}:\mathrm{Re}\,\lambda_{\mathrm{cl}}>\ell\}
+\;=\; W\bigl[f;\ \mathrm{Re}\,s=\ell\bigr] \;+\; P_{\mathrm{plant}}(\ell)
+\;+\; P_{\mathrm{ctrl}}(\ell),
+\;}
+\label{eq:count}
+\end{equation}
+
+
+
+\paragraph{The winding number, defined.}
+\label{sec:winding-num}
+$W[f;\mathrm{Re}\,s=\ell]$ is the winding number of the curve $f(s)$ around the origin as
+$s$ traverses the boundary of the region $\{\mathrm{Re}\,s>\ell\}$ with the region kept on
+the left: \emph{down} the line, from $\ell+iY$ to $\ell-iY$, closed by the large arc
+through $\ell+Y$.  Equivalently
+$W=\tfrac1{2\pi}[\arg f]_{\mathrm{contour}}=\tfrac1{2\pi i}\oint f'/f\,ds$, and with this
+orientation the argument principle reads $Z-P=W$ over the region, which is how
+\eqref{eq:count} is meant.
+
+\paragraph{How it is computed: exact phase tracking, not quadrature.}
+Numerical integration of $f'/f$ would carry a quadrature error, and an error of $0.51$ in
+a count is a wrong theorem.  Instead the code tracks the phase: sample $f$ along the
+segment, and between consecutive samples add the branch-consistent increment
+$\Delta\arg\in(-\pi,\pi]$; the sum telescopes to the exact total phase change
+\emph{provided no true increment ever exceeded $\pi$ unnoticed}.  Three mechanisms
+enforce that proviso, each added after a measured miscount during validation:
+(i)~\emph{mandatory resolution near the poles of $f$} --- near an open-loop eigenvalue
+close to the line the phase rotates fastest, so the sampler is forced to a density scaled
+by the distance to the nearest pole; (ii)~\emph{midpoint validation} --- every accepted
+increment is re-checked at the interval's midpoint: the two half-increments must sum to
+the whole, a cheap proof that no $\pm2\pi$ was skipped; (iii)~a \emph{mandatory knot
+grid}, so that local adaptivity cannot glide over a feature between coarse seeds.  With
+all three, the certificate reproduced the dense count on $104/104$ validation designs.
+
+\paragraph{Parallel phase tracking.}  The tracked quantity is a sum of increments, and sums split: the
+segment is cut at the mandatory knots, each inter-knot interval goes to a worker that
+runs the serial predictor--validator march and returns its phase subtotal, and the
+subtotals add exactly --- no phase continuity across cuts is needed, because no absolute
+branch of $\arg f$ is ever chosen (the only absolute arguments are at $\pm Y$, where $f$
+is confined near $1$ and the principal branch is unambiguous).  Two passes: knot values
+first (one parallel round); then intervals whose endpoint Hermite estimate already
+validates the chord increment are closed at zero extra cost, and the rest go to a work
+queue with midpoint splitting.  The wall time is the longest interval --- a few tens of
+serial samples, set by the hottest pole window --- not the total count.  The knot grid is $121$ points over the core band, seven around every hot pole, plus the
+tail knots to $\pm Y$; shared-knot values are computed once in pass~1, so no duplicated
+factorisations; the three hardening mechanisms act \emph{locally}, so they parallelise
+unchanged; and roundoff cannot flip a count, since an increment would have to move by
+$\pi$.  Honest status: \code{winding\_cert.py} as frozen is serial; the decomposition is
+\S\ref{sec:todo}, item~4, to be measured at GL where the serial reference exists.
+
+\paragraph{The tail bound, derived slowly.}
+The segment must end somewhere; the question is where the phase provably stops moving.
+Start from the Neumann series: for any square matrix $B$ and $|s|>\|B\|$,
+\[
+(sI-B)^{-1}=\frac1s\Bigl(I-\frac Bs\Bigr)^{-1}=\frac1s\sum_{k\ge0}\Bigl(\frac Bs\Bigr)^{k},
+\qquad\text{so}\qquad
+\|(sI-B)^{-1}\|\le\frac1{|s|}\cdot\frac1{1-\|B\|/|s|}=\frac1{|s|-\|B\|}.
+\]
+Apply it to the plant resolvent by factoring out the mass matrix,
+$R(s)=(sM-A)^{-1}=(sI-M^{-1}A)^{-1}M^{-1}$: with
+\[
+\nu:=\|M^{-1}A\|
+\quad\text{(any upper bound will do; a few power iterations on $M^{-1}A$, once per mesh)},
+\]
+and $\|M^{-1}\|=1/\lambda_{\min}(M)$
+\quad(one Lanczos run on the symmetric positive definite $M$, once per mesh; for a lumped
+mass matrix, the smallest diagonal entry),
+\[
+\|R(s)\|\;\le\;\frac{1}{\lambda_{\min}(M)\,(|s|-\nu)}
+\qquad\Longrightarrow\qquad
+|G(s)|=|c\hp R(s)b|\;\le\;\frac{\|c\|\,\|b\|}{\lambda_{\min}(M)\,(|s|-\nu)} .
+\]
+
+\paragraph{Computing the once-per-mesh constants.}
+Start from $\lambda_{\min}(M)=1/\lambda_{\max}(M^{-1})$: ``Lanczos
+on $M$'' in the form that actually converges quickly is shift-invert Lanczos with shift
+$0$, i.e.\ the Lanczos (power) iteration on the operator $x\mapsto M^{-1}x$.  Concretely:
+one sparse Cholesky of $M$ --- $M$ is SPD, tridiagonal-banded on the 1-D mesh, a
+nested-dissection factor in 2-D --- then each Lanczos step is two triangular solves, and
+the largest eigenvalue of $M^{-1}$ is extremal, so it converges in a few tens of steps.
+Sparsity is exploited throughout: $M$ is touched only through its factor.  This is the one
+place the pipeline factorises the mass matrix, and it is admissible because it happens
+once per mesh, outside every loop, and the factor is discarded afterwards; the rule
+``never factorise $M$'' (v2 report, \S1.3) was about the optimisation loop.  Now the
+honest accounting, in three thrift levels.  \emph{(a) What the shipped code does}
+(\code{winding\_cert.py}, \code{plant\_tail\_constants}): \code{eigsh(M, k=1,
+which='SM')}, i.e.\ Lanczos on $M$ itself in regular mode, asking ARPACK for the
+smallest-magnitude Ritz value --- no factorisation at all, and fine at $n=399$, but it is
+the slow way (the small end of a mass-matrix spectrum is the clustered end, and
+regular-mode Lanczos converges to a clustered extremal eigenvalue in
+$O(\sqrt{\mathrm{cond}\,M})$ steps); at cavity scale use the shift-invert form above, or
+better, (b).  For $\nu$ the code runs the power iteration on $M^{-1}A$ with an LU of $M$
+--- the same once-per-mesh exception.  \emph{(b) No eigensolve at all.}  Only a
+\emph{lower} bound on $\lambda_{\min}(M)$ is needed (a smaller value only pushes $Y$
+outward), and finite elements hand one over for free: with $M=\sum_e P_e^{\!\top}M_eP_e$
+the assembly of element mass matrices,
+$x\hp Mx=\sum_e x_e\hp M_ex_e\ge\sum_e\lambda_{\min}(M_e)\|x_e\|^2
+\ge\bigl(\min_e\lambda_{\min}(M_e)\bigr)\|x\|^2$, since every degree of freedom belongs to
+at least one element; hence $\lambda_{\min}(M)\ge\min_e\lambda_{\min}(M_e)$ --- a loop over
+elements with $3\times3$ (P2, 1-D) or $6\times6$ (P2, 2-D triangles) eigenproblems, no
+global solve, and certified.  Likewise an \emph{upper} bound on $\nu$ suffices:
+$\nu\le\|A\|_2/\lambda_{\min}(M)\le\sqrt{\|A\|_1\|A\|_\infty}/\lambda_{\min}(M)$, two
+column/row sums --- pessimistic (it may push $Y$ out by an order of magnitude), but $Y$
+only lengthens the quiet part of the tracked segment, which is cheap.  \emph{(c) Lumped
+mass}: the smallest diagonal entry, exactly.
+\paragraph{Singular mass matrix: a real gap in the derivation above.}
+The bound presumes $M$ invertible, and the cavity's is not.  The discretised incompressible Navier--Stokes operator is a
+differential-algebraic pencil: $M=\mathrm{diag}(M_v,0)$ (mass on velocity, nothing on
+pressure), index 2.  Three consequences.  (i)~$\lambda_{\min}(M)=0$, $M^{-1}$ does not
+exist, and the bound as written is void --- it must be re-derived, not patched.
+(ii)~The pencil has infinite eigenvalues (as many as the algebraic constraints), which are
+not eigenvalues of anything physical; $\det(sM-A)$ is a polynomial of degree below $n$,
+the argument principle for $f$ still holds --- $f$ is a rational function whose finite
+poles are the finite plant and controller eigenvalues --- but the tail closure is exactly
+the part that needs the re-derivation.  (iii)~The repair: the physics lives on the
+discretely divergence-free subspace.  Writing the DAE as
+$M_v\dot v=A_{vv}v+B^{\!\top}p+b\,u$, $Bv=0$, and eliminating $p$ with the discrete Leray
+projector $\Pi$ (the $M_v$-orthogonal projector onto $\ker B$; applying $\Pi$ is one
+saddle-point, Stokes-type, solve), the velocity dynamics are an ODE,
+$\dot v=\Pi M_v^{-1}A_{vv}v+\Pi M_v^{-1}b\,u$, and for a channel that forces the momentum
+equation and measures velocity --- which is our case: $b$ is a body force (a boundary
+actuation is recast as one by lifting), $c$ a velocity functional --- $G(s)$ is strictly
+proper and the Neumann argument goes through verbatim on the subspace, with
+$\nu:=\|\Pi M_v^{-1}A_{vv}\Pi\|$ (power iteration; each application one $M_v$ solve plus
+one projection; once per mesh) and $\lambda_{\min}(M_v)$ of the velocity mass matrix,
+which is SPD, so (b) applies to it unchanged.  Two design constraints fall out of this
+and are worth recording now.  If the sensor measured \emph{pressure} (a common cavity
+choice), $G$ would be proper but not strictly proper --- pressure answers a force
+instantaneously --- so $G(\infty)\ne0$ and $f(s)\to1-KG(\infty)$ rather than $1$; the
+winding argument survives provided the tail confines $f$ to a disk not containing the
+origin, i.e.\ $|KG(\infty)|<1$ or a strictly proper controller ($K=0$).  And if an input
+entered the \emph{constraint} equation, $G$ would carry a polynomial part and no tail
+closure would exist --- so inputs must stay in the momentum equation, which is a
+modelling rule, not a numerical one.  The projected-subspace version of the bound is
+written up in \S\ref{sec:todo} as the first correction to make, and it should be
+validated on a Stokes/lid-driven benchmark before the cavity.
+
+\subsection{Extension to Navier--Stokes: singular mass, real arithmetic}
+\label{sec:ns}
+
+
+The extension to the cavity changes two things: the mass matrix becomes singular
+(descriptor form), and the arithmetic becomes real.  Both are covered here; the
+shift-invert-at-zero decision for $\lambda_{\min}(M_v)$ is recorded in \S\ref{sec:todo},
+item~1.
+
+\paragraph{Descriptor structure (recap of the repair).}  The cavity pencil is
+$M=\mathrm{diag}(M_v,0)$, index-2: the tail bound is re-derived on the discretely
+divergence-free subspace via the Leray projector $\Pi$, with
+$\nu=\|\Pi M_v^{-1}A_{vv}\Pi\|$ and $\lambda_{\min}(M_v)$; the modelling rules are
+\emph{inputs in the momentum equation only} (else $G$ grows a polynomial part and no
+tail closure exists) and \emph{velocity outputs preferred} (pressure sensors leave $G$
+proper but not strictly proper, shifting the tail disk to $1-KG(\infty)$, admissible only
+if $|KG(\infty)|<1$ or $K=0$).  All once-per-mesh constants are computed on $M_v$, which
+is SPD, so every recipe of this section applies unchanged.
+
+\paragraph{Real arithmetic (what changes, all of it in our favour).}  The GL plant is
+complex; the Navier--Stokes plant is \emph{real}, and realness is structure:
+(i)~\emph{Conjugate symmetry of the spectrum.}  Eigenvalues come in pairs
+$\lambda,\bar\lambda$; the rightmost eigenvalue is either real or a conjugate pair with
+\emph{equal} real parts --- so the abscissa ``tie'' created by a complex pair is not a
+kink at all (one constraint $\mathrm{Re}\,\lambda\le-\eps$ covers both members, since
+$\mathrm{Re}\,\lambda=\mathrm{Re}\,\bar\lambda$ identically), and per-eigenvalue tracking
+lists only the $\mathrm{Im}\ge0$ representatives.  (ii)~\emph{Frequency-response
+symmetry.}  $\sigma_1(-\omega)=\sigma_1(\omega)$, so the band, the working set, the
+certification sweep and the peak polish all live on $\omega\ge0$: half the frequencies,
+half the certification cost, for free.  (iii)~\emph{Real factorisations.}  Away from the
+frequency axis's complex shifts, the once-per-mesh objects ($M_v$, $A\hp A$, $\sigma M-S$)
+are real symmetric: real Cholesky/Lanczos, roughly a factor $2$--$4$ cheaper in memory
+and flops than their complex counterparts.  The frequency-axis LUs of $R(i\omega)^{-1}$
+remain complex (the shift is imaginary), as before.  (iv)~\emph{Winding symmetry.}
+$f(\bar s)=\overline{f(s)}$, so the phase increments on the lower half-line mirror the
+upper ones: track $[\ell,\ \ell+iY]$ only and double it, adding the (real-axis) start
+point once --- the certificate cost halves, again for free.  None of these changes any
+statement in this note; they change constants, all downward.  (Added to the to-do list's
+item~1 validation plan: check both symmetries explicitly at the Stokes benchmark, since
+they are also free \emph{consistency tests} of the implementation.)
+The controller scalar obeys the same logic one size down: from \eqref{eq:ks},
+$|k(s)|\le|K|+\|n\|\,\|B_c\|/(|s|-\|A_c\|)$ for $|s|>\|A_c\|$.  Both bounds decay like
+$1/|s|$, so their product can be driven below any threshold.
+
+\paragraph{Choosing the endpoint $Y$, and why the answer is a certified integer.}
+Choose the threshold $\tfrac12$ and let $Y$ solve the scalar inequality
+\[
+\Bigl(\sup_{|s|\ge Y}|k(s)|\Bigr)\cdot
+\frac{\|c\|\,\|b\|}{\lambda_{\min}(M)\,(Y-\nu)}\;\le\;\frac12
+\]
+(monotone in $Y$; one bisection, once per design).  Beyond the endpoints, and on the whole
+closing arc, $|f(s)-1|=|k(s)G(s)|<\tfrac12$: the curve $f$ is confined to the disk of
+radius $\tfrac12$ around $1$.  Confinement does \emph{not} mean $f$ is constant there ---
+it keeps moving --- but a curve inside that disk stays in the half-plane
+$\{\mathrm{Re}\,f>\tfrac12\}$, its argument is confined to $(-\pi/6,\pi/6)$, and a curve
+whose argument lives in a sector of width $<2\pi$ \emph{cannot wind around the origin}.
+So the arc's net phase contribution is not zero by magic; it is a number provably in
+$(-\pi/3,\pi/3)$.  The total over the \emph{closed} contour is exactly $2\pi\times$ an
+integer --- winding numbers of closed curves are integers by topology, not by numerics ---
+so the implementation takes the tracked segment phase $\Delta\varphi$, and returns the
+nearest integer to $\Delta\varphi/2\pi$: the rounding is \emph{certified}, because the
+unaccounted arc contribution is provably less than a sixth of a turn, far below the half
+turn at which nearest-integer rounding could err.  Yes: truly an integer, and the round
+is part of the proof, not a numerical apology.
+
+
+
+
+
+On the cost of the factorisation itself: factoring a sparse matrix does create fill, but how
+much is a matter of ordering and dimension, not a catastrophe.  In 1-D, $M$ is banded and
+the factor is banded with \emph{zero} fill --- $O(n)$.  In 2-D, with a nested-dissection
+ordering, the Cholesky factor of an $n$-node mesh carries $O(n\log n)$ nonzeros and
+$O(n^{3/2})$ flops --- the same class as the LUs of $R(s)^{-1}$ the pipeline performs by
+the hundreds, so ``ruins sparsity'' is too strong: it \emph{taxes} it, at the standard
+rate, and once per mesh.  That said, for $M$ specifically there is a cheaper road: the
+mass matrix is spectrally well conditioned (condition number $O(1)$--$O(10^2)$,
+mesh-quality dependent, not $n$-dependent), so conjugate gradients solve $Mx=b$ in a few
+tens of \emph{matvecs} with no factor at all --- and CG inside Lanczos-on-$M^{-1}$ is a
+perfectly good once-per-mesh scheme.  So the efficiency ladder is: lumped diagonal
+(free) $\to$ element bound (free, certified) $\to$ CG-based shift-invert (matvecs only)
+$\to$ Cholesky-based shift-invert (fastest per iteration, pays fill once).
+The element-wise bound, for its part, is unconditionally a lower bound.  The two inequalities in its
+derivation are exact: $x_e\hp M_ex_e\ge\lambda_{\min}(M_e)\|x_e\|^2$ is the definition of
+a smallest eigenvalue, and $\sum_e\|x_e\|^2\ge\|x\|^2$ holds because every global degree
+of freedom appears in at least one element (shared dofs are counted \emph{more} than
+once, which only helps).  No mesh assumption, no asymptotics --- a certified floor.
+
+Two decisions close this topic.  \emph{$\lambda_{\min}(M)$}: shift-invert
+(Cholesky- or CG-based) for the tight value, with the element bound retained as the
+certified cross-check --- a tight constant shortens the tracked segment on every future
+design, so the one-time cost repays itself immediately.  \emph{$\|A\|_2$}: yes ---
+Lanczos on the Hermitian $A\hp A$ (matvecs only, extremal target, a few dozen iterations)
+gives the true $\|A\|_2=\sqrt{\mu_{\max}}$, tighter than
+$\sqrt{\|A\|_1\|A\|_\infty}$ by typically a small factor but occasionally much more on
+convection-dominated operators; then $\nu\le\|A\|_2/\lambda_{\min}(M)$, or, tightest of
+all, the direct power iteration on $M^{-1}A$ already described.  The recipe recorded in
+\S\ref{sec:todo} (item~2, updated): tight values by shift-invert/Lanczos, certified
+bounds (element-wise; H\"older) computed alongside as floors/ceilings --- the pipeline
+uses the tight value and \emph{checks} it against the bound, so a bug in either is caught
+by the other.
+
+$P_{\mathrm{ctrl}}$ counts controller poles right of the line:
+$P_{\mathrm{ctrl}}(\ell)=\#\{\lambda\in\mathrm{eig}(A_c):
+\mathrm{Re}\,\lambda>\ell\}$, an exact $r\times r$ computation.  One nuance worth
+noticing: the production line is $\ell=-\eps/2<0$, so a \emph{stable but slow} controller
+pole with $\mathrm{Re}\,\lambda\in(-\eps/2,0)$ is counted in $P_{\mathrm{ctrl}}$ --- and
+correspondingly contributes a pole of $f$ inside the region --- even though nothing is
+unstable.  The count formula balances this automatically; the point is only that
+``poles right of the line'' is not a synonym for ``unstable poles''.
+where $P_{\mathrm{plant}}$ (plant eigenvalues right of the line) is
+\emph{design-independent} --- computed once per mesh, and at cavity scale supplied from
+
+\paragraph{Obtaining $P_{\mathrm{plant}}$ certified at cavity scale.}
+A one-time cost per mesh and Reynolds number, amortised over the entire campaign; the
+recipe has three steps.  (1)~\emph{Confine}: bound the region
+where right-of-line eigenvalues can live.  The numerical range gives it cheaply:
+$\mathrm{Re}\,\lambda\le\max_x \mathrm{Re}(x\hp Ax)/(x\hp Mx)$, a Hermitian eigenvalue
+problem for the symmetric part (one Lanczos run), and similarly for $|\mathrm{Im}\,\lambda|$
+--- together a certified bounded rectangle to the right of the line.  (2)~\emph{Count
+inside the rectangle}: a contour-integral eigenvalue count (Beyn/FEAST style: the number
+of eigenvalues inside a contour equals the rank of a contour integral of the resolvent,
+estimated with a block of random probes and quadrature on the rectangle's boundary ---
+every quadrature node is one plant factorisation, reused for all probes), cross-validated
+at two quadrature orders and two probe blocks.  (3)~\emph{Polish}: each counted eigenvalue
+individually by shift-invert to machine precision, so the count is backed by exhibited
+eigenvalues.  For a cavity at moderately supercritical conditions the physical count is
+small and known from the global-instability literature, so step~(2) is a confirmation
+priced at $O(10^2)$ factorisations --- once, not per design.
+
+Step~(1) deserves care, because it is easy to misread as the non-Hermitian pencil
+$Ax=\lambda Mx$ --- it is not.  It is a Hermitian problem.
+Write $S=\tfrac12(A+A\hp)$ for the Hermitian part; if $Ax=\lambda Mx$ then
+$\lambda=x\hp Ax/x\hp Mx$ and
+$\mathrm{Re}\,\lambda=x\hp Sx/x\hp Mx\le\mu_{\max}$, where $\mu_{\max}$ is the largest
+eigenvalue of the Hermitian pencil $Sx=\mu Mx$ (the numerical range, or field of values,
+of $A$ in the $M$ inner product).  Hermitian pencils are where Lanczos is at home, in
+three respects.  \emph{Finding the top}: extremal eigenvalues converge first; run
+regular-mode Lanczos on $M^{-1}S$ (the once-per-mesh Cholesky of $M$ again), or ---
+faster when the top of the spectrum is clustered, which for a convection--diffusion
+operator it is, the top being the least-damped end --- shift-invert at a shift $\sigma$
+to the \emph{right} of the spectrum, where $\sigma M-S$ is positive definite, hence
+Cholesky-factorisable, and Lanczos on $(\sigma M-S)^{-1}M$ returns the eigenvalues
+nearest $\sigma$, i.e.\ the top ones, in a handful of steps.  \emph{Certifying the top}:
+Rayleigh--Ritz gives a Ritz value $\theta\le\mu_{\max}$ --- a lower bound, the wrong side
+for confinement --- but a certified \emph{upper} bound costs one factorisation: pick
+$\sigma=\theta+\delta$ and attempt the sparse $LDL\hp$ of $\sigma M-S$; if every pivot is
+positive, Sylvester's inertia theorem says $\sigma M-S\succ0$, hence $\mu_{\max}<\sigma$.
+\emph{A Cholesky that succeeds is a proof.}  The same two moves on the skew part
+$\tfrac1{2i}(A-A\hp)$ bound $|\mathrm{Im}\,\lambda|$, and the rectangle is certified.
+Singular $M$: on the velocity subspace with $\Pi$, as in the previous answer.
+So step~(1) is a rectangle with a certificate, and it answers the one question no mesh of
+shifts can --- \emph{how far right and how far up must we look?}  The common practice of
+shift-invert on a mesh of imaginary-axis shifts is step~(3) of this recipe, and it does
+yield the count \emph{if} it finds every eigenvalue; what it cannot supply is the word
+``every''.  Shift-invert Arnoldi at
+$\sigma$ returns the eigenvalues nearest $\sigma$, not a radius within which it has seen
+everything; two neighbouring shifts leave a gap about which the method is silent, and an
+eigenvalue far from any shift (large real part, or large imaginary part beyond the last
+shift) is simply invisible.  Step~(2) is what turns ``we found $K$'' into ``there are
+$K$''.  On the fluid-mechanics habit: it is a reasonable one, because the physical modes
+are few, isolated and known in advance --- and that is exactly the regime in which
+step~(2) is a cheap confirmation rather than a search.  There is also a safety net
+specific to our use of the number: $P_{\mathrm{plant}}$ is a constant added to every
+design's count, so an error in it is a constant offset in every certificate --- detected
+by the first design whose stability is known by other means (the continuation gate, or at
+benchmark scale the dense eigensolve): a design known to be stable would read a nonzero
+count.  Honest status: at GL scale the shipped \code{plant\_pole\_data} is dense (and
+refuses $n>3000$, asking for $P_{\mathrm{plant}}$ and the near-line modes explicitly);
+steps (1)--(3) are the cavity recipe, written but not yet run.
+
+The contour-counting idea has its own literature, added to the reference list:
+T.~Sakurai \& H.~Sugiura, ``A projection method for generalized
+eigenvalue problems using numerical integration'', \emph{J.\ Comput.\ Appl.\ Math.}\ 159
+(2003) 119--128; E.~Polizzi, ``Density-matrix-based algorithm for solving eigenvalue
+problems'', \emph{Phys.\ Rev.\ B} 79 (2009) 115112 (the FEAST solver); W.-J.~Beyn, ``An
+integral method for solving nonlinear eigenvalue problems'', \emph{Linear Algebra Appl.}\
+436 (2012) 3839--3863.  Yes, it is the argument principle, in matrix form.  Scalar
+version: $\tfrac1{2\pi i}\oint\varphi'/\varphi\,dz=Z-P$ for a meromorphic $\varphi$.
+Matrix version: the resolvent $R(z)=(zM-A)^{-1}$ is meromorphic with simple poles at the
+eigenvalues (assumed simple) and residues $v_jw_j\hp/(w_j\hp Mv_j)$, so by the residue
+theorem
+\[
+\frac1{2\pi i}\oint_\Gamma (zM-A)^{-1}M\,dz
+\;=\;\sum_{\lambda_j\in\mathrm{int}\,\Gamma}\frac{v_jw_j\hp M}{w_j\hp Mv_j}
+\;=\;P_\Gamma ,
+\]
+the spectral projector onto the eigenspace of the eigenvalues inside $\Gamma$, whose rank
+--- or trace --- is the count.  And the trace is
+$\tfrac1{2\pi i}\oint\mathrm{tr}[(zM-A)^{-1}M]\,dz
+=\tfrac1{2\pi i}\oint\tfrac{d}{dz}\log\det(zM-A)\,dz$: literally the argument principle
+for $\varphi=\det(zM-A)$.  That answers ``what about zeros'': for the determinant the
+zeros \emph{are} the eigenvalues (with multiplicity) and there are no poles at all ---
+$\det(zM-A)$ is a polynomial --- so Beyn/FEAST counts zeros only, nothing to subtract.
+Contrast with $f$ in \eqref{eq:count}: it has poles as well, because we divided the plant
+and controller determinants out to reach a scalar; that division is what buys a
+one-dimensional contour at the cost of two pole counts.  For $P_{\mathrm{plant}}$ no
+such low-rank reduction exists, hence the matrix integral, computed with probes: for a
+random $Y\in\C^{n\times m}$ with $m$ at least the expected count,
+$A_0=\tfrac1{2\pi i}\oint R(z)MY\,dz$ has rank equal to the count (generically), and
+$A_1=\tfrac1{2\pi i}\oint zR(z)MY\,dz$ then yields the eigenvalues themselves from the
+$m\times m$ pencil $(A_1,A_0)$ restricted to the range --- Beyn's method, so steps (2)
+and (3) can share the factorisations.  Quadrature: Gauss or trapezoid on each edge of the
+rectangle; the error decays exponentially in the number of nodes for eigenvalues at a
+distance from the contour and slowly for eigenvalues near it --- which is why the count
+is cross-validated at two orders, and why the rectangle's left edge should sit at
+$\ell-\delta$ rather than on the line, letting the polish of step (3) decide the side of
+$\ell$ for anything found near it.  Rigour, honestly: the rank of $A_0$ is decided from a
+singular-value gap, a numerical judgement, not a theorem; the standard of rigour is
+``count $K$ at two quadrature orders and two probe blocks, then exhibit $K$ eigenvalues
+inside with residuals at machine precision'' --- a certificate by exhibition and
+consistency, of the same kind as the disk sweep of \S\ref{sec:cert}.
+\subsection{Contour counting from scratch: the argument principle in matrix form}
+\label{sec:contour}
+
+
+The construction, in five steps, assuming nothing.
+
+\emph{Step 1: one eigenvalue, one integral.}  Let $\lambda_0$ be a simple eigenvalue of
+$Ax=\lambda Mx$ with right/left eigenvectors $v,w$.  Near $\lambda_0$ the resolvent
+behaves like a simple pole with a rank-one residue:
+$R(z)=(zM-A)^{-1}=\dfrac{v\,w\hp}{(z-\lambda_0)\,w\hp Mv}+(\text{analytic near }\lambda_0)$.
+(To check the residue: multiply by $(zM-A)$ and use $Av=\lambda_0Mv$, $w\hp A=\lambda_0w\hp M$.)
+So integrating around a small circle $\Gamma_0$ enclosing only $\lambda_0$, the analytic
+part contributes nothing and the residue theorem leaves
+$\tfrac1{2\pi i}\oint_{\Gamma_0}R(z)M\,dz=\dfrac{v\,w\hp M}{w\hp Mv}$ --- a rank-one
+matrix that maps any vector onto the eigendirection $v$.
+
+\emph{Step 2: many eigenvalues.}  For a contour $\Gamma$ enclosing eigenvalues
+$\lambda_1,\dots,\lambda_K$, residues add:
+\[
+P_\Gamma:=\frac1{2\pi i}\oint_\Gamma R(z)M\,dz
+=\sum_{j\le K}\frac{v_jw_j\hp M}{w_j\hp Mv_j}.
+\]
+This $P_\Gamma$ is a \emph{projector} ($P_\Gamma^2=P_\Gamma$: multiply two terms and use
+the biorthogonality $w_i\hp Mv_j=0$ for $i\ne j$): it projects onto the span of the
+enclosed eigenvectors.
+
+\emph{Step 3: why trace $=$ rank $=$ count.}  A projector's eigenvalues are only $0$ and
+$1$ (any eigenvalue $\pi$ of $P$ obeys $\pi^2=\pi$).  Its \emph{rank} is the dimension of
+the space it projects onto --- the number of enclosed eigendirections, i.e.\ the count
+$K$.  Its \emph{trace} is the sum of its eigenvalues --- $K$ ones plus zeros $=K$ again.
+Trace and rank are two roads to the same integer; the trace is the analyst's road, the
+rank the algorithm's (step 5).
+
+\emph{Step 4: the trace is the scalar argument principle in disguise.}  Jacobi's formula
+--- the derivative of a determinant --- says
+$\tfrac{d}{dz}\det X(z)=\det X(z)\cdot\mathrm{tr}\bigl[X(z)^{-1}X'(z)\bigr]$; proof in
+two lines:
+$\det(X+\epsilon X')=\det X\,\det(I+\epsilon X^{-1}X')
+=\det X\,\bigl(1+\epsilon\,\mathrm{tr}[X^{-1}X']+O(\epsilon^2)\bigr)$, because
+$\det(I+\epsilon B)=\prod_i(1+\epsilon\beta_i)=1+\epsilon\sum_i\beta_i+O(\epsilon^2)$.
+With $X=zM-A$, $X'=M$:
+$\mathrm{tr}[R(z)M]=\tfrac{d}{dz}\log\det(zM-A)$ --- and it
+identifies $\mathrm{tr}\,P_\Gamma$ with $\tfrac1{2\pi i}\oint\varphi'/\varphi\,dz$ for
+$\varphi=\det(zM-A)$: the scalar argument principle, counting the polynomial's zeros
+(the eigenvalues, with multiplicity), no poles to subtract.
+
+\emph{Step 5: computing without the trace --- probes.}  Forming $\mathrm{tr}[R(z)M]$
+exactly would need $n$ solves per quadrature node.  Instead hit the projector with a thin
+random block $Y_{\!p}\in\C^{n\times m}$, $m\gtrsim K$:
+$A_0=P_\Gamma Y_{\!p}$ (per node: one factorisation, $m$ solves).  Since $P_\Gamma$ has
+rank $K$, generically $A_0$ has rank exactly $K$, read off from its singular values (a
+clean gap after the $K$-th).  That is the \emph{count}.  For the eigenvalues themselves,
+one more moment, $A_1=\tfrac1{2\pi i}\oint zR(z)MY_{\!p}\,dz$, and the tiny $m\times m$
+pencil built from $(A_1,A_0)$ has the enclosed $\lambda_j$ as its eigenvalues --- Beyn's
+method.
+
+\emph{Beyn or FEAST?}  Same integral, different engines.  \textsc{Beyn} (2012) is the
+\emph{direct} method just described: two moments, one SVD, one tiny pencil ---
+non-iterative, ideal when $K$ is small and one wants count-plus-eigenvalues in one shot.
+\textsc{FEAST} (Polizzi 2009 --- the proper name of his solver and library, not an
+acronym) uses the same contour integral as a \emph{filter} inside subspace iteration:
+apply $P_\Gamma$ repeatedly to refine a subspace, Rayleigh--Ritz inside --- iterative,
+more robust to quadrature error and to underestimating $m$, preferred when many interior
+eigenvalues are wanted.  For $P_{\mathrm{plant}}$ --- few eigenvalues, one shot, count
+first --- \textbf{Beyn is the right tool}, and the to-do item now says so
+(\S\ref{sec:todo}, item~3).
+
+
+\paragraph{Placing the contour.}
+\emph{$\ell$} is the counting line's real part --- the same $\ell$ as in
+\eqref{eq:count}; production value $\ell=-\eps/2$.  \emph{$\delta$} is the standoff of
+the rectangle's \emph{left} edge from that line: the edge sits at $\ell-\delta$ so that
+near-line eigenvalues fall strictly \emph{inside} the contour rather than on it, and the
+shift-invert polish decides on which side of $\ell$ each of them lies.  \emph{The
+contour}: right and top edges from the certified numerical-range rectangle (inertia
+certificate) plus a margin; bottom edge its mirror (or the real axis for a real plant,
+\S\ref{sec:ns}); left edge at $\ell-\delta$.  \emph{$Y$ and $\nu$, unified}: yes, the
+same family --- $\nu$ confines the whole spectrum to the disk $|\lambda|\le\nu$ (a
+circumscribed-disk statement), while the numerical-range rectangle is the sharpened,
+per-direction version of the same confinement; the rectangle's $|\mathrm{Im}|$ bound can
+therefore \emph{tighten} the winding endpoint $Y$ too, and the cleanest implementation
+computes the rectangle once and derives both the contour and $Y$ from it, keeping the
+Neumann-$\nu$ formula as the fallback when only the crude constants exist.
+\emph{Quadrature robustness}: the danger: an eigenvalue (or a
+region of large resolvent norm, the pseudospectrum of a non-normal $A$) close to an edge
+slows the quadrature's convergence.  Three defences, layered: (i)~\emph{certified
+standoff}: sweep each contour edge with the eigenvalue-free disks of \S\ref{sec:cert}
+--- a 1-D sweep per edge, the same tool as the frequency band --- which certifies a
+minimum spectral distance from the contour and, if a disk refuses to certify, moves the
+edge before any quadrature is attempted; (ii)~\emph{resolvent monitoring}: the quadrature
+already evaluates $R(z)MY_{\!p}$ at every node --- its norm is read off for free, and a
+spike flags a near-pseudospectral passage even when eigenvalues are distant
+(non-normality), triggering edge displacement or local refinement; (iii)~the
+\emph{two-order cross-validation} of the count, which is the net under everything.
+Extra margin: yes, cheap and wise --- the rectangle is enlarged by a fixed fraction
+before quadrature, since a larger contour costs nothing (the count inside is unchanged)
+while a tight one courts exactly that slow-convergence risk.
+
+
+\paragraph{Why a mesh of shifts is not a certificate --- and how to make it one.}
+Shift-invert on a mesh of imaginary-axis shifts (perhaps with a second line at
+$\mathrm{Re}\,s=1$) is what everyone does, and what the shipped code effectively does at
+GL scale (with a dense solve standing in for the mesh); it is not a certificate --- for
+one reason that step~(1) fixes and one that step~(2) fixes.  Without (1) the mesh has no
+\emph{edges}: nothing establishes that the shifts need not go beyond $|\mathrm{Im}\,s|=60$
+or $\mathrm{Re}\,s=1$, and a spurious or physical mode at $(2,200)$ is invisible to both
+lines.  The numerical-range rectangle is the only cheap object that answers ``how far'',
+and it is one Hermitian eigensolve plus one Cholesky.  Without (2) the mesh has no
+\emph{radii}: shift-invert at $\sigma$ sees the nearest eigenvalues, and says nothing
+about the strip between two neighbouring shifts, so a second line at $\mathrm{Re}\,s=1$
+does not confirm anything --- it adds a second row of blind spots, at half the distance.
+There is, however, a way to make exactly that scheme rigorous, with a tool we already
+own: the eigenvalue-free disks of \S\ref{sec:cert}.  At shift $\sigma$, the
+distance $r(\sigma)$ to the nearest eigenvalue certifies the open disk of radius
+$r(\sigma)$ empty (with the same hedge as in \S\ref{sec:cert}: request a few
+eigenvalues, so that Arnoldi's ``nearest'' is trustworthy); cover the rectangle by such
+disks and the count is the number of eigenvalues exhibited.  That is the Schwerdtner
+sweep run over an \emph{area} instead of a line, and its cost is the catch: the number of
+disks grows like $(\text{area})/r^2$, and near the line the radii are tiny (the leading
+GL mode sits $0.007$ from the production line), so the hot regions eat factorisations ---
+whereas the contour count of (2) costs $O(10^2)$ factorisations regardless of where the
+eigenvalues sit.  Verdict: keep (1), because nothing else bounds the search; take (2) as
+either the contour count or the disk covering, whichever one trusts more --- both are the
+argument principle, one on the boundary and one by exhaustion of the interior; and use
+the mesh, and the second line, as what they are good at: shifts for the polish of (3),
+the second line being a sensible place to polish anything the count locates far to the
+right.  And the fluid-mechanics practice of trusting the mesh is, seen this way, a
+covering argument supplied by physical prior knowledge --- legitimate for a plant one
+knows, which is exactly why $P_{\mathrm{plant}}$, computed once and cross-checked once,
+is the least worrying constant in the whole certificate.
+
+\paragraph{How many eigenvalues per shift ($\code{nev}$).}
+The campaign measured $\code{nev}=1$ adequate \emph{at GL scale under the
+validation harness}: every disk cross-checked against dense ground truth, $104/104$ ---
+so ``$\code{nev}=1$ is enough here'' is a measured fact, and paying $3\times$ per shift
+for hypothetical robustness was rightly refused.  The opposite hedge --- request a few --- addresses the regime without ground truth
+(cavity), where a misconverged ``nearest'' silently inflates a disk.
+The shipped-and-recommended policy: $\code{nev}=1$ by default, with \emph{escalation on
+suspicion} --- re-solve with $\code{nev}=3$ only when the returned pair's residual is
+loose, when two adjacent disks disagree about their overlap, or when the disk is
+critical (its radius decides a certificate rather than merely advancing the sweep).
+Cheap where it can be, careful where it must be; at GL the escalation almost never
+fires, which is itself the measurement that justifies the default.
+the known physical instability structure --- and $P_{\mathrm{ctrl}}$ is an exact $r\times
+r$ computation.  Each sample of $f$ along the line costs one plant LU
+($G=c\hp Rb$); $f'$ costs one extra solve on the same factorisation
+($G'=-c\hp R\,M\,R\,b$), enabling phase-tracking with derivative information (its use in
+practice: the question below).  The arc at infinity is closed analytically by the tail
+bound derived above.  
+\paragraph{Using the derivative information.}
+Two uses.  \emph{Predictor}: the local phase speed is
+$\mathrm{d}\arg f/\mathrm{d}s=\mathrm{Im}(f'/f)$, so the next sample is placed at
+$\Delta s\approx\varphi_{\mathrm{budget}}/|f'/f|$ with a budget of a fraction of $\pi$ ---
+adaptive stepping by prediction instead of by trial-and-refine.  \emph{Validator}: the
+tracked increment is cross-checked against the Hermite estimate
+$\tfrac{\Delta s}2[\mathrm{Im}(f'/f)_{\mathrm{left}}+\mathrm{Im}(f'/f)_{\mathrm{right}}]$;
+disagreement triggers refinement before the midpoint test even runs.  Cost: $f'$ is one
+extra triangular solve on the \emph{same} factorisation --- at GL scale that is a
+$\sim30\%$ overhead per sample, at cavity scale (where the LU dominates the solve by an
+order of magnitude) nearly free --- against which the predictor cuts the sample count by
+a factor that was worth it at GL already and is decisive wherever each sample carries a
+fresh factorisation.  So: worth it, increasingly so with scale.
+Sampling is adaptive with three hardening
+mechanisms (mandatory resolution near the poles of $f$, midpoint validation of accepted
+steps, and a mandatory knot grid), each added after a measured failure; the certificate
+reproduces dense eigenvalue counts exactly on $104/104$ validation designs at
+
+\paragraph{Cost at cavity scale, honestly.}
+At cavity scale one factorisation is the dominant unit
+(minutes, gigabytes), so $500$--$900$ of them serially is hours --- and
+three facts make it acceptable and a fourth makes it smaller.  (1)~Cadence: the winding
+certificate runs per \emph{saved} design --- a handful per case --- never per step.
+(2)~Parallelism: samples are independent; $64$ workers make it $\sim10$ rounds, and the
+memory footprint is one factorisation \emph{per worker at a time} (each worker processes
+its queue serially and discards), not one per sample --- the footprint objection
+dissolves.  (3)~The derivative-informed predictor above cuts the sample count.
+(4)~Structural reduction, if still needed: the samples concentrate near the poles of $f$;
+away from the hot regions the same Neumann logic that closes the arc certifies long
+quiet stretches of the \emph{segment} from a few samples with interval bounds on
+$|kG|$ --- a coarse-certify/fine-track split that brings the count toward $O(10^2)$.
+Projection, to be validated at GL first (to-do list of the optimisation note): tens of
+minutes per saved design on a modest allocation --- a final-answer cost, not a loop
+cost.
+
+
+
+
+$\approx500$--$900$ plant solves per design.  The production line is $\ell=-\eps/2$: a
+certified count of zero there is an \emph{unconditional} proof of margin-stability, with
+no continuation premise.
+
+%======================================================================
+\section{Gradient of the abscissa --- and do we need its subgradients?}
+\label{sec:subgrad}
+
+\subsection{The gradient}
+Let $\lambda$ be the rightmost eigenvalue, assumed \emph{simple}, with right and left
+generalized eigenvectors
+$\Acl v=\lambda \Mcl v$ and $w\hp\Acl=\lambda\,w\hp\Mcl$.  Standard eigenvalue
+perturbation gives
+\begin{equation}
+\boxed{\;
+\delta\lambda \;=\; \frac{w\hp\,(\delta\Acl)\,v}{\,w\hp \Mcl\, v\,},
+\qquad
+\delta\alpha=\mathrm{Re}\,\delta\lambda ,
+\;}
+\label{eq:alphagrad}
+\end{equation}
+which has \emph{exactly} the shape of the master formula \eqref{eq:master} with
+$(\tilde u,\tilde v)$ replaced by $(w/\overline{(w\hp\Mcl v)},\,v)$: the same
+group-by-group table of \S\ref{sec:grads} applies verbatim, so the full gradient of
+$\alpha$ with respect to every design parameter costs \emph{one eigenpair} --- obtained by
+shift-invert iteration and its adjoint on one plant factorisation.  (The denominator
+$w\hp\Mcl v$ also serves as a health monitor: it tends to zero when the eigenvalue
+approaches a defective (Jordan) configuration, where $\alpha$ ceases to be Lipschitz;
+non-generic, but worth watching.)
+
+\subsection{Do we need subgradients?}
+Three answers, in increasing order of care.
+
+\emph{(i) Generically, no.}  For a complex (non-real) system like ours there is no
+automatic conjugate pairing, so the rightmost eigenvalue is generically unique and simple;
+$\alpha$ is then differentiable and \eqref{eq:alphagrad} is its honest gradient.  This was
+the measured situation even in the hardest case of the campaign: the design pinned on the
+margin (K+B+C) carried a \emph{single} eigenvalue at the line --- we tested the
+multiple-eigenvalue hypothesis explicitly and rejected it.
+
+\emph{(ii) At ties, the subdifferential exists but we avoid needing it.}
+$\alpha=\max_j\mathrm{Re}\,\lambda_j$ is a max, so when several eigenvalues tie at the
+rightmost real part the correct first-order object is the convex hull of their individual
+gradients \eqref{eq:alphagrad} --- structurally identical to the frequency-max story of
+the optimisation note.  And the remedy is the same for the third time: \emph{never take
+the max; name the members}.  The diagnostic KKT tool already treats each near-line
+eigenvalue as its own function (gradients by matched perturbation of the tracked
+eigenvalues, multipliers by nonnegative least squares); the planned explicit-constraint
+inner does likewise, imposing $\mathrm{Re}\,\lambda_j(\theta)\le-\eps$ \emph{per tracked
+eigenvalue}.  Each such constraint is smooth with gradient \eqref{eq:alphagrad}; the tie
+lives in the active set, where the solver is competent, and the subdifferential of the max
+is never formed.
+
+\emph{(iii) The genuinely nonsmooth points are defective eigenvalues,} where two
+eigenvalues collide into a Jordan block and $\alpha$ behaves like a square root
+(non-Lipschitz; no useful subgradient).  These are avoided rather than modelled: the
+margin formulation keeps the optimiser $\eps$ away from the axis where the physical
+coalescences live, and $|w\hp\Mcl v|$ flags any approach.
+
+The parallel with the singular-value story is close but not exact, and the difference is
+worth owning.  The exact analogue of the
+$\sigma_1=\sigma_2$ crossing is case~(ii) above --- a \emph{semisimple} tie, a max of two
+smooth branches, a Lipschitz kink, handled by enrollment.  Case~(iii) --- the defective
+collision --- is strictly \emph{worse} than anything singular values can do, and here is
+the pleasant reason why: the $\sigma$'s are eigenvalues of the \emph{Hermitian} operator
+$T\hp T$, and Hermitian eigenvalues are always semisimple --- crossings, yes; Jordan
+blocks, never.  Eigenvalues of the non-normal $\Acl$ enjoy no such protection, which is
+exactly why the abscissa needs the extra care of case~(iii) while the frequency response
+never does.  Non-normality, the physical heart of this whole flow problem, is also the
+algebraic reason its stability constraint is the more delicate object.
+
+In short: \textbf{value + gradient of individually tracked eigenvalues suffice}; the max
+structure is handled by enrollment, exactly as $\sigma_2$-enrollment handles
+singular-value ties, and no subdifferential machinery is required anywhere in the design.
+
+%======================================================================
+\section{How \S5--\S\ref{sec:cert} compare with Benner--Mitchell (2018)}
+\label{sec:bm}
+
+
+The comparison is natural because their paper and our oracle share an architecture.  Their starting point is the classical level-set method of
+Boyd--Balakrishnan and Bruinsma--Steinbuch (``BBBS'', 1990): bisect on the level
+$\gamma$, and at each level pay one \emph{full Hamiltonian eigendecomposition} to find
+all frequencies where $\sigma_1=\gamma$ --- robust, global, and $O(n^3)$ \emph{per
+level}.  Their observation: that work distribution is upside-down --- cheap local
+information is being bought with the most expensive global tool.  Their method
+rebalances: run standard \emph{optimization} in $\omega$ to convergence on local peaks
+--- this is where a reader may recall ``splines'': the local maximisation is
+accelerated by cubic/Hermite \emph{interpolation} of $\sigma_1(\omega)$ using values
+and derivatives (a refinement lineage their paper traces back through the level-set
+literature), giving superlinear local convergence for a few evaluations --- and invoke
+the expensive global eigendecomposition only to \emph{verify} the converged candidate
+(typically once or twice per norm computation instead of once per bisection level).
+Faster, and, as their title says, more accurate: the optimizer polishes to full
+precision, which plain level-set bisection does not.
+Now place \S5--\S\ref{sec:cert} beside it.  The division of labour is
+\emph{identical} --- optimise locally, certify globally, and arrange for the certificate
+to be consulted as rarely as possible: our Newton polish in $\omega$ (\S5) is their
+interpolation-accelerated local stage (same derivative information, same superlinear
+character), and our certified disk sweep (\S\ref{sec:cert}) plays their verification
+
+Our local stage differs from theirs in one respect: we use Newton on
+$\partial_\omega\sigma_1$.  The two are close relatives: Hermite interpolation through
+$(\sigma_1,\partial_\omega\sigma_1)$ at two bracketing points is a secant-flavoured
+Newton that borrows information across the bracket, while our Newton uses one point and a
+second derivative.  Asymptotically Newton is faster (quadratic versus superlinear); far
+from the peak the interpolation is more robust (it cannot propose a step outside its
+bracket).  The choice is dictated by the starting point each method actually has: they
+start cold, from level-set midpoints, so robustness wins; our peaks are warm-started from
+the previous outer round, where the peak has barely moved, so Newton sits inside its
+basin from the first iterate and the quadratic rate is real.  Both spend $2$--$4$ oracle
+calls per peak; the difference is marginal, the contexts decide, and a safeguarded hybrid
+(Newton with a Hermite-bracket fallback when $\partial^2_\omega\sigma_1\ge0$ signals a
+plateau) is the best of both --- noted for the next iteration.
+stage.  The two differences are deliberate.  \emph{First, the global tool itself}: their
+verifier is the dense Hamiltonian eigendecomposition --- exact, but $O(n^3)$ and
+dense-only; ours is the eigenvalue-free-disk certificate of Schwerdtner--Mengi--Voigt,
+which needs only sparse shift-invert solves, i.e.\ (P1)--(P3), and therefore survives
+the trip to cavity scale.  So: no, they do not use the Schwerdtner-style certification
+--- at their scales they do not need it; we adopt it \emph{because} their verifier is
+the one component of the architecture that does not scale.  \emph{Second, the
+amortisation horizon}: they optimise and verify within \emph{one} norm computation; our
+exchange loop amortises across an entire \emph{design} trajectory --- the working set
+$\Omega$ carries candidate peaks from design to design, warm-starting both the local
+stage (in $\omega$ \emph{and} in $\theta$) and the bisection of the certificate from the
+incumbent level.  In one sentence: \emph{our oracle follows the Benner--Mitchell division of labour ---
+cheap local optimisation, rare global verification --- with Newton in place of their
+interpolation, their dense verifier replaced by the Schwerdtner--Mengi--Voigt
+certificate, and the amortisation horizon stretched from one norm computation to the
+whole optimisation}.
+
+(``Per-norm'' means per computation of one design's $H_\infty$ norm; ``amortise'' means: spread the cost of the expensive component over many uses of its result.  They
+amortise \emph{within} one norm computation --- one expensive global verification serves
+many cheap local steps.  We keep that, and add a second horizon: \emph{across designs} ---
+the working set $\Omega$, the singular vectors, the peak locations and the incumbent
+level all carry over from one design to the next, so the $k$-th norm evaluation starts
+where the $(k-1)$-th finished and costs a fraction of a cold one.  On ``architecture'':
+fair objection --- the word claimed too much, since our local stage is Newton, not their
+interpolation; the sentence above now says ``division of labour'' and names the
+substitution explicitly.
+
+\paragraph{References.}
+Boyd \& Balakrishnan (1990); Bruinsma \& Steinbuch (1990) --- the BBBS level-set method.
+Guglielmi, G\"urb\"uzbalaban \& Overton, SIMAX 2013 --- spectral-value-set iteration,
+the fast local (non-certified) large-scale line.
+Benner \& Voigt, \emph{Math.\ Control Signals Syst.}\ 2014 --- structured pseudospectral
+$H_\infty$ computation for large-scale descriptor systems.
+Aliyev, Benner, Mengi, Schwerdtner \& Voigt, SIMAX 2017 --- greedy subspace method for
+large-scale $L_\infty$ norms.
+Benner \& Mitchell, SISC 2018 --- the optimization-rebalanced norm computation above.
+\revQ{P.~Schwerdtner, E.~Mengi \& M.~Voigt, ``Certifying global optimality for the
+$L_\infty$-norm computation of large-scale descriptor systems'', \emph{IFAC-PapersOnLine}
+53(2) (2020), 21st IFAC World Congress --- the eigenvalue-free-disk certificate of
+\S\ref{sec:cert}; note that Mengi is a co-author of both this certificate and the
+subspace methods of \S\ref{sec:proj}, which share the same view of the problem.}
+Apkarian \& Noll, IEEE TAC 2006 (with the multiband and 2015 parametric papers, and
+Apkarian's 2018 infinite-dimensional structured $H_\infty$) --- the synthesis line,
+treated at length in the optimisation note.  Curtis, Mitchell \& Overton 2017 --- the
+inner solver.
+
+\paragraph{References for the contour counting.}
+Sakurai \& Sugiura, \emph{J.\ Comput.\ Appl.\ Math.}\ 159 (2003) 119--128; Polizzi,
+\emph{Phys.\ Rev.\ B} 79 (2009) 115112 (FEAST); Beyn, \emph{Linear Algebra Appl.}\ 436
+(2012) 3839--3863 --- contour-integral eigenvalue counting and extraction, the matrix
+form of the argument principle used for $P_{\mathrm{plant}}$ in \S\ref{sec:winding-num}.
+
+\revP{\section{Projection: a reduced model for the inner loop}
+\label{sec:proj}
+
+Everything before this section evaluates the oracle by one sparse factorisation per
+frequency, and the cost accounting of \S\ref{sec:cost} is built on that unit.  This
+section describes a different organisation of the same algebra --- a low-dimensional
+model of the resolvent that serves every frequency, and every design, from a handful of
+factorisations --- states what has been measured on GL, and what remains to be measured
+on the cavity.  It rests on a published method, which is described first.
+
+\subsection{The method of Aliyev, Benner, Mengi, Schwerdtner and Voigt (2017)}
+\label{sec:proj-paper}
+Reference: N.~Aliyev, P.~Benner, E.~Mengi, P.~Schwerdtner, M.~Voigt, ``Large-scale
+computation of $\mathcal L_\infty$-norms by a greedy subspace method'', \emph{SIAM J.\
+Matrix Anal.\ Appl.}\ 38(4) (2017) 1496--1516 (arXiv:1705.10086).  The setting is more
+general than a descriptor system: an $\mathcal L_\infty$-function
+\[
+H(s)=C(s)\,D(s)^{-1}B(s),\qquad
+D(s)=\sum_{j=1}^{\kappa_D}h_j(s)D_j,\quad B(s)=\sum_jf_j(s)B_j,\quad C(s)=\sum_jg_j(s)C_j,
+\]
+with $D_j\in\C^{n\times n}$ large and sparse, $B_j$ tall-and-skinny, $C_j$ short-and-fat,
+and $f_j,g_j,h_j$ meromorphic scalar functions --- descriptor and delay systems are the
+paper's examples.  \emph{Our closed loop is natively of this form}: by
+\S\ref{sec:solve}, $D(s)=s\,M-A-k(s)\,bc\hp$, i.e.\ $\kappa_D=3$ with
+$h=(s,1,-k(s))$ and $D=(M,A,bc\hp)$, the controller entering only through the scalar
+meromorphic coefficient $k(s)$ of \eqref{eq:ks}.  Note the $\mathcal L_\infty$ in the
+title: the supremum of $\sigma_1$ over the imaginary axis is defined whether or not the
+system is stable, and the method never assumes stability.
+
+\emph{Reduction.}  Choose $V,W\in\C^{n\times\tilde n}$, $\tilde n\ll n$, and project the
+middle factor two-sidedly (Petrov--Galerkin):
+$\tilde H(s)=\tilde C(s)\tilde D(s)^{-1}\tilde B(s)$ with $\tilde D_j=W\hp D_jV$,
+$\tilde B_j=W\hp B_j$, $\tilde C_j=C_jV$.  For us,
+\[
+\tilde D(s)=s\,(W\hp MV)-(W\hp AV)-k(s)\,(W\hp b)(c\hp V):
+\]
+\emph{the two large projected matrices are computed once; the design enters only through
+the scalar $k(s)$ and the two small vectors $W\hp b$, $c\hp V$.}  This is the formal
+reason for the design-independence measured below.
+
+\emph{Interpolation (their Theorem 2.1, a special case of Beattie--Gugercin 2009).}  At a
+point $\mu$ and for vectors $b_0,c_0$: if $D(\mu)^{-1}B(\mu)b_0\in\mathrm{Col}(V)$ then
+$\tilde H(\mu)b_0=H(\mu)b_0$; if $(c_0\hp C(\mu)D(\mu)^{-1})\hp\in\mathrm{Col}(W)$ then
+$c_0\hp\tilde H(\mu)=c_0\hp H(\mu)$; and if both, $c_0\hp\tilde H'(\mu)b_0=c_0\hp H'(\mu)b_0$.
+Applied to the right/left singular vectors $v,w$ of $\sigma_1(H(\mu))$, this gives
+\emph{Hermite interpolation of the largest singular value}: $\sigma_1$ and
+$\partial_\omega\sigma_1$ of the reduced function equal those of the full function at
+$\mu$.  The statement is \emph{per vector}, which matters for us below.  Two consequences
+they draw: with only the input direction in $V$ one has $\sigma_1(H(\mu))\le\sigma_1(\tilde H(\mu))$
+--- the two-sided reduced function is an \emph{interpolant}, not a bound; and $V$, $W$
+must have equal dimension for $\tilde D$ to be square.
+
+\emph{Algorithm 1 (greedy).}  Start with one interpolation point $i\omega_1$ and the
+subspaces $V_1=D(i\omega_1)^{-1}B(i\omega_1)$, $W_1=(C(i\omega_1)D(i\omega_1)^{-1})\hp$.
+Then repeat: compute $\omega_r=\arg\max_\omega\sigma_1(\tilde H_{r-1}(i\omega))$ by a
+dense method on the reduced function; expand $V,W$ with the snapshots at $i\omega_r$;
+orthonormalise.  Each iteration costs one sparse factorisation of $D(i\omega_r)$ and
+$m+p$ solves.  \emph{Convergence (their Theorem 3.3)}: under a local convergence
+assumption the iterates converge to a local maximiser of $\sigma_1$ \emph{superlinearly
+in the subspace dimension}, and the proof uses only the Hermite interpolation at the last
+two iterates; keeping all previous subspaces (their Remark 2.3) costs little and gives
+much better global behaviour in practice, typically fewer than ten iterations to
+$10^{-6}$.  \emph{Limitation (their \S4.4, stated by the authors)}: convergence is local
+only, as for every large-scale $\mathcal L_\infty$ method to date; if the initial
+interpolation points miss the part of the axis near a pole, the global maximiser is
+missed --- their own example converges to $\omega=7.897$ when the maximiser is at
+$1.092$.  Their remedy is more initial points; there is no certificate.  That limitation
+is exactly what \S\ref{sec:cert} supplies, which is the point of \S\ref{sec:proj-mgmt}.
+
+\subsection{Our variant: full-field channel, dominant directions, Woodbury columns}
+\label{sec:proj-variant}
+Our performance channel is not tall-and-skinny: $B=C\hp=M^{1/2}$ is $n\times n$, so
+$D^{-1}B$ is the whole space.  Theorem 2.1 being per vector, the remedy is the
+reduced-basis variant the authors themselves indicate: at each anchor $i\omega_a$ include
+only the images of the \emph{dominant} singular directions,
+\[
+R\,M^{1/2}v_j\ \text{ in }V,\qquad R\hp M^{1/2}u_j\ \text{ in }W,\qquad j=1,\dots,n_{\mathrm{vec}},
+\]
+where $(u_j,\sigma_j,v_j)$ are the top singular triplets of $T(i\omega_a)$ --- which the
+warm-started power/Lanczos iteration of \S\ref{sec:sigma} produces anyway --- plus the two
+\emph{Woodbury columns} $R\,b$ and $R\hp c$, so that the rank-one controller correction
+is representable inside the subspace exactly.  With $n_{\mathrm{vec}}\ge2$ the second
+singular value is Hermite-interpolated as well.  Two projections are then in use:
+the \emph{two-sided} one (interpolant, exact at anchors, no bound), for values,
+$\sigma_2$, gradients and the eigenvalue predictor; and the \emph{one-sided input
+restriction} $\|T\,V\|$ with $V$ orthonormal, which is a \emph{certified lower bound}
+$\le\sigma_1$ at every frequency, since restricting the input can only lower the gain.
+Gradients come from the master formula \eqref{eq:master} with the solved vectors replaced
+by their subspace representatives $V\tilde v$, $W\tilde u$ --- no full solve.
+
+\subsection{What was measured on GL}
+\label{sec:proj-numbers}
+All tests dense, GL with $n=799$ (or $n=399$ where noted), performance channel
+$T(\omega)=M^{1/2}R_{\mathrm{cl}}(\omega)M^{1/2}$, $n_{\mathrm{vec}}=3$, greedy anchors,
+against a dense ground truth.
+
+\emph{Plant sweep} ($\omega\in[-2,12]$, 141 points): anchors $1/2/4/5$ give maximum
+relative error $7\cdot10^{-1}$ / $4.5\cdot10^{-1}$ / $7.8\cdot10^{-2}$ /
+$1.7\cdot10^{-4}$ over the band; the peak is captured to $10^{-6}$ from the second anchor
+on, and the greedy sequence chose the peak frequency second.  Five factorisations in
+place of 141.
+
+\emph{Closed loop at a fixed design} (Woodbury form, $r=8$ tridiagonal controller):
+5 anchors, $\dim V=40$, maximum relative error $5.6\cdot10^{-6}$, peak to $2\cdot10^{-9}$.
+
+\emph{Design variation, reusing $V$ built at $\theta_0$ without rebuilding} (controller
+entries perturbed by relative amounts $\varepsilon$; actuator/sensor positions moved by
+$0.15\varepsilon$ against Gaussian width $0.02$):
+\begin{center}\small
+\begin{tabular}{lcccc}\toprule
+perturbation & peak drift & max rel.\ error $\sigma_1$ & peak error & lower bound holds\\
+\midrule
+controller, $\varepsilon=1.0$ & $68\%$ & $5.6\cdot10^{-6}$ & $6\cdot10^{-12}$ & yes\\
+positions, $\varepsilon=0.5$ & $67\%$ & $5.6\cdot10^{-6}$ & $9\cdot10^{-7}$ & yes\\
+positions, $\varepsilon=1.0$ & $37\%$ & $1.1\cdot10^{-4}$ & $1\cdot10^{-4}$ & yes\\
+both, $\varepsilon=1.0$ & $53\%$ & $1.1\cdot10^{-4}$ & $1\cdot10^{-4}$ & yes\\
+\bottomrule\end{tabular}
+\end{center}
+The accuracy is essentially independent of how far the design moves; the certified lower
+bound never failed (worst shortfall $2\%$, a constant).  \emph{Plant-only subspace}
+(built with no knowledge of $b$, $c$ or the controller, $\dim30$) reused on four very
+different closed loops: $6\cdot10^{-3}$ in every case --- the subspace is a property of
+the plant, and the two Woodbury columns buy three orders of magnitude.
+
+\emph{$\sigma_2$} through the same subspace: $8.9\cdot10^{-6}$ (fixed design),
+$3\cdot10^{-5}$ at $\varepsilon=1$.
+
+\emph{Closed-loop eigenvalues} (pencil projected on $V$ augmented with the right/left
+eigenvectors of the six rightmost eigenvalues, $\dim54$): the Ritz value nearest the true
+rightmost eigenvalue tracks it to $10^{-13}$ at $\theta_0$, $5\cdot10^{-6}$ at
+$\varepsilon=0.2$, $2\cdot10^{-5}$ at $\varepsilon=0.5$ --- an excellent
+\emph{predictor} of where a watched eigenvalue went.  But the oblique projection also
+produces \emph{spurious} Ritz values far in the right half-plane (one at $2.6+7.6i$,
+corresponding to nothing): nothing variational protects a Petrov--Galerkin eigenvalue of a
+non-normal pencil.  A full-model residual $\|(\Acl-\lambda\Mcl)v\|$ per Ritz pair, one
+matvec, filters them.  \textbf{Predictor yes, certificate no.}
+
+\emph{Real, unstable plant} (GL realified to the state $(\mathrm{Re}\,q,\mathrm{Im}\,q)$
+--- real $A,M$ with GL's spectrum and its conjugate --- and shifted right until four
+conjugate pairs are unstable, $N=798$): $\sigma_1$ on the axis is finite and symmetric;
+a \emph{real} subspace built from the real and imaginary parts of the anchor columns,
+with anchors on $\omega\ge0$ only (five: $0.4,0,1.6,4.0,0.8$; real $\dim60$), gives real
+projected matrices and $9.6\cdot10^{-6}$ on \emph{both} halves of the axis, $\sigma_2$ to
+$1.5\cdot10^{-5}$; the four unstable pairs' eigenspaces lie inside $V$ to a fraction
+$1.000$ each without having been added, and the real reduced pencil reproduces them to
+four digits, in conjugate pairs, with nothing spurious in the right half-plane.
+
+\subsection{Unstable plants and real arithmetic}
+The cavity plant is unstable and real; neither changes the recipe.  The anchors are solves
+on the imaginary axis, where $s M-A$ is nonsingular because the plant eigenvalues are off
+the axis; the resolvent near the axis is dominated by precisely the unstable modes, so the
+greedy anchors capture them on their own (measured above) --- add their right and left
+eigenvectors explicitly anyway, they are known from the global stability analysis, cost
+nothing, and the left ones are needed for the eigenvalue predictor.  Stability of the
+closed loop remains the certificate's statement (\S\ref{sec:winding}), not the reduced
+model's.  Realness: the anchor factorisations stay complex (the shift is imaginary; a real
+$2n$ reformulation gains nothing), but from the columns on everything is real --- split
+each column into real and imaginary parts, the subspace is closed under conjugation, the
+projected matrices are real, the reduced model is a real descriptor system with the
+real-rational $k(s)$, its eigenvalues come in conjugate pairs, and anchors and sweep are
+needed on $\omega\ge0$ only.  This composes with the realness savings of \S\ref{sec:ns}.
+
+\revQ{\subsection{Optimise on the reduced model, enrich at the full one: Aliyev--Benner--Mengi--Voigt (2019), plus certification}
+\label{sec:proj-mgmt}
+The loop ``run the optimisation on the reduced model, then consult the full model at the
+result and enrich there'' is not ours.  It is Algorithm~2.1 of N.~Aliyev, P.~Benner,
+E.~Mengi, M.~Voigt, ``A subspace framework for $H_\infty$-norm minimization'',
+\emph{SIAM J.\ Matrix Anal.\ Appl.}\ 41(2) (2020) 928--956 (arXiv:1905.04208, 2019),
+written for exactly our problem: minimise $\|H[\mu]\|_{H_\infty}$ over the parameters $\mu$
+of a large descriptor system whose matrices depend affinely on $\mu$ through scalar
+functions, $E(\mu)=\sum f_j(\mu)E_j$, $A(\mu)=\sum g_j(\mu)A_j$, $B(\mu)=\sum h_j(\mu)B_j$,
+$C(\mu)=\sum k_j(\mu)C_j$ --- which ours do: the controller entries through the rank-one
+coupling terms, the field coefficients through $b(\beta)=\Sigma\beta$.  The algorithm:
+\begin{enumerate}[leftmargin=1.8em,itemsep=1pt]
+\item $\mu^{(k)}\leftarrow\arg\min_\mu\|H^{V,W}[\mu]\|_{H_\infty}$ --- the reduced norm
+minimised over the design (they use GRANSO, or the global optimiser \code{eigopt} when
+$\mu$ has few components);
+\item $\omega^{(k)}\leftarrow\arg\max_\omega\sigma_1(H[\mu^{(k)}](i\omega))$ --- one
+\emph{full-model} norm evaluation at the reduced optimum;
+\item $V\leftarrow V\oplus D(\mu^{(k)},i\omega^{(k)})^{-1}B(\mu^{(k)})$,
+$W\leftarrow W\oplus D(\mu^{(k)},i\omega^{(k)})^{-\ast}C(\mu^{(k)})^\ast$; repeat.
+\end{enumerate}
+Their Lemma~2.1: at every iterate the reduced function Hermite-interpolates the full one
+\emph{in both $\omega$ and $\mu$} --- value, $\sigma_2$, $\partial_\omega\sigma=0$, and
+$\nabla_\mu\|H\|_{H_\infty}=\nabla_\mu\sigma^{V,W}$ (the reduced gradient with respect to
+the design equals the true gradient at the design where the snapshot was taken).  Their
+Theorem~3.8: \emph{superlinear} convergence of $\mu^{(k)}$ to a minimiser, under
+Assumption~3.1 --- the supremum of $\sigma_1(\mu_\ast,\cdot)$ is attained at a \emph{unique}
+$\omega_\ast$ where $\sigma_1$ is simple --- and with $\mu_\ast$ interior (box constraints
+active at $\mu_\ast$ are handled by restricting to the inactive variables, their
+Remark~3.9; their real examples all have optima on the box boundary).  In practice
+$\le10$ outer iterations and ``a few seconds for order $10^4$''.  Stability is explicitly
+left open: ``efficient stability checks would be needed for controller design''.
+
+\emph{What is ours.}  Two things, and both are consequences of the kind of optimum we
+meet.  (i)~Their Assumption~3.1 --- a single active peak --- fails at our optima, which
+are balances of several peaks (\S1 of the optimisation note); at such a point the
+reduced function must interpolate the full one at \emph{every} active peak, or the
+reduced optimum drifts along the crease.  We therefore enrich at all certified
+near-active frequencies --- the working set $\Omega$ --- rather than at the single
+maximiser of line~2; their Algorithm~2.2, which adds nearby interpolation points to
+control second derivatives, points the same way.  (ii)~Line~2 trusts a full-model norm
+evaluation; ours is the certified sweep of \S\ref{sec:cert}, and the certificate does
+double duty: it decides whether the reduced level is the true level, and \emph{where} to
+enrich --- a refuted point, or a certified peak whose reduced value disagrees beyond
+tolerance, is the next anchor.  Superlinear locally (theirs), globally certified (ours),
+and the reduced model is never trusted.  Their per-design snapshot (line~3 at the
+current $\mu$) is our per-design refresh of the Woodbury columns; for field parameters
+the affine dependence $b(\beta)=\Sigma\beta$ can be projected once, $W\hp\Sigma$ and
+$\Sigma\hp V$ ($\dim V\times n_\beta$), so that the reduced model carries the
+$\beta$-dependence of $B$ exactly and the refresh only sharpens the resolvent images.
+Two practical gifts of their setting: on a reduced model an evaluation costs microseconds,
+so random multistart of the inner problem is free, and for designs with few parameters
+(the position cases, $n_\theta=2$--$4$) the reduced problem can be optimised
+\emph{globally} (\code{eigopt}: piecewise-quadratic support functions, Breiman \& Cutler
+1993) before certification.  What the certification cannot make cheaper is itself; the
+reduced model shortens its bisection and predicts the hot windows.}
+
+\revQ{\subsection{Eigenvalues and the margin on the reduced model: Mengi (2022, 2023)}
+\label{sec:proj-mengi}
+Two further papers by the same group supply the mechanisms this section had left as
+``predictor only'' and ``certificate outside''.
+
+\emph{Watch-list tracking by interpolation.}  E.~Mengi, ``Large-scale estimation of
+dominant poles of a transfer function by an interpolatory framework'', \emph{SIAM J.\
+Sci.\ Comput.}\ 44(4) (2022) A2412--A2438: compute the dominant poles of the
+\emph{reduced} system (QZ on the small pencil), then expand $V,W$ so that the full
+system is Hermite-interpolated \emph{at those poles} --- solves with $(A-\lambda E)$ at the
+complex shift $\lambda$ equal to the pole estimate, with $q\ge1$ derivative directions
+$(A-\lambda E)^{-1}E(A-\lambda E)^{-1}B$ --- and repeat; convergence at least quadratic
+(his Theorem~4.3), termination and per-pole convergence by the full-model residual
+$\|(A-\lambda E)Vv\|_\infty$ (his \S5.2--5.3), one LU per pole per iteration, more
+reliable than SAMDP on benchmarks.  For us this replaces the continuation gate's
+segment-by-segment tracking: the watch-list eigenvalues are followed through the reduced
+pencil as $\theta$ changes (the predictor of \S\ref{sec:proj-numbers}, $5\cdot10^{-6}$),
+each estimate is polished by one shift-invert solve at the Ritz value --- his
+interpolation step --- and the residual is the convergence certificate for that pole.
+The eigenvalue-identity problem that broke endpoint checks disappears, because the
+reduced pencil's poles vary continuously with $\theta$; the spurious Ritz values of
+\S\ref{sec:proj-numbers} are handled by the same step --- interpolating at a non-pole adds
+information, and the value either converges to a true pole or fails the residual test.
+His dominance measure $\|Cv\|\,\|w\hp B\|/|\mathrm{Re}\,\lambda|$ becomes, for our
+full-field channel $B=C\hp=M^{1/2}$, $1/|\mathrm{Re}\,\lambda|$ times the mode's
+biorthogonality factor: the dominant poles are the near-axis, non-normal modes --- the
+watch list and the peak generators at once, one subspace for both.  His initialisation
+(\S5.1) is ``run the $L_\infty$ subspace method crudely'', i.e.\ our anchors.  The winding
+count of \S\ref{sec:winding} stays as the unconditional statement; this mechanism makes
+the per-step gate rigorous per pole and cheap.
+
+\emph{The margin as a constraint on the reduced model.}  E.~Mengi, ``A subspace framework
+for $L_\infty$ model reduction'', arXiv:2309.08011 (2023), \S6: the reduced problem is
+minimised subject to $\alpha(A_{\mathrm{red}},E_{\mathrm{red}})\le\beta$, the spectral
+abscissa of the \emph{reduced} pencil, imposed by a log-barrier
+$L_\mu=F-\mu\log(\beta-\alpha)$ --- and he shows that the Hermite interpolation
+properties between full and reduced objective \emph{extend to the barrier function},
+gradient and Hessian included.  For us that is the cheap form of the structural fix the
+optimisation note specifies (its to-do item~2): the explicit margin constraint
+$\alpha(\theta)\le-\eps$, evaluated and differentiated on the reduced closed-loop pencil
+inside the inner loop --- eigenvalues by QZ on a $\dim V$ pencil, gradients from the
+reduced eigenvectors, residual filter applied --- and certified afterwards by the
+winding count.  The same paper's diagnosis of direct smooth optimisation of an $L_\infty$
+objective --- ``at best a linear rate, requiring too many evaluations of the costly
+norm'' --- is the v2 direct-mode record of the optimisation note in one sentence.}
+
+\subsection{What projection does not replace: the frozen-preconditioner test}
+\label{sec:proj-precond}
+A related idea --- reuse one factorisation as a \emph{preconditioner} for GMRES at
+neighbouring frequencies --- was tested first and rejected for the $\sigma_1$ oracle, for
+two measured reasons.  The preconditioned operator $I+i\Delta\omega\,R(\omega_0)M$ has
+eigenvalues $1+i\Delta\omega/(i\omega_0-\lambda_j)$: on GL's dense branch there are $112$
+plant eigenvalues within $2r_0$ of a shift at $\omega=8$, so the spectrum spreads instead
+of clustering (266 of 799 eigenvalues further than $0.1$ from $1$ at $\Delta\omega=r_0$),
+and non-normality widens the gap between $\|R(\omega_0)M\|$ and $1/r_0$ by a factor $18$
+at $\omega=0$.  GMRES then needs $10$--$30$ iterations at tolerance $10^{-6}$; and since
+the oracle needs $m\approx10$--$20$ right-hand sides per frequency, each paying its own
+iterations, break-even is $k^\ast=1+C/m$ with $C$ the LU-to-solve cost ratio ---
+$k^\ast\approx4$ in 2-D --- and the idea loses by $3$--$7\times$.  It \emph{wins} where
+$m=1$: the winding certificate's samples ($G=c\hp Rb$, tolerance $10^{-3}$), measured
+at $3$--$16$ iterations for $\Delta\omega$ up to two band widths, against $k^\ast\approx50$.
+Projection replaces the oracle; anchor-preconditioning serves the winding tail; the two
+are complementary, and both hang on the same handful of resident factorisations.
+
+\subsection{Cost and parallelism at cavity scale}
+\label{sec:proj-cost}
+For Taylor--Hood P2--P2--P1 on $2\cdot10^5$ triangles ($7$--$9\cdot10^5$ dof), a complex
+sparse LU with nested dissection should run to $50$--$100$ nonzeros per row in the factors:
+\emph{estimates}, to be measured, of $1$--$3$\,GB and $30$--$120$\,s per factorisation on
+one node.  Fifty of those per inner iteration, times hundreds of iterations, times the
+case count, is the cluster; with projection the accounting changes shape: (i)~anchors,
+$5$--$10$ factorisations \emph{once per mesh}, design-independent, factors stored
+($\sim20$\,GB) --- parallel \emph{across} anchors, multithreaded within one node, never
+distributed across nodes for a 2-D factorisation; (ii)~inner loop, \emph{zero}
+factorisations --- per design two solves per anchor (field cases only), per frequency
+$\sim\dim V$ sparse matvecs and a $\dim V\times\dim V$ SVD, all of $\Omega$ on one node;
+(iii)~certification, $O(10^2)$ factorisations per outer round, embarrassingly parallel
+over shifts.  The node estimate goes from ``fifty nodes held for every case'' to ``one
+fat node for the optimisation and a handful borrowed for minutes per outer round''.
+The open number is the subspace dimension in 2-D: GL needs $30$--$60$; the cavity's richer
+near-axis spectrum may need several times more, which is still small but decides the
+estimate above, and it is the first thing to measure.}
+
+\section{Cost accounting}\label{sec:cost}
+
+\begin{center}
+\small
+\begin{tabular}{lll}
+\toprule
+quantity & primitives per evaluation & notes\\
+\midrule
+$\sigma_1(\omega)$ & 1 LU $+\ O(10)$ solves & warm-started power iteration \\
+$\nabla_\theta\sigma_1(\omega)$ (\emph{all} params) & $+\,2$ solve sets & independent of NZ \\
+$\partial_\omega\sigma_1$, Newton peak polish & inner products $+\ O(3)$ values & per peak \\
+certified band maximum & $O(10^2)$ shift-invert solves & rtol $10^{-6}$, adaptive disks \\
+$\alpha$ tracking (per accepted step) & few bordered solves per eigenvalue & shifted at previous location \\
+winding certificate (per saved design) & $500$--$900$ LUs of $R(s)^{-1}$ & unconditional count \eqref{eq:count} \\
+\revP{reduced sweep on $\Omega$ [proposed, \S\ref{sec:proj}]} & \revP{$0$ LU; $\sim\dim V$ matvecs $+$ one $\dim V$ SVD per frequency} & \revP{anchors: $5$--$10$ LUs once per mesh} \\
+$\nabla_\theta\alpha$ & one eigenpair ($+$ adjoint) & formula \eqref{eq:alphagrad} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent
+Every line is (P1)--(P3).  The two design decisions that make the whole pipeline scale are
+visible in this table: gradients whose cost does not grow with the number of parameters
+(\S\ref{sec:grads}), and an outer method (the exchange) shaped so that the LU-bearing
+lines are executed for many independent frequencies concurrently.  The controller only
+ever appears through the scalar $k(s)$ of \eqref{eq:ks} and the rank-2 identity
+\eqref{eq:sherman} --- which is also, through \eqref{eq:factorised}, the reason the
+stability of an $(n{+}r)$-dimensional loop can be certified by winding a single complex
+number around a line.
+
+\paragraph{Parallel cost, corrected.}  The winding line of the table is a \emph{serial}
+count.  Split at the knots (\S\ref{sec:winding-num}), the same work
+is one round of $\sim120$ knot factorisations followed by a work queue whose critical
+path is the longest interval --- a few tens of serial factorisations --- so the wall time
+at cavity scale is set by the hottest pole window, not by the total.
+
+\section{Decisions and pending items}
+\label{sec:todo}
+
+The review rounds produced decisions and open items; they are collected here, each
+pointing at the section that justifies it.  Items 1--2 amend statements of earlier
+editions; the rest are code.
+\begin{enumerate}[leftmargin=1.8em,itemsep=2pt]
+\item \textbf{Tail bound for a singular mass matrix} (\S\ref{sec:winding-num}).  The bound $\|R(s)\|\le1/(\lambda_{\min}(M)(|s|-\nu))$ presumes
+$M$ invertible; the cavity's $M=\mathrm{diag}(M_v,0)$ is not.  Re-derive on the
+discretely divergence-free velocity subspace with the Leray projector $\Pi$:
+$\nu:=\|\Pi M_v^{-1}A_{vv}\Pi\|$, $\lambda_{\min}(M_v)$, and a strictly proper $G$
+guaranteed by momentum-equation inputs and velocity outputs.  Record the two modelling
+rules that fall out (pressure sensors make $G$ proper, not strictly proper, and shift the
+tail disk to $1-KG(\infty)$; inputs must never enter the constraint equation).  Validate
+on a Stokes or lid-driven benchmark where a dense generalised eigensolve still exists.
+\item \textbf{Once-per-mesh constants, tight values with certified bounds}.  Replace the ARPACK \code{which='SM'} call in
+\code{plant\_tail\_constants} by shift-invert Lanczos (Cholesky- or CG-based) for a
+\emph{tight} $\lambda_{\min}(M)$, and compute $\|A\|_2$ by Lanczos on $A\hp A$ (matvecs
+only); alongside, compute the element-wise floor
+$\lambda_{\min}(M)\ge\min_e\lambda_{\min}(M_e)$ and the H\"older ceiling as certified
+cross-checks.  Tight constants shorten the tracked segment on every design; the bounds
+catch bugs in the tight computations and vice versa.
+\item \textbf{$P_{\mathrm{plant}}$ at cavity scale} (\S\ref{sec:contour}).
+Implement the three steps as code, not prose: numerical-range rectangle with the inertia
+certificate (one Hermitian Lanczos plus one $LDL\hp$ per bound); Beyn contour count with
+probes, cross-validated at two quadrature orders and two probe blocks, left edge at
+$\ell-\delta$; shift-invert polish of every counted eigenvalue.  Engine decision:
+\textbf{Beyn}, per \S\ref{sec:contour}.  Prototype at GL against the dense count that
+\code{plant\_pole\_data} already provides.
+\item \textbf{Parallel winding certificate} (\S\ref{sec:winding-num}).
+Interval decomposition at the knots, two-pass (knot values, then a work queue with
+midpoint splitting of intervals that bisect below a threshold), phase subtotals summed.
+\code{winding\_cert.py} is serial as frozen; measure the critical path at GL before
+projecting cavity wall times.
+\item \textbf{A claim in the code that the code does not honour --- resolved: implement,
+merged into item 4.}  The docstring of \code{winding\_cert.py} advertises a
+\code{--rigor} mode (a Neumann segment bound per sample, ``$\sim8$ extra matvecs per
+point''); the argument parser has no such option and no such bound is implemented.
+What was meant is a mechanism of this note --- the per-interval Neumann bound on $|kG|$
+that closes quiet intervals without further samples, i.e.\ exactly the
+``coarse-certify'' pass-2 test of the parallel scheme (item~4) and thrift item~(4) of
+the cavity-cost answer.  So: implement it as part of item~4's pass~2, where it belongs;
+the docstring then becomes true.  Recorded in the spirit of the report's \S7.
+\item \textbf{Cost table} (\S10).  Add a column for the parallel critical path once
+item~4 is measured, so the table stops quoting serial counts for a quantity that will
+never run serially at scale.
+\item \textbf{MIMO capability} (\S\ref{sec:structure}).  Generalise the
+coupling to $n_a$ actuators and $n_s$ sensors: Woodbury in place of Sherman--Morrison,
+the return-difference determinant $f=\det(I-\mathsf K\mathsf G)$ in place of the scalar,
+$n_a{+}n_s$ solves per factorisation in place of two.  Structure already in place; cost
+grows only in the solve count.
+\item \textbf{Projection oracle, GL prototype} (\S\ref{sec:proj}).  Implement the
+reduced-basis variant in the sparse pipeline: greedy anchors on $\omega\ge0$, real
+subspace, top-3 singular directions plus the two Woodbury columns per anchor, unstable
+eigenvectors added; values, $\sigma_2$, gradients and the eigenvalue predictor from the
+reduced model; certification on the full model with refuted points and certified-peak
+disagreements as the enrichment rule \revQ{--- Algorithm~2.1 of Aliyev--Benner--Mengi--Voigt
+with enrichment at $\Omega$ instead of the single maximiser and the certified sweep in
+place of line~2 (\S\ref{sec:proj-mgmt}); project the field basis once ($W\hp\Sigma$,
+$\Sigma\hp V$) so that $b(\beta)$ is exact in the reduced model.}  Validate against the 27 frozen cases: same certified
+optima, factorisation count per inner iteration reduced from $|\Omega|$ to zero.  Then
+the \emph{trajectory} test that has not been run: does $V$ ever need refreshing along a
+full optimisation, and does the certified-vs-reduced gap at the peaks detect it.
+\revP{\item \textbf{Subspace dimension in 2-D --- measure first.}  On the cavity mesh
+(or a coarser cavity), build the plant subspace once and record the greedy dimension
+needed for $10^{-5}$ over the band; every cost estimate of \S\ref{sec:proj-cost} depends
+on it.  Store the anchor factorisations and measure their size and time
+(estimates: $1$--$3$\,GB, $30$--$120$\,s).}
+\revP{\item \textbf{Anchor-preconditioned winding tail} (\S\ref{sec:proj-precond}).
+GMRES from the nearest resident anchor for the single-solve samples of the segment,
+tolerance $10^{-3}$, with the frozen $|f|$ used to tighten the tolerance near closed-loop
+poles; the $\sigma_1$ oracle and the certified disk radii explicitly excluded until the
+inexact-shift-invert bound is written.  Merge with item~4's two-pass scheme.}
+\item \textbf{Watch-list tracking by interpolation} (\S\ref{sec:proj-mengi}).  Replace
+the continuation gate's tracking by Mengi's dominant-pole framework: reduced-pencil poles
+as $\theta$ moves, one shift-invert polish at each Ritz value, full-model residual as the
+per-pole convergence test; spurious Ritz values eliminated by the same step.  Validate by
+replaying the 27 frozen accepted-step chains against the gate's decisions.
+\revQ{\item \textbf{Margin constraint on the reduced model} (\S\ref{sec:proj-mengi}).
+Impose $\alpha_{\mathrm{red}}(\theta)\le-\eps$ inside the inner loop --- QZ on the reduced
+closed-loop pencil, gradients from reduced eigenvectors, residual filter --- as the cheap
+form of the optimisation note's item~2; winding count outside.  Test on K+B+C, the case
+that stalled at the boundary.}
+\revQ{\item \textbf{Global optimisation of the reduced problem for the position cases}
+(\S\ref{sec:proj-mgmt}).  With $n_\theta=2$--$4$, run a global optimiser
+(\code{eigopt}-style) on the reduced model, then certify; and use free multistart of the
+reduced inner problem in the random-start study of the optimisation note's item~1.}
+\end{enumerate}
+
+\end{document}

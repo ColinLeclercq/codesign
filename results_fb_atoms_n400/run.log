@@ -1,0 +1,305 @@
+=== launch A3 1790602841 KMAX=1.0 ORD=1
+controller order 7 -> 8 (from the seed catalogue)
+warm start from results_ne400/K_FB_FC_s0_ne400.npz
+field basis (laplace): actuator 160 modes on [-38.90, 39.20]
+field basis (laplace): sensor 160 modes on [-38.90, 39.20]
+field atoms (actuator): 4 Gabor atoms, width >= 1.0, |wavenumber| <= 0.7071; fitted to the start field (M-norm error 0.179)
+field atoms (sensor): 4 Gabor atoms, width >= 1.0, |wavenumber| <= 0.7071; fitted to the start field (M-norm error 0.179)
+pool: 2 workers for the |Omega| constraints; stability certificate SERIAL
+band [-30.00, 30.00]; controller poles |Im| <= 20.00 (3/2 x max seed |Im|, band = 3/2 x wmax)
+controller poles NOT constrained in |Im| (--ctrl-imcap off); the band follows the closed-loop spectrum at each accepted design, from [-30.00, 30.00]
+stage-1 flags: select-cons=on ctrl-imcap=off ctrl-stab=on cont-anchor=defer opt-tol=1e-10
+start gamma=6.676984, |Omega|=159
+lu_counter: factorisations and solves are being counted
+warm start -> trust radius 0
+oracle: position-robust (union Galerkin, input basis b 160, c 160)
+continuation anchor verified: alpha=-0.2164, watching 4 near-line eigenvalue(s)
+    oracle: +1 anchor(s) (certified peaks) -> dim 327
+    start peaks re-derived on the reduced model: 1 within 5 % (1 new): [1.821]
+    sigma2 enrolled at 0 of 160 frequencies
+    sqp refine: working set +1 -> |Omega|=161
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 1 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 6.137770 vs certified 6.137770 (rel 5.3e-14)
+/home/claude/work/run_case_epi.py:1158: RuntimeWarning: All-NaN slice encountered
+  sigma_max=(float(_np.nanmax(sig)) if sig.size else None),
+    dump: results_fb_atoms_n400/dump_1790602841/outer_000.npz  (|Omega|=161, 0 active, balance residual n/a)
+  outer 0: |Omega|=161  t=6.137770  certified=6.137770  best=6.137770  (+0 freq, 6 calls)
+    fields (best): RMS wavenumber 0.4830, 0.4830 (bound 1, order 1)
+    inner budget -> 20 (certified/t = 1.000)
+    oracle: basis compacted 327 -> 327
+    sigma2 enrolled at 0 of 161 frequencies
+    sqp refine: working set +1 -> |Omega|=162
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 2 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 5.702221 vs certified 5.702221 (rel 1.6e-16)
+    dump: results_fb_atoms_n400/dump_1790602841/outer_001.npz  (|Omega|=162, 0 active, balance residual n/a)
+  outer 1: |Omega|=162  t=5.702221  certified=5.702221  best=5.702221  (+0 freq, 7 calls)
+    fields (best): RMS wavenumber 0.4824, 0.4824 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 327 -> 329
+    sigma2 enrolled at 0 of 162 frequencies
+    sqp refine: working set +1 -> |Omega|=163
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 2 member(s) moved to their tops, 0 merged
+    certificate INCONCLUSIVE at 5.410025 (a higher level set exists, not located; witness +1.4480): round not accepted
+    oracle: reduced at the witness 5.410025 vs certified 5.410025 (rel 8.4e-15)
+    dump: results_fb_atoms_n400/dump_1790602841/outer_002.npz  (|Omega|=163, 0 active, balance residual n/a)
+  outer 2: |Omega|=163  t=5.410025  certified=5.410025  best=5.702221  (+0 freq, 7 calls)
+    fields (best): RMS wavenumber 0.4824, 0.4824 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+  no new frequency (1/3) -- continuing with the current Omega
+    oracle: basis compacted 329 -> 328
+    sigma2 enrolled at 0 of 163 frequencies
+    sqp refine: working set +1 -> |Omega|=164
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    certificate INCONCLUSIVE at 5.407520 (a higher level set exists, not located; witness +1.4528): round not accepted
+    oracle: reduced at the witness 5.407520 vs certified 5.407520 (rel 4.3e-13)
+    dump: results_fb_atoms_n400/dump_1790602841/outer_003.npz  (|Omega|=164, 0 active, balance residual n/a)
+  outer 3: |Omega|=164  t=5.407520  certified=5.407520  best=5.702221  (+0 freq, 7 calls)
+    fields (best): RMS wavenumber 0.4824, 0.4824 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+  no new frequency (2/3) -- continuing with the current Omega
+    oracle: basis compacted 328 -> 328
+    sigma2 enrolled at 0 of 164 frequencies
+    sqp refine: working set +1 -> |Omega|=165
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 2 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 5.162240 vs certified 5.162240 (rel 3.6e-15)
+    dump: results_fb_atoms_n400/dump_1790602841/outer_004.npz  (|Omega|=165, 0 active, balance residual n/a)
+  outer 4: |Omega|=165  t=5.162240  certified=5.162240  best=5.162240  (+0 freq, 9 calls)
+    fields (best): RMS wavenumber 0.4815, 0.4815 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 328 -> 326
+    sigma2 enrolled at 0 of 165 frequencies
+    sqp refine: working set +1 -> |Omega|=166
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 2 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 4.803216 vs certified 4.803216 (rel 3.8e-14)
+    dump: results_fb_atoms_n400/dump_1790602841/outer_005.npz  (|Omega|=166, 0 active, balance residual n/a)
+  outer 5: |Omega|=166  t=4.803216  certified=4.803216  best=4.803216  (+0 freq, 7 calls)
+    fields (best): RMS wavenumber 0.4810, 0.4810 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 326 -> 326
+    sigma2 enrolled at 0 of 166 frequencies
+    sqp refine: working set +37 -> |Omega|=203
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 2 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 3.935362 vs certified 3.935362 (rel 1.4e-15)
+    dump: results_fb_atoms_n400/dump_1790602841/outer_006.npz  (|Omega|=203, 0 active, balance residual n/a)
+  outer 6: |Omega|=203  t=3.935362  certified=3.935362  best=3.935362  (+5 freq, 121 calls)
+    fields (best): RMS wavenumber 0.4958, 0.4970 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 326 -> 394
+    sigma2 row at w=-0.6084: sigma1=3.9241 sigma2=3.8246 gap=0.0254
+    sigma2 row at w=-0.5000: sigma1=3.9299 sigma2=3.8369 gap=0.0237
+    sigma2 row at w=-0.4687: sigma1=3.9305 sigma2=3.8307 gap=0.0254
+    sigma2 row at w=-0.3545: sigma1=3.9251 sigma2=3.8015 gap=0.0315
+    sigma2 row at w=+0.0000: sigma1=3.9181 sigma2=3.7921 gap=0.0322
+    sigma2 row at w=+0.2500: sigma1=3.9313 sigma2=3.8645 gap=0.0170
+    sigma2 row at w=+0.2859: sigma1=3.9317 sigma2=3.8751 gap=0.0144 (active)
+    sigma2 row at w=+0.3393: sigma1=3.9305 sigma2=3.8893 gap=0.0105
+    sigma2 row at w=+0.3574: sigma1=3.9294 sigma2=3.8936 gap=0.0091
+    sigma2 row at w=+0.3600: sigma1=3.9292 sigma2=3.8941 gap=0.0089
+    sigma2 row at w=+0.4100: sigma1=3.9244 sigma2=3.9033 gap=0.0054
+    sigma2 row at w=+0.4208: sigma1=3.9232 sigma2=3.9045 gap=0.0048
+    sigma2 row at w=+0.4302: sigma1=3.9222 sigma2=3.9052 gap=0.0044
+    sigma2 row at w=+0.4424: sigma1=3.9213 sigma2=3.9053 gap=0.0041
+    sigma2 row at w=+0.4485: sigma1=3.9211 sigma2=3.9050 gap=0.0041
+    sigma2 row at w=+0.4581: sigma1=3.9209 sigma2=3.9039 gap=0.0043
+    sigma2 row at w=+0.4635: sigma1=3.9210 sigma2=3.9031 gap=0.0046
+    sigma2 row at w=+0.4803: sigma1=3.9218 sigma2=3.8991 gap=0.0058
+    sigma2 row at w=+0.4856: sigma1=3.9222 sigma2=3.8976 gap=0.0063
+    sigma2 row at w=+0.4871: sigma1=3.9223 sigma2=3.8971 gap=0.0064
+    sigma2 row at w=+0.4881: sigma1=3.9224 sigma2=3.8968 gap=0.0065
+    sigma2 row at w=+0.4898: sigma1=3.9225 sigma2=3.8963 gap=0.0067
+    sigma2 row at w=+0.4992: sigma1=3.9232 sigma2=3.8930 gap=0.0077
+    sigma2 row at w=+0.5522: sigma1=3.9273 sigma2=3.8678 gap=0.0152
+    sigma2 row at w=+0.5613: sigma1=3.9279 sigma2=3.8624 gap=0.0167
+    sigma2 row at w=+0.6758: sigma1=3.9323 sigma2=3.7649 gap=0.0426 (active)
+    sigma2 row at w=+0.7111: sigma1=3.9325 sigma2=3.7235 gap=0.0532 (active)
+    sigma2 row at w=+0.7500: sigma1=3.9323 sigma2=3.6718 gap=0.0663 (active)
+    sigma2 enrolled at 28 of 208 frequencies
+    sqp refine: working set +17 -> |Omega|=225
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 7 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 3.907557 vs certified 3.907557 (rel 2.0e-14)
+    dump: results_fb_atoms_n400/dump_1790602841/outer_007.npz  (|Omega|=225, 0 active, balance residual n/a)
+  outer 7: |Omega|=225  t=3.907557  certified=3.907557  best=3.907557  (+6 freq, 107 calls)
+    fields (best): RMS wavenumber 0.4967, 0.4927 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 394 -> 400
+    sigma2 row at w=-0.7567: sigma1=3.9060 sigma2=3.5560 gap=0.0896 (active)
+    sigma2 row at w=-0.7500: sigma1=3.9060 sigma2=3.5713 gap=0.0857 (active)
+    sigma2 row at w=-0.7433: sigma1=3.9060 sigma2=3.5861 gap=0.0819 (active)
+    sigma2 row at w=-0.6084: sigma1=3.9034 sigma2=3.7830 gap=0.0309
+    sigma2 row at w=-0.5000: sigma1=3.9040 sigma2=3.8224 gap=0.0209 (active)
+    sigma2 row at w=-0.4377: sigma1=3.9050 sigma2=3.8168 gap=0.0226 (active)
+    sigma2 row at w=-0.3545: sigma1=3.9031 sigma2=3.7991 gap=0.0266
+    sigma2 row at w=+0.0000: sigma1=3.8957 sigma2=3.7723 gap=0.0317
+    sigma2 row at w=+0.2500: sigma1=3.9046 sigma2=3.8238 gap=0.0207 (active)
+    sigma2 row at w=+0.3193: sigma1=3.9055 sigma2=3.8378 gap=0.0173 (active)
+    sigma2 row at w=+0.3393: sigma1=3.9054 sigma2=3.8410 gap=0.0165 (active)
+    sigma2 row at w=+0.3574: sigma1=3.9052 sigma2=3.8435 gap=0.0158 (active)
+    sigma2 row at w=+0.3600: sigma1=3.9052 sigma2=3.8438 gap=0.0157 (active)
+    sigma2 row at w=+0.4100: sigma1=3.9040 sigma2=3.8476 gap=0.0144 (active)
+    sigma2 row at w=+0.4208: sigma1=3.9037 sigma2=3.8477 gap=0.0143 (active)
+    sigma2 row at w=+0.4302: sigma1=3.9034 sigma2=3.8476 gap=0.0143
+    sigma2 row at w=+0.4424: sigma1=3.9031 sigma2=3.8470 gap=0.0144
+    sigma2 row at w=+0.4485: sigma1=3.9030 sigma2=3.8465 gap=0.0145
+    sigma2 row at w=+0.4581: sigma1=3.9028 sigma2=3.8456 gap=0.0147
+    sigma2 row at w=+0.4635: sigma1=3.9027 sigma2=3.8449 gap=0.0148
+    sigma2 row at w=+0.4803: sigma1=3.9024 sigma2=3.8421 gap=0.0155
+    sigma2 row at w=+0.4856: sigma1=3.9024 sigma2=3.8410 gap=0.0157
+    sigma2 row at w=+0.4871: sigma1=3.9024 sigma2=3.8407 gap=0.0158
+    sigma2 row at w=+0.4881: sigma1=3.9024 sigma2=3.8405 gap=0.0159
+    sigma2 row at w=+0.4898: sigma1=3.9024 sigma2=3.8401 gap=0.0160
+    sigma2 row at w=+0.4992: sigma1=3.9023 sigma2=3.8378 gap=0.0165
+    sigma2 row at w=+0.5522: sigma1=3.9028 sigma2=3.8180 gap=0.0217
+    sigma2 row at w=+0.5613: sigma1=3.9030 sigma2=3.8134 gap=0.0230
+    sigma2 row at w=+0.6240: sigma1=3.9045 sigma2=3.7725 gap=0.0338 (active)
+    sigma2 row at w=+0.6344: sigma1=3.9048 sigma2=3.7641 gap=0.0360 (active)
+    sigma2 row at w=+0.6434: sigma1=3.9050 sigma2=3.7565 gap=0.0380 (active)
+    sigma2 row at w=+0.6758: sigma1=3.9057 sigma2=3.7260 gap=0.0460 (active)
+    sigma2 row at w=+0.6915: sigma1=3.9061 sigma2=3.7097 gap=0.0503 (active)
+    sigma2 row at w=+0.7003: sigma1=3.9062 sigma2=3.7000 gap=0.0528 (active)
+    sigma2 row at w=+0.7192: sigma1=3.9066 sigma2=3.6781 gap=0.0585 (active)
+    sigma2 row at w=+0.7253: sigma1=3.9066 sigma2=3.6708 gap=0.0604 (active)
+    sigma2 row at w=+0.7317: sigma1=3.9067 sigma2=3.6629 gap=0.0624 (active)
+    sigma2 row at w=+0.7500: sigma1=3.9070 sigma2=3.6393 gap=0.0685 (active)
+    sigma2 row at w=+0.7698: sigma1=3.9072 sigma2=3.6122 gap=0.0755 (active)
+    sigma2 row at w=+0.7752: sigma1=3.9072 sigma2=3.6046 gap=0.0775 (active)
+    sigma2 row at w=+0.8037: sigma1=3.9074 sigma2=3.5622 gap=0.0883 (active)
+    sigma2 row at w=+0.8111: sigma1=3.9075 sigma2=3.5507 gap=0.0913 (active)
+    sigma2 row at w=+0.8345: sigma1=3.9075 sigma2=3.5132 gap=0.1009 (active)
+    sigma2 row at w=+0.8478: sigma1=3.9076 sigma2=3.4910 gap=0.1066 (active)
+    sigma2 row at w=+0.8478: sigma1=3.9076 sigma2=3.4910 gap=0.1066 (active)
+    sigma2 row at w=+0.9108: sigma1=3.9073 sigma2=3.3779 gap=0.1355 (active)
+    sigma2 enrolled at 46 of 231 frequencies
+    sqp refine: working set +2 -> |Omega|=233
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 9 member(s) moved to their tops, 1 merged
+    oracle: reduced at the witness 3.905176 vs certified 3.905176 (rel 9.7e-14)
+    dump: results_fb_atoms_n400/dump_1790602841/outer_008.npz  (|Omega|=232, 0 active, balance residual n/a)
+  outer 8: |Omega|=232  t=3.905074  certified=3.905176  best=3.905176  (+2 freq, 93 calls)
+    fields (best): RMS wavenumber 0.4950, 0.4957 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 400 -> 400
+    sigma2 row at w=-0.7715: sigma1=3.9049 sigma2=3.5233 gap=0.0977 (active)
+    sigma2 row at w=-0.7500: sigma1=3.9049 sigma2=3.5732 gap=0.0849 (active)
+    sigma2 row at w=-0.7433: sigma1=3.9048 sigma2=3.5878 gap=0.0812 (active)
+    sigma2 row at w=-0.6084: sigma1=3.9022 sigma2=3.7803 gap=0.0312 (active)
+    sigma2 row at w=-0.5000: sigma1=3.9038 sigma2=3.8167 gap=0.0223 (active)
+    sigma2 row at w=-0.4407: sigma1=3.9048 sigma2=3.8114 gap=0.0239 (active)
+    sigma2 row at w=-0.3545: sigma1=3.9028 sigma2=3.7940 gap=0.0279 (active)
+    sigma2 row at w=+0.0000: sigma1=3.8963 sigma2=3.7748 gap=0.0312
+    sigma2 row at w=+0.2500: sigma1=3.9045 sigma2=3.8307 gap=0.0189 (active)
+    sigma2 row at w=+0.2925: sigma1=3.9049 sigma2=3.8401 gap=0.0166 (active)
+    sigma2 row at w=+0.3393: sigma1=3.9044 sigma2=3.8486 gap=0.0143 (active)
+    sigma2 row at w=+0.3574: sigma1=3.9040 sigma2=3.8511 gap=0.0135 (active)
+    sigma2 row at w=+0.3600: sigma1=3.9039 sigma2=3.8515 gap=0.0134 (active)
+    sigma2 row at w=+0.4100: sigma1=3.9024 sigma2=3.8550 gap=0.0121 (active)
+    sigma2 row at w=+0.4208: sigma1=3.9020 sigma2=3.8549 gap=0.0121 (active)
+    sigma2 row at w=+0.4302: sigma1=3.9018 sigma2=3.8546 gap=0.0121 (active)
+    sigma2 row at w=+0.4424: sigma1=3.9015 sigma2=3.8538 gap=0.0122 (active)
+    sigma2 row at w=+0.4485: sigma1=3.9014 sigma2=3.8531 gap=0.0124 (active)
+    sigma2 row at w=+0.4581: sigma1=3.9012 sigma2=3.8519 gap=0.0126
+    sigma2 row at w=+0.4635: sigma1=3.9012 sigma2=3.8510 gap=0.0129
+    sigma2 row at w=+0.4803: sigma1=3.9011 sigma2=3.8477 gap=0.0137
+    sigma2 row at w=+0.4856: sigma1=3.9011 sigma2=3.8464 gap=0.0140
+    sigma2 row at w=+0.4871: sigma1=3.9011 sigma2=3.8460 gap=0.0141
+    sigma2 row at w=+0.4881: sigma1=3.9011 sigma2=3.8458 gap=0.0142
+    sigma2 row at w=+0.4898: sigma1=3.9012 sigma2=3.8453 gap=0.0143
+    sigma2 row at w=+0.4992: sigma1=3.9012 sigma2=3.8426 gap=0.0150
+    sigma2 row at w=+0.5522: sigma1=3.9023 sigma2=3.8207 gap=0.0209 (active)
+    sigma2 row at w=+0.5613: sigma1=3.9025 sigma2=3.8158 gap=0.0222 (active)
+    sigma2 row at w=+0.6240: sigma1=3.9040 sigma2=3.7726 gap=0.0336 (active)
+    sigma2 row at w=+0.6344: sigma1=3.9042 sigma2=3.7639 gap=0.0359 (active)
+    sigma2 row at w=+0.6434: sigma1=3.9043 sigma2=3.7559 gap=0.0380 (active)
+    sigma2 row at w=+0.6758: sigma1=3.9048 sigma2=3.7245 gap=0.0462 (active)
+    sigma2 row at w=+0.6915: sigma1=3.9049 sigma2=3.7077 gap=0.0505 (active)
+    sigma2 row at w=+0.7003: sigma1=3.9050 sigma2=3.6978 gap=0.0531 (active)
+    sigma2 row at w=+0.7192: sigma1=3.9051 sigma2=3.6753 gap=0.0588 (active)
+    sigma2 row at w=+0.7253: sigma1=3.9051 sigma2=3.6678 gap=0.0608 (active)
+    sigma2 row at w=+0.7317: sigma1=3.9051 sigma2=3.6598 gap=0.0628 (active)
+    sigma2 row at w=+0.7472: sigma1=3.9051 sigma2=3.6394 gap=0.0680 (active)
+    sigma2 row at w=+0.7500: sigma1=3.9050 sigma2=3.6357 gap=0.0690 (active)
+    sigma2 row at w=+0.7698: sigma1=3.9049 sigma2=3.6081 gap=0.0760 (active)
+    sigma2 row at w=+0.7710: sigma1=3.9049 sigma2=3.6065 gap=0.0764 (active)
+    sigma2 row at w=+0.7752: sigma1=3.9049 sigma2=3.6004 gap=0.0780 (active)
+    sigma2 row at w=+0.8037: sigma1=3.9046 sigma2=3.5574 gap=0.0889 (active)
+    sigma2 row at w=+0.8111: sigma1=3.9045 sigma2=3.5458 gap=0.0919 (active)
+    sigma2 row at w=+0.8345: sigma1=3.9042 sigma2=3.5079 gap=0.1015 (active)
+    sigma2 row at w=+0.8478: sigma1=3.9039 sigma2=3.4854 gap=0.1072 (active)
+    sigma2 row at w=+0.9108: sigma1=3.9025 sigma2=3.3714 gap=0.1361 (active)
+    sigma2 enrolled at 47 of 233 frequencies
+    sqp refine: working set +3 -> |Omega|=236
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 11 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 3.904458 vs certified 3.904458 (rel 4.2e-14)
+    dump: results_fb_atoms_n400/dump_1790602841/outer_009.npz  (|Omega|=236, 0 active, balance residual n/a)
+  outer 9: |Omega|=236  t=3.904336  certified=3.904458  best=3.904458  (+4 freq, 87 calls)
+    fields (best): RMS wavenumber 0.4987, 0.4961 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 400 -> 398
+    sigma2 row at w=-0.7665: sigma1=3.9043 sigma2=3.5317 gap=0.0954 (active)
+    sigma2 row at w=-0.7500: sigma1=3.9043 sigma2=3.5697 gap=0.0857 (active)
+    sigma2 row at w=-0.7433: sigma1=3.9043 sigma2=3.5843 gap=0.0820 (active)
+    sigma2 row at w=-0.6084: sigma1=3.9019 sigma2=3.7781 gap=0.0317 (active)
+    sigma2 row at w=-0.5000: sigma1=3.9032 sigma2=3.8181 gap=0.0218 (active)
+    sigma2 row at w=-0.4314: sigma1=3.9043 sigma2=3.8138 gap=0.0232 (active)
+    sigma2 row at w=-0.3545: sigma1=3.9029 sigma2=3.8007 gap=0.0262 (active)
+    sigma2 row at w=+0.0000: sigma1=3.8980 sigma2=3.7902 gap=0.0277
+    sigma2 row at w=+0.2500: sigma1=3.9043 sigma2=3.8456 gap=0.0150 (active)
+    sigma2 row at w=+0.2601: sigma1=3.9043 sigma2=3.8477 gap=0.0145 (active)
+    sigma2 row at w=+0.3393: sigma1=3.9032 sigma2=3.8610 gap=0.0108 (active)
+    sigma2 row at w=+0.3574: sigma1=3.9027 sigma2=3.8627 gap=0.0103 (active)
+    sigma2 row at w=+0.3600: sigma1=3.9027 sigma2=3.8629 gap=0.0102 (active)
+    sigma2 row at w=+0.4100: sigma1=3.9016 sigma2=3.8631 gap=0.0099 (active)
+    sigma2 row at w=+0.4208: sigma1=3.9015 sigma2=3.8621 gap=0.0101 (active)
+    sigma2 row at w=+0.4302: sigma1=3.9015 sigma2=3.8609 gap=0.0104 (active)
+    sigma2 row at w=+0.4424: sigma1=3.9015 sigma2=3.8589 gap=0.0109 (active)
+    sigma2 row at w=+0.4485: sigma1=3.9016 sigma2=3.8577 gap=0.0112 (active)
+    sigma2 row at w=+0.4581: sigma1=3.9017 sigma2=3.8556 gap=0.0118 (active)
+    sigma2 row at w=+0.4635: sigma1=3.9018 sigma2=3.8542 gap=0.0122 (active)
+    sigma2 row at w=+0.4803: sigma1=3.9021 sigma2=3.8492 gap=0.0136 (active)
+    sigma2 row at w=+0.4856: sigma1=3.9022 sigma2=3.8474 gap=0.0140 (active)
+    sigma2 row at w=+0.4871: sigma1=3.9022 sigma2=3.8469 gap=0.0142 (active)
+    sigma2 row at w=+0.4881: sigma1=3.9023 sigma2=3.8465 gap=0.0143 (active)
+    sigma2 row at w=+0.4898: sigma1=3.9023 sigma2=3.8460 gap=0.0144 (active)
+    sigma2 row at w=+0.4992: sigma1=3.9025 sigma2=3.8424 gap=0.0154 (active)
+    sigma2 row at w=+0.5522: sigma1=3.9037 sigma2=3.8160 gap=0.0224 (active)
+    sigma2 row at w=+0.5613: sigma1=3.9038 sigma2=3.8104 gap=0.0239 (active)
+    sigma2 row at w=+0.6213: sigma1=3.9043 sigma2=3.7652 gap=0.0356 (active)
+    sigma2 row at w=+0.6240: sigma1=3.9043 sigma2=3.7628 gap=0.0362 (active)
+    sigma2 row at w=+0.6344: sigma1=3.9043 sigma2=3.7534 gap=0.0387 (active)
+    sigma2 row at w=+0.6434: sigma1=3.9043 sigma2=3.7448 gap=0.0408 (active)
+    sigma2 row at w=+0.6632: sigma1=3.9041 sigma2=3.7249 gap=0.0459 (active)
+    sigma2 row at w=+0.6758: sigma1=3.9039 sigma2=3.7113 gap=0.0493 (active)
+    sigma2 row at w=+0.6915: sigma1=3.9036 sigma2=3.6935 gap=0.0538 (active)
+    sigma2 row at w=+0.7003: sigma1=3.9035 sigma2=3.6831 gap=0.0564 (active)
+    sigma2 row at w=+0.7111: sigma1=3.9032 sigma2=3.6698 gap=0.0598 (active)
+    sigma2 row at w=+0.7192: sigma1=3.9030 sigma2=3.6595 gap=0.0624 (active)
+    sigma2 row at w=+0.7253: sigma1=3.9028 sigma2=3.6517 gap=0.0643 (active)
+    sigma2 row at w=+0.7317: sigma1=3.9026 sigma2=3.6433 gap=0.0664 (active)
+    sigma2 row at w=+0.7472: sigma1=3.9021 sigma2=3.6221 gap=0.0718 (active)
+    sigma2 row at w=+0.7500: sigma1=3.9020 sigma2=3.6183 gap=0.0727 (active)
+    sigma2 row at w=+0.7698: sigma1=3.9013 sigma2=3.5897 gap=0.0799 (active)
+    sigma2 row at w=+0.7710: sigma1=3.9013 sigma2=3.5880 gap=0.0803 (active)
+    sigma2 row at w=+0.7752: sigma1=3.9011 sigma2=3.5817 gap=0.0819 (active)
+    sigma2 row at w=+0.8037: sigma1=3.8999 sigma2=3.5374 gap=0.0929
+    sigma2 row at w=+0.8345: sigma1=3.8984 sigma2=3.4866 gap=0.1056
+    sigma2 row at w=+0.8478: sigma1=3.8977 sigma2=3.4637 gap=0.1113
+    sigma2 row at w=+0.9108: sigma1=3.8939 sigma2=3.3480 gap=0.1402
+    sigma2 enrolled at 49 of 240 frequencies
+    sqp refine: working set +2 -> |Omega|=242
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 14 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 3.903930 vs certified 3.903930 (rel 6.9e-15)
+    dump: results_fb_atoms_n400/dump_1790602841/outer_010.npz  (|Omega|=242, 0 active, balance residual n/a)
+  outer 10: |Omega|=242  t=3.903930  certified=3.903930  best=3.903930  (+2 freq, 98 calls)
+    fields (best): RMS wavenumber 0.4969, 0.4940 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+  PROGRESS STOP: 0.093 % over the last 3 rounds (< 0.15 %)
+winding certificate: 0 eigenvalues right of Re=-0.0250 (871 pts) -- UNCONDITIONALLY stable with eps/2 margin
+{"case": "K+FB+FC", "gamma": 3.9039298053008062, "alpha": -0.2195669896626778, "n_active": 1, "outer": 11, "nOmega": 244, "calls": 549, "seconds": 4926.5}

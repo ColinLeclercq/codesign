@@ -1,0 +1,15 @@
+{
+ "record": "results/B_s0_ne200.npz",
+ "nu": 277.9609056931906,
+ "a_c": 111.03651930739508,
+ "beta": 1.0,
+ "gamma_c": 1.0000000000000002,
+ "W": 555.9218113863813,
+ "tail_bound": 0.004499553059697769,
+ "gamma_band": 9.94413630897871,
+ "w_star": NaN,
+ "certified": true,
+ "gamma_record": 9.944136318922846,
+ "global_certified": true,
+ "method": "dense"
+}

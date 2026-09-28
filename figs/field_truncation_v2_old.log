@@ -1,0 +1,22 @@
+projection error of the stored fields onto 80 modes: 5.2e-16 / 4.9e-16
+  modes  0-20 (lambda 0.00-0.64): energy actuator 8.25e-01, sensor 8.29e-01
+  modes 20-40 (lambda 0.71-2.60): energy actuator 6.56e-02, sensor 6.35e-02
+  modes 40-60 (lambda 2.73-6.06): energy actuator 7.36e-03, sensor 8.77e-03
+  modes 60-80 (lambda 6.28-12.20): energy actuator 1.02e-01, sensor 9.87e-02
+RMS wavenumber sqrt(sum lambda |beta|^2 / sum |beta|^2): actuator 1.151, sensor 1.167
+gamma, stored fields: 3.901205
+gamma, lowest 60 modes: 5.112346 (+31.045 %)
+gamma, lowest 40 modes: 5.440227 (+39.450 %)
+gamma, lowest 30 modes: 5.436621 (+39.357 %)
+gamma, lowest 20 modes: 5.236110 (+34.218 %)
+gamma, Sobolev filter l = 0.5: 5.014810 (+28.545 %)
+gamma, Sobolev filter l = 1.0: 7.608638 (+95.033 %)
+gamma, Sobolev filter l = 2.0: 37.400890 (+858.701 %)
+gamma, fields windowed to |x| < 15 (+3 taper): 5.619666 (+44.049 %)
+gamma, fields windowed to |x| < 10 (+3 taper): 5.318735 (+36.336 %)
+gamma, fields windowed to |x| < 7 (+3 taper): 7.525039 (+92.890 %)
+tail fraction (|x| > 12, nodal l2): actuator 0.364, sensor 0.366
+gamma, Gaussian smoothing s = 0.5 (tails): 5.236810 (+34.236 %)
+gamma, Gaussian smoothing s = 0.5 (all): 4.610116 (+18.172 %)
+gamma, Gaussian smoothing s = 1.0 (tails): 5.504276 (+41.092 %)
+gamma, Gaussian smoothing s = 1.0 (all): 5.999503 (+53.786 %)

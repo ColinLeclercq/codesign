@@ -1,0 +1,15 @@
+{
+ "record": "results_cross/frozen_n200_on400.npz",
+ "nu": 1087.8694819885297,
+ "a_c": 4199.74641780364,
+ "beta": 1.0000000000000002,
+ "gamma_c": 1.0000000000000002,
+ "W": 8399.49283560728,
+ "tail_bound": 0.00014036257531019856,
+ "gamma_band": 3.9308899847065937,
+ "w_star": 8.4048593673104,
+ "certified": true,
+ "gamma_record": 3.9308847846950936,
+ "global_certified": true,
+ "method": "dense"
+}

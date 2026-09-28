@@ -1,0 +1,15 @@
+{
+ "record": "results/FB_FC_s0_ne200.npz",
+ "nu": 277.9609056931906,
+ "a_c": 4199.74641780391,
+ "beta": 0.9999999999999999,
+ "gamma_c": 0.9999999999999999,
+ "W": 8399.49283560782,
+ "tail_bound": 0.0001240222300187498,
+ "gamma_band": 4.341231626674726,
+ "w_star": -0.8366078919991555,
+ "certified": true,
+ "gamma_record": 4.3409693297121,
+ "global_certified": true,
+ "method": "dense"
+}

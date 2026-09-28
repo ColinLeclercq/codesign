@@ -1,0 +1,15 @@
+{
+ "record": "results_cross/free160_n200_on400.npz",
+ "nu": 1087.8694819885297,
+ "a_c": 4199.746415668217,
+ "beta": 1.0,
+ "gamma_c": 1.0000000000000002,
+ "W": 8399.492831336434,
+ "tail_bound": 0.00014576509127438856,
+ "gamma_band": 4.605268654285044,
+ "w_star": 27.838334908030482,
+ "certified": true,
+ "gamma_record": 4.605057516188272,
+ "global_certified": true,
+ "method": "dense"
+}

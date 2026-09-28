@@ -1,0 +1,15 @@
+{
+ "record": "results_cross/atoms_n400_on200.npz",
+ "nu": 277.9609056931906,
+ "a_c": 4199.74641628527,
+ "beta": 1.0,
+ "gamma_c": 1.0,
+ "W": 8399.49283257054,
+ "tail_bound": 0.0001341329264522233,
+ "gamma_band": 3.903962620402946,
+ "w_star": 0.752423582873233,
+ "certified": true,
+ "gamma_record": 3.903935489545709,
+ "global_certified": true,
+ "method": "dense"
+}

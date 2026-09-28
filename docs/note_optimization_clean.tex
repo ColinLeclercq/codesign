@@ -1,0 +1,1259 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{mathptmx}
+\usepackage{amsmath,amssymb}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage[activate=false]{microtype}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+\usepackage{enumitem}
+\setlength{\parskip}{3pt}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\eps}{\varepsilon}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\T}{^{\!\top}}
+\definecolor{revcol}{RGB}{135,25,120}
+\newcommand{\rev}[1]{#1}
+\definecolor{revb}{RGB}{0,105,110}
+\newcommand{\revb}[1]{#1}
+\definecolor{revc}{RGB}{170,80,0}
+\newcommand{\revc}[1]{#1}
+\definecolor{revd}{RGB}{20,60,170}
+\newcommand{\revd}[1]{#1}
+\definecolor{reve}{RGB}{20,60,170}
+\newcommand{\reve}[1]{#1}
+\definecolor{revf}{RGB}{140,30,120}
+\newcommand{\revf}[1]{{\color{revf}#1}}
+\newcommand{\bx}[1]{\begin{center}\fbox{\parbox{0.95\textwidth}{\small #1}}\end{center}}
+
+\title{How the optimiser works, from the basics to the choices\\
+\large A companion note to the v7 campaign report --- consolidated edition}
+\author{C. Leclercq \and E. Cl\'ement}
+\date{September 7, 2026 --- revision 7}
+
+\begin{document}
+\maketitle
+
+\noindent{\small [Consolidated edition: eight rounds of review questions (August 27 --
+September 4) have been folded into the exposition.  The order is deliberate --- what a
+constrained optimiser is (\S\ref{sec:primer}--\S\ref{sec:penalty}), then the minimax
+direction problem solved by hand (\S\ref{sec:baseline}), then the three methods of the
+literature on their own terms (\S\ref{sec:lit}), then their comparison
+(\S\ref{sec:compare}), then our method as shipped (\S\ref{sec:ours}), then the choices
+ahead (\S\ref{sec:which}--\S\ref{sec:todo}).  Everything introduced is defined before it
+is used.  \revf{Passages rewritten in the seventh revision (the Mengi group's optimise-and-enrich framework and its consequences for the inner solver, the margin constraint and the position cases) are set in this colour.}  The oracle (values, gradients, peaks, certificates) is taken as given; its
+algebra is the companion note.]}
+
+\section{The problem, and why one word makes it hard}
+\label{sec:problem}
+
+Collect everything we may tune --- controller coefficients, gain, actuator and sensor
+parameters --- into one vector $\theta\in\R^{n_\theta}$.  For every frequency $\omega$
+the oracle returns the closed-loop amplification $f_\omega(\theta)$, an ordinary
+differentiable function of $\theta$ (with one caveat met in \S\ref{sec:kinks}).  We want
+to minimise the worst case,
+\[
+f(\theta)=\max_\omega f_\omega(\theta),
+\]
+subject to closed-loop stability with a margin $\eps$ (\S\ref{sec:stability}).
+
+Everything difficult is in the word \textbf{max}.  Push the tallest peak down and another
+rises; push until they tie, and from then on any move that lowers one raises the other.
+The minimiser of a maximum sits, generically, at a \emph{kink}: several peaks are level,
+``which one is the maximum'' switches there, and the gradient jumps.  Plain gradient
+descent computes the gradient of whichever peak is tallest, steps, finds another tallest,
+steps back, and zigzags across the crease.  \textbf{The optimum is a balance of peaks, and every method in this note is a way of
+computing balances.}  \revb{One more thing to fix in mind from the start: there are two
+kinds of kink in this problem.  A kink \emph{between} frequencies --- several peaks tie
+at the top --- is the one every method below is built for.  A kink \emph{inside} one
+frequency --- at some $\omega$ the two largest singular values of the response coincide,
+so $f_\omega$ itself switches branch --- is one level down, invisible to the outer
+balance, and it is where the shipped method still fails (\S\ref{sec:kinks}).  Apart from
+the stability constraint, these two kinks are the whole of the nonsmoothness.}
+
+\paragraph{Two words used throughout.}  Every method alternates between two levels.  The
+\emph{inner} level works on a finite list of frequencies $\Omega=\{\omega_1,\dots,\omega_N\}$
+(the \emph{working set}) and moves $\theta$ using only the oracle's values and gradients
+there.  The \emph{outer} level consults the oracle over the whole band --- certifies the
+true maximum, locates peaks the list missed --- and updates the list.  Because there are
+infinitely many frequencies and finitely many unknowns, the problem is a
+\emph{semi-infinite program}, and ``solve on a finite set, add the violated points,
+repeat'' is its classical solution pattern --- the \emph{exchange} method (Hettich \&
+Kortanek, \emph{SIAM Review} 1993), whose ancestor is Remez's algorithm for best
+polynomial approximation (equalise the error on a reference set, exchange in the point
+where it is largest).  Apkarian and Noll call the same move \emph{enrichment}.
+
+\section{Constrained optimisation, from zero}
+\label{sec:primer}
+
+This section is the toolbox.  It is written for a reader who knows what a gradient is and
+nothing else, and every later section uses it.
+
+\subsection{Lagrangian, multipliers, KKT, active set}
+Consider $\min_x F(x)$ s.t.\ $c_i(x)\le0$, $i=1,\dots,m$, all smooth.  Attach to every
+constraint a nonnegative number $\lambda_i$, its \emph{multiplier}, and form the
+\emph{Lagrangian}
+\[
+\mathcal L(x,\lambda)=F(x)+\sum_i\lambda_ic_i(x).
+\]
+Read $\lambda_i$ as the \emph{price} of constraint $i$: how much the optimal value would
+improve per unit of relaxation of $c_i\le0$.  At a solution $x^\ast$ there exist prices
+$\lambda^\ast\ge0$ such that (the \emph{KKT conditions})
+\[
+\nabla F(x^\ast)+\sum_i\lambda_i^\ast\nabla c_i(x^\ast)=0,\qquad c_i(x^\ast)\le0,\qquad
+\lambda_i^\ast c_i(x^\ast)=0 .
+\]
+The first says: $-\nabla F$ is a nonnegative combination of the gradients of the binding
+constraints --- one cannot descend without pushing into a wall.  The third
+(\emph{complementarity}) says a constraint is either binding ($c_i=0$) or free
+($\lambda_i=0$), never both priced and slack.  The binding constraints form the
+\emph{active set} $\mathcal A$.  Off $\mathcal A$ the inactive constraints can be
+deleted without changing anything locally --- which is why \rev{every active-set method
+\emph{guesses} the active set, solves with equalities, and checks the signs; interior
+point methods (\S\ref{sec:qpsolve}) are the one family that never guesses, and they pay
+for it differently.}
+
+\paragraph{Primal and dual.}  The original problem and its variable $x$ are the
+\emph{primal}.  For fixed prices $\lambda\ge0$, minimise the Lagrangian over $x$ freely:
+$q(\lambda)=\min_x\mathcal L(x,\lambda)$, the \emph{dual function}.  Since
+$\mathcal L(x,\lambda)\le F(x)$ whenever $x$ is feasible ($c_i\le0$, $\lambda_i\ge0$),
+$q(\lambda)\le F(x)$ for every feasible $x$: any price vector gives a certified lower
+bound (\emph{weak duality}).  The \emph{dual problem} is the best bound,
+$\max_{\lambda\ge0}q(\lambda)$; its solution is the KKT multiplier vector, and for the
+convex problems in this note (\rev{all the \emph{quadratic programs}, QPs --- quadratic
+objective, linear constraints --- below}) the bound is tight: $\max q=\min F$
+(\emph{strong duality}).  ``Dual variables'', ``multipliers'', ``prices'' are three names
+for $\lambda$.  A \emph{primal--dual} method updates $x$ and $\lambda$ together.
+
+\paragraph{The curvature that matters.}  For a constrained problem the relevant
+second-order object is the Hessian of the Lagrangian,
+$\nabla^2_{xx}\mathcal L=\nabla^2F+\sum_i\lambda_i\nabla^2c_i$: curvature of the
+objective \emph{and} of the binding constraints, price-weighted.
+
+\subsection{The SQP model problem, derived two ways}
+\label{sec:sqp-derive}
+Fix the active set (so complementarity is resolved).  The KKT conditions become a square
+system of equations in $(x,\lambda_{\mathcal A})$:
+$R(x,\lambda)=\bigl[\nabla F+\sum_{\mathcal A}\lambda_i\nabla c_i;\ c_{\mathcal A}\bigr]=0$,
+where $\nabla c_{\mathcal A}$ denotes the matrix whose rows are the active constraint
+gradients.
+
+\emph{Route 1, Newton on KKT.}  Newton linearises $R$ and solves one linear system:
+\[
+\boxed{\;
+\begin{bmatrix}\nabla^2_{xx}\mathcal L & \nabla c_{\mathcal A}\T\\ \nabla c_{\mathcal A} & 0\end{bmatrix}
+\begin{bmatrix}d\\ \lambda^{+}-\lambda\end{bmatrix}
+=-\begin{bmatrix}\nabla_x\mathcal L\\ c_{\mathcal A}\end{bmatrix}
+\;}
+\]
+Written out, its two block rows are
+$\nabla^2_{xx}\mathcal L\,d+\nabla c_{\mathcal A}\T\lambda^{+}=-\nabla F$ and
+$c_{\mathcal A}+\nabla c_{\mathcal A}d=0$.
+
+\emph{Route 2, Taylor.}  Expand the Lagrangian to second order in $x$ at fixed
+$\lambda$ and the constraints to first order, and minimise the quadratic model of the
+Lagrangian subject to the \rev{affine (linear-plus-constant)} model of the constraints.  On the linearised feasible
+set $\nabla c_i\T d=-c_i$ is a constant, so the term $\sum\lambda_i\nabla c_i\T d$ of the
+model is a constant and can be dropped; what remains is
+\[
+\boxed{\;
+\min_d\ \nabla F\T d+\tfrac12\,d\T\bigl(\nabla^2_{xx}\mathcal L\bigr)d
+\qquad\text{s.t.}\qquad c_i+\nabla c_i\T d\le0 .
+\;}
+\]
+\emph{Check that the routes agree.}  Write this QP's own Lagrangian,
+$\ell(d,\mu)=\nabla F\T d+\tfrac12d\T\nabla^2_{xx}\mathcal L\,d+\sum\mu_i(c_i+\nabla c_i\T d)$,
+and set its first variation to zero: in $d$,
+$\nabla F+\nabla^2_{xx}\mathcal L\,d+\sum\mu_i\nabla c_i=0$; in $\mu$,
+$c_i+\nabla c_i\T d=0$.  These are the two block rows above with $\mu=\lambda^{+}$: the
+QP's own multipliers are the Newton update of the prices.  (Had the dropped constant been
+kept, the QP would return $\mu=\lambda^{+}-\lambda$ instead, same $d$ --- the old
+$\lambda$ enters only through $\nabla^2_{xx}\mathcal L$.)  So ``solve the QP'' and
+``take the Newton step'' are one operation; the QP form exists because, when the active
+set is not known, inequalities and multiplier signs must be managed, which a linear
+system cannot express and a QP handles natively.  \emph{Sequential quadratic
+programming} (SQP) iterates this model problem, with the exact Hessian replaced by an
+estimate $B$ and a step control (\S\ref{sec:linesearch}).
+
+\subsection{How a QP is solved: active set, interior point, ADMM}
+\label{sec:qpsolve}
+\rev{Three families, each used somewhere in this note.  \revb{One distinction comes first.}  A QP can
+arise in two ways: as \emph{the subproblem of an SQP step} (the model problem above,
+solved once per iteration of an outer NLP loop), or as \emph{the whole problem}.  And an
+interior point method can be applied at two places: to the QP inside an SQP step (then it
+is a \emph{QP solver}, one option among the three below), or directly to the NLP (then
+there is no SQP loop and no QP at all --- each iteration is one linear system on the
+perturbed KKT conditions, \S\ref{sec:penalty}; that is what IPOPT does).  ``Level 1''
+in \S\ref{sec:which} means the choice of NLP method (SQP versus IPM-on-the-NLP);
+``level 2'' means, if SQP, which QP solver sits inside.}
+
+\emph{Active set} --- guess which inequalities are binding, solve the equality-constrained
+problem (one linear system), check the two tests (every multiplier nonnegative; no
+excluded constraint violated), and walk: drop a constraint whose multiplier came out
+negative, add one that was trampled, one small solve per change.  Exact, superb warm
+starts (the previous active set is usually right), cost proportional to the number of
+changes --- combinatorial in the worst case.  The hand method of \S\ref{sec:baseline};
+qpOASES, \code{quadprog}.
+
+\emph{Interior point} --- never guess the active set: keep every inequality strictly
+satisfied by adding a barrier $-\mu\sum\log(-c_i)$ to the objective, take Newton steps,
+and let $\mu\to0$ (\S\ref{sec:penalty}).  \rev{The iterates never reach the active set;
+they approach it from inside until the distance is below tolerance, which for every
+practical purpose is the same answer --- the difference from the active-set walk is not
+in the answer but in the road: no combinatorial guessing, at the price of poor warm
+starts on the boundary.}  Robust, insensitive to the number of constraints.  IPOPT at
+the NLP level; Gurobi/MOSEK for QPs.
+
+\emph{ADMM} (alternating direction method of multipliers) --- \rev{write the inequality
+constraints $l\le Ax\le u$ of the QP by introducing a copy $z=Ax$ that must lie in the
+box $l\le z\le u$ (the box \emph{is} the inequalities), and form the augmented
+Lagrangian of the equality $Ax=z$,
+\[
+L_\rho(x,z,y)=\tfrac12x\T Px+q\T x+y\T(Ax-z)+\tfrac\rho2\|Ax-z\|^2 ,
+\]
+with multiplier $y$ and penalty $\rho$.  Then alternate three cheap steps: minimise
+$L_\rho$ over $x$ (one linear system with matrix $P+\rho A\T A$, factorised once);
+minimise over $z$ (clip $Ax+y/\rho$ into the box, entry by entry); update
+$y\leftarrow y+\rho(Ax-z)$.  No active set is ever guessed --- the clip decides, entry by
+entry, which bounds are hit at each iteration.}  Each iteration is a triangular solve and
+a clip; hundreds of iterations to modest accuracy ($10^{-3}$--$10^{-4}$), warm starts
+natural, scales to large problems.  OSQP --- which is what the frozen pipeline uses inside
+PyGRANSO (\code{o.QPsolver='osqp'}), a fact that matters in \S\ref{sec:which}.
+
+\subsection{Step control: line search, then trust region}
+\label{sec:linesearch}
+\revd{A model proposes a direction $d$ (and, for a QP with curvature, a length: the full
+step $\beta=1$).  Reality is consulted along the ray $x+\beta d$ by a \emph{line search}.
+An \emph{exact} line search would minimise $\varphi(\beta)=F(x+\beta d)$ over $\beta$ ---
+never done, since every trial is an oracle call; every line search in this note is
+\emph{inexact}: it stops at the first $\beta$ that passes a test.  The basic test is
+\emph{Armijo}: try $\beta=1$, accept if the true function decreased by at least a
+fraction of what the model promised, $\varphi(\beta)\le\varphi(0)+c_1\beta\varphi'(0)$
+with $c_1\sim0.1$; else halve and retry.  A first-order method needs nothing more.}
+
+\paragraph{The curvature condition for quasi-Newton.}
+A quasi-Newton method builds its curvature estimate $B$ from the pairs $s=x^+-x$,
+$y=\nabla\mathcal L^+-\nabla\mathcal L$ by the BFGS update
+$B\leftarrow B-\tfrac{Bss\T B}{s\T Bs}+\tfrac{yy\T}{y\T s}$, which keeps $B$ positive
+definite only if $y\T s>0$; the second \emph{Wolfe} condition
+$\varphi'(\beta)\ge c_2\varphi'(0)$ (the slope has become less negative --- ``weak'';
+``strong'' Wolfe bounds $|\varphi'(\beta)|$ from both sides) guarantees it.  So:
+first-order $\to$ Armijo; quasi-Newton $\to$ Armijo plus curvature condition.
+
+\paragraph{Trust region.}
+A \emph{trust region} is the other step-control idea: cap $\|d\|\le\Delta$ inside the
+model, then accept or reject the whole step (never shrink along the ray) and adapt
+$\Delta$ from the ratio of actual to predicted decrease.  Note that a quadratic term
+$\tfrac12\|d\|^2/\tau$ in a direction problem is \emph{not} by itself a trust region:
+by Lagrangian duality it is the same as the cap $\|d\|\le\Delta(\tau)$, so it fixes the
+\emph{scale} of the step, and what makes a method a trust-region method is what it does
+\emph{next} --- line-search methods take the direction and shrink along it (the descent
+line, GRANSO, our inner solver); a trust-region method keeps or rejects the whole step
+and adapts $\tau$ (the bundle line, whose proximity control is a trust region wearing a
+penalty; and our outer step governor, \S\ref{sec:stability}).
+
+\subsection{Two facts about nonsmooth functions}
+\label{sec:nonsmooth}
+\revd{Two facts belong here, because one method of \S\ref{sec:lit} rests on them and the
+kinks of \S\ref{sec:problem} make them relevant to all.
+
+\emph{BFGS on a nonsmooth function} (Lewis \& Overton 2013).  A kinked function is
+differentiable almost everywhere, so an inexact line search that never lands exactly on
+a kink (probability zero for an Armijo--Wolfe search with random-looking trial lengths)
+always has a gradient to use.  The secant pairs taken across a kink encode a jump of the
+gradient as a huge curvature, so $B$ becomes wildly ill-conditioned --- and, minimising
+a nonsmooth \emph{objective} directly, that is useful: the large curvature is across the
+crease, so the steps align with the crease and follow it, at a linear rate, in practice
+to a nonsmooth minimiser.  The theory covers special cases only; when the method fails
+it stalls silently, and it eventually stagnates at the accuracy the line search can
+resolve.  This is the behaviour HIFOO (\S\ref{sec:hifoo}) exploits.
+
+\emph{Gradient sampling} (Burke, Lewis \& Overton 2005).  At the current point sample
+$m>n_\theta$ random points in a ball of radius $\varepsilon$ ($n_\theta=\dim\theta$; the
+count is set by the dimension of the space, not by the number of active pieces, which
+the method does not know), compute their gradients, take the minimum-norm element of
+their convex hull as the direction (the weight problem of \S\ref{sec:activeset} again),
+line-search, and shrink $\varepsilon$ when that norm is small --- an estimate of the
+Clarke subdifferential by \emph{random sampling} instead of by enumeration of the
+active pieces.  Advantages: convergence theory (to Clarke stationary points, with
+probability one) for any locally Lipschitz function, and a rough optimality measure for
+free (the smallest hull norm).  Limits: first-order, $m$ gradients per iteration, no
+curvature --- an endgame tool, not an engine.}
+
+\subsection{Acronyms and terms}
+\textbf{QP} quadratic program (quadratic objective, linear constraints).  \textbf{NLP}
+nonlinear program.  \textbf{SQP} sequential quadratic programming.  \textbf{IPM}
+interior point method.  \textbf{SDP} semidefinite program --- the LMI route to $H_\infty$
+synthesis, which squares the number of unknowns and does not reach our scales; nothing
+here solves one.  \textbf{Hard/soft} requirement: enforced / minimised as far as
+possible (standard usage; Apkarian's tools adopt it).  \textbf{Epigraph}: the region on
+or above a graph; ``epigraph reformulation'' $=$ give a maximum its own variable and
+constrain every member below it (\S\ref{sec:epigraph}; used constraint by constraint in
+\S\ref{sec:penalty}).  \rev{\textbf{Subdifferential}: at a kink a function has no
+gradient but a \emph{set} of slopes; for a convex function it is the set of slopes of
+the planes lying below the graph, and for a nonconvex one the \emph{Clarke}
+subdifferential generalises it as the convex hull of the limits of nearby gradients ---
+for a maximum of smooth functions, the convex hull of the active gradients.  The two
+notions coincide for convex functions.  Every convergence theorem in this note is stated
+in this language (``Clarke stationary'' $=$ zero belongs to the subdifferential), \revb{but no algorithm in this note ever \emph{computes} a subdifferential.  The
+subdifferential of a maximum is an infinite set (a convex hull) generated by finitely
+many vectors --- the gradients of the active pieces --- and every method works with
+those finitely many \emph{generators} only: the descent line as the columns of its
+weight problem, the bundle as its planes, our SQP as its constraint rows.  The
+minimax direction of \S\ref{sec:dual} is the minimum-norm element of the hull, computed
+from the generators; the cutting-plane model of \S\ref{sec:bundle} is the hull
+re-assembled from generators collected at several points.  So the Clarke subdifferential
+is relevant to the theory of all three treatments --- it is the object the convergence
+theorems are stated for --- while the implementations manipulate its generators.}}
+
+\section{Four ways to handle a constraint: quadratic penalty, exact penalty, barrier, progress function}
+\label{sec:penalty}
+
+Every constrained method must discourage steps that violate constraints.  \revb{Four}
+devices are in use in this note; write $[c]_+=\max(c,0)$ for a violation:
+\revc{\begin{align*}
+\text{quadratic penalty:}\quad & P_\rho(x)=F+\tfrac\rho2\sum_i[c_i]_+^2, & \rho\to\infty;\\
+\text{exact penalty:}\quad & \phi_\mu(x)=\mu F+\sum_i[c_i]_+, & \mu\text{ small enough};\\
+\text{log barrier:}\quad & B_\mu(x)=F-\mu\sum_i\log(-c_i), & \mu\to0;\\
+\text{progress function:}\quad & \Phi_\eta(x)=\max\{F-\eta,\ c_1,\dots,c_m\}, & \text{bisect on }\eta .
+\end{align*}}
+The first two allow violation and charge for it from outside; the barrier forbids it,
+with a fence that becomes infinite at the boundary; \revb{the fourth, the \emph{progress
+function}, puts objective and constraints on one footing --- every term is a ``must be
+$\le0$'' test once the objective is shifted by a target level $\eta$ --- and searches
+for the smallest achievable $\eta$ by bisection.}
+
+\paragraph{The whole difference on one line of real numbers.}  Minimise $F(x)=x$ subject
+to $x\ge1$ ($c=1-x\le0$): solution $x^\ast=1$, price $\lambda^\ast=1$.
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt]
+\item Quadratic penalty $x+\tfrac\rho2[1-x]_+^2$: for $x<1$ the slope is $1-\rho(1-x)$,
+zero at $x_\rho=1-1/\rho$.  \emph{Infeasible for every finite $\rho$}; exact only in the
+limit.  Its price $\rho[1-x_\rho]_+=1$ is right only because the violation stays
+$\lambda^\ast/\rho$.
+\item Barrier $x-\mu\log(x-1)$: slope $1-\mu/(x-1)$, zero at $x_\mu=1+\mu$.
+\emph{Strictly feasible for every $\mu>0$}; exact only in the limit.  Its second
+derivative at the minimiser is $1/\mu$ --- the \emph{ill-conditioning} of barriers: the
+bowl becomes infinitely steep as $\mu\to0$, and Newton systems with an entry $\sim1/\mu$
+lose $\log_{10}(1/\mu)$ digits.
+\item Exact penalty $\mu x+[1-x]_+$: for $x<1$ the slope is $\mu-1$, \emph{negative} if
+$\mu<1$; for $x>1$ it is $\mu>0$.  The minimiser is \emph{exactly} $x=1$ for every
+$\mu\in(0,1)$: the constraint is held by the \emph{kink}, not by a limit.  The condition
+$\mu<1=1/\lambda^\ast$ says the penalty must be able to pay the price; it can pay at most
+$1/\mu$.
+\item \revc{Progress function $\max\{x-\eta,\ 1-x\}$: the two lines cross at
+$x=(1+\eta)/2$, where the minimum value is $(1-\eta)/2$.  It is $\le0$ exactly when
+$\eta\ge1$, so the smallest achievable level is $\eta=1$, at which the minimiser is
+$x=1$ --- the constrained optimum, \emph{exactly}, found by bisection on $\eta$ (each
+trial being one unconstrained minimisation of a kinked function).}
+\end{itemize}
+\textbf{Quadratic penalty and barrier hold a constraint by a limit; the exact penalty
+holds it by a kink.  A kink needs no limit, which is why any small enough $\mu$ works and
+none is unique.}
+
+\begin{center}\small
+\begin{tabular}{p{0.17\textwidth}p{0.19\textwidth}p{0.19\textwidth}p{0.19\textwidth}p{0.19\textwidth}}
+\toprule
+ & quadratic penalty & exact penalty & log barrier & progress function\\
+\midrule
+smooth? & $C^1$ & kink at every $c_i=0$ & yes, where defined & \revb{kink wherever two terms tie}\\
+exact for finite parameter? & never & yes, once $\mu<1/\max\lambda_i^\ast$ (Han 1977) & never (central path) & \revd{yes, at one unique $\eta$: the optimal value}\\
+iterates & slightly infeasible & either side & strictly inside & \revb{either side}\\
+Hessian conditioning & blows up as $\rho\to\infty$ & bounded & $\lambda^{\ast2}/\mu$: blows up (cured by the primal--dual form, \S\ref{sec:stepproblems}) & \revb{bounded}\\
+warm start on the boundary & fine & fine & awkward & \revb{fine}\\
+feasible start needed? & no & no & yes (or slacks) & \revb{no}\\
+used here as & (merit functions only) & GRANSO's model and merit (\S\ref{sec:granso}) & IPOPT (\S\ref{sec:which}) & \revb{systune (\S\ref{sec:bundle})}\\
+\bottomrule
+\end{tabular}
+\end{center}
+A penalty serves two jobs a method may assign separately: the \emph{model} whose
+minimisation proposes a step, and the \emph{merit function} that decides whether to
+accept it.  GRANSO uses the exact penalty for both; plain SQP uses explicit constraints
+as model and an $\ell_1$ merit; IPOPT uses the barrier as model and a filter.
+
+\subsection{The step problem each one generates}\label{sec:stepproblems}
+Replace $F,c_i$ by their local models ($\nabla F\T d+\tfrac12d\T Bd$,
+$c_i+\nabla c_i\T d$) inside the penalised function and minimise over $d$.
+
+\emph{Quadratic penalty}: a piecewise-quadratic unconstrained problem whose stationarity
+condition is a linear system once one knows which linearised constraints are violated
+--- the same guess-and-check as an active set; price $\lambda_i=\rho[c_i+\nabla c_i\T d]_+$,
+proportional to the violation.
+
+\emph{Exact penalty: a QP via slacks --- the epigraph trick, constraint by constraint.}
+The step problem $\min_d\mu\nabla f\T d+\tfrac12d\T Bd+\sum_i[c_i+\nabla c_i\T d]_+$ is
+nonsmooth.  Use $[a]_+=\min\{s:\ s\ge a,\ s\ge0\}$, one variable $s_i$ per term:
+\[
+\min_{d,s}\ \mu\nabla f\T d+\tfrac12d\T Bd+\sum_is_i
+\qquad\text{s.t.}\qquad s_i\ge c_i+\nabla c_i\T d,\ \ s_i\ge0 .
+\]
+At the solution each $s_i$ sits on the larger of its bounds, so this QP has the same
+minimiser in $d$ as the nonsmooth problem: the nonsmoothness has migrated into
+constraints.  Its multipliers: Lagrangian
+$\ell=\mu\nabla f\T d+\tfrac12d\T Bd+\sum s_i+\sum\nu_i(c_i+\nabla c_i\T d-s_i)-\sum\xi_is_i$
+with $\nu,\xi\ge0$; the $\partial_{s_i}$ condition gives $\nu_i+\xi_i=1$, hence
+$0\le\nu_i\le1$.  Three cases: violated at the solution ($s_i>0$): $\xi_i=0$, $\nu_i=1$
+--- charged the full unit price, whatever the violation; strictly satisfied: $\nu_i=0$;
+exactly active: $\nu_i\in[0,1]$ from the balance.  Dividing $\partial_d$ by $\mu$
+identifies the true multipliers as $\lambda_i=\nu_i/\mu\le1/\mu$: \emph{the penalty can
+pay at most $1/\mu$ per constraint}.  If every $\lambda_i^\ast<1/\mu$, all slacks vanish
+and the penalty QP \emph{is} the SQP model problem of \S\ref{sec:sqp-derive} (Han 1977);
+if some $\lambda_i^\ast\ge1/\mu$, that constraint is left violated and $\mu$ must
+decrease.
+
+\emph{Barrier: a linear system.}  Newton on $B_\mu$ directly has the $1/\mu$
+conditioning above.  Instead name the price $z_i:=-\mu/c_i$ and write stationarity as
+$\nabla F+\sum z_i\nabla c_i=0$, $-z_ic_i=\mu$: the KKT conditions with complementarity
+relaxed from $0$ to $\mu$.  Newton on this system in $(x,z)$ is the \emph{primal--dual}
+step; the ill-conditioning is confined to the active block, where it is benign.  Three
+basic facts: $\mu$ never reaches zero, so no constraint is ever exactly active during the
+run; ``active'' is decided by comparing two numbers --- constraint $i$ is treated as
+active when $-c_i\le\tau$ and $z_i>\tau$, with $\tau$ tied to the final $\mu$ (e.g.\
+$\sqrt\mu$, since $-z_ic_i=\mu$); and the \emph{central path} is simply the curve of
+minimisers $\mu\mapsto(x_\mu,z_\mu)$, ending at $(x^\ast,\lambda^\ast)$ --- in the
+one-dimensional example, the points $(1+\mu,\ 1)$.
+
+\subsection{Driving the parameter}
+\label{sec:drive}
+\emph{Exact penalty --- steering} (Curtis, Mitchell \& Overton 2017).  Let
+$v(d)=\sum_i[c_i+\nabla c_i\T d]_+$ be the linearised violation after a step.  $\mu$
+starts at $1$ and only decreases.  Each iteration: (1)~\emph{probe}: solve the QP with
+the objective switched off ($\mu=0$), obtain $d_0$ and $\Delta_{\max}=v(0)-v(d_0)$, the
+largest violation decrease any step can buy; (2)~solve the QP with the current $\mu$,
+obtain $d_\mu$ and $\Delta_\mu=v(0)-v(d_\mu)$; (3)~\textbf{test}
+$\Delta_\mu\ge c_v\Delta_{\max}$, $c_v=0.1$; (4)~if it holds keep $\mu$ and take $d_\mu$,
+else $\mu\leftarrow\tfrac12\mu$ and go to (2).  It terminates because $d_\mu\to d_0$ as $\mu\to0$.  \revc{(Steering is due to Byrd, Nocedal \& Waltz 2008; GRANSO adopts it with a
+monotone $\mu$.)  GRANSO never lets $\mu$ regrow.  Two remedies are standard elsewhere:
+resetting the penalty parameter at every outer restart --- which the frozen pipeline
+\emph{does}, since each exchange round calls PyGRANSO afresh with $\mu=1$, so any decay
+is confined to one inner solve and cannot accumulate across rounds --- and increasing it
+by a fixed factor when a run has been feasible for many iterations while the objective
+decrease per iteration has become negligible relative to $\|\nabla F\|$ (the
+$\ell_1$-penalty literature, Nocedal \& Wright \S18.3).  The second is a two-line
+detector, and it is part of to-do item~0.}  \rev{A caveat for us.  Exactness holds for every $\mu<1/\max\lambda_i^\ast$, but a
+\emph{much} smaller $\mu$ is not free: $\mu$ multiplies the objective, so with
+$\mu=10^{-6}$ the merit function $\phi_\mu$ is a million times more sensitive to a
+unit of violation than to a unit of objective, and a line search on it accepts steps for
+their feasibility while barely registering progress in $F$.  Since every halving of
+$\mu$ is permanent, a halving triggered by a \emph{temporary} violation --- a step
+across a kink, an iterate that momentarily breaks many constraints --- leaves $\mu$ far
+below what the prices require for the rest of the run.  Exact, yes; well-conditioned,
+no.  This is a plausible mechanism behind the ``inner at its limit'' terminations of the
+campaign, and it can be read directly from the logged value of $\mu$ at the stalled
+iterates; \revb{the cure, if it is the cause, is the reset-at-restart or regrow rule
+above --- a solver setting, not a change of method.}}
+
+\emph{Barrier --- schedule and monitor} (IPOPT).  Residuals at $(x,z)$:
+$r_d=\nabla F+\sum z_i\nabla c_i$ (dual: balance), $r_p=[c]_+$ (primal: violation),
+$r_c=(-z_ic_i-\mu)_i$ (complementarity: distance to the central path);
+$E_\mu=$ the largest entry of the three (dual and complementarity scaled by
+$s_d,s_c\ge1$ when multipliers are huge).  Inner loop: Newton steps until
+$E_\mu\le10\mu$.  Outer: $\mu\leftarrow\max\{\epsilon_{\mathrm{tol}}/10,
+\min(0.2\mu,\mu^{1.5})\}$ --- linear far away, superlinear near the end --- until
+$E_0\le\epsilon_{\mathrm{tol}}$.  For us the feasible start is free (raise $t$; start
+from a stable design); the warm start after an exchange round is the awkward part
+(\S\ref{sec:which}).
+
+\revb{\paragraph{Progress function versus exact penalty.}  The two are close relatives:
+both replace the constraints by a max-type function and minimise it without constraints.
+The difference is what balances objective against constraints.  The exact penalty has
+one weight, $\mu$, trading the objective against \emph{all} violations at once --- so
+constraints of different physical units (a gain in one, a damping rate in another) must
+be pre-weighted by hand before a single $\mu$ can mean anything; steering then adapts
+$\mu$ within one run.  \revc{The progress function balances by \emph{dividing each requirement by its own
+target} and shifting by the common level $\eta$.  The targets are the user's
+specifications --- systune's ``tuning goals'' are each written as $F_k(\theta)/\gamma_k\le1$,
+with $\gamma_k$ the gain, damping or bandwidth the designer asks for (for a
+soft objective whose achievable value is unknown, any positive $\gamma_k$ will do: $\eta$
+absorbs the choice).  Constraints are divided by a fixed positive scale of their own,
+never by their current value, so no division by zero arises.  Then
+$\Phi_\eta=\max_k\{F_k/\gamma_k-\eta,\ c_i\}$: every term is dimensionless, and
+$\Phi_\eta\le0$ means ``every requirement is met to within the factor $\eta$ of its
+target'' --- $\eta=1$ is ``all targets met'', $\eta=0.8$ is ``all beaten by 20\%''.  The
+same division can of course be applied before an exact penalty; the difference is that
+the progress function \emph{requires} it and makes $\eta$ interpretable, whereas the
+penalty does not require it and, without it, gives $\mu$ no meaning across units.  That
+is why systune uses it for multi-requirement tuning.}  The price is the search on $\eta$:
+bisection costs $5$--$10$ warm-started runs, whereas steering settles $\mu$ inside one
+run --- steering converges faster in solve count, bisection needs no weights and cannot
+be driven to a badly conditioned $\mu$.  For a single objective in one unit, as here,
+the exact penalty (or explicit constraints) loses nothing.}
+\section{The direction problem solved by hand --- the baseline for everything}
+\label{sec:baseline}
+
+Stand at $\theta$ with the peaks that are (nearly) tied with the maximum --- the
+\emph{active peaks} at $\omega_1,\dots,\omega_m$, with gradients $g_i=\nabla_\theta f_{\omega_i}(\theta)$.
+Because the maximum follows its tallest member, the local model is
+$f(\theta+d)\approx f(\theta)+\max_ig_i\T d$.  A good direction makes every $g_i\T d$
+negative at once.  To rank directions, look at each through the eyes of its \emph{worst}
+active peak (the largest $g_i\T d$ --- a max over $i$) and choose the direction whose
+worst outcome is smallest (a min over $d$).  A linear model cannot say how far to trust
+itself, so the comparison must be at fixed length:
+\[
+d^\ast=\arg\min_{\|d\|\le1}\ \max_{i}\ g_i\T d .
+\]
+(The ball $\|d\|\le1$ rather than the sphere: the ball is convex, which the duality
+below needs; nothing is lost, because a descent direction of length $<1$ can be scaled up
+to length $1$ and do better, so the minimiser sits on the sphere unless it is $d=0$ ---
+the case where no direction helps, which the ball lets us represent.)
+
+\subsection{Duality, gently: swap the players}
+\label{sec:dual}
+Think of a game: you pick $d$, an adversary then charges you with the peak that makes you
+look worst.  The adversary loses nothing by being allowed to charge weighted averages,
+$\max_ig_i\T d=\max_{\alpha\in\Delta}(\sum_i\alpha_ig_i)\T d$, where $\Delta$ is the set
+of weights $\alpha\ge0$, $\sum\alpha_i=1$ --- an average never exceeds its largest member,
+and putting all weight on that member attains it.  Your problem is
+$\min_{d}\max_\alpha$: you move first.  The \emph{dual} is the game with the order
+swapped, $\max_\alpha\min_d$.  Moving second is an advantage, so the swapped value is
+$\le$ the original (weak duality); and for a payoff linear in each player over convex
+sets the advantage is worth nothing --- the values are equal (von Neumann's minimax
+theorem, strong duality; this is the Lagrangian duality of \S\ref{sec:primer} with $d$ as
+primal and $\alpha$ as dual variable).  Why swap?  Because the swapped order is easy: for
+fixed $\alpha$ write $g(\alpha)=\sum\alpha_ig_i$; the inner problem
+$\min_{\|d\|\le1}g(\alpha)\T d$ is solved by pointing straight against the vector,
+$d=-g(\alpha)/\|g(\alpha)\|$, value $-\|g(\alpha)\|$.  The outer problem is then
+\[
+\boxed{\;\min_{\alpha\in\Delta}\ \Bigl\|\sum_i\alpha_ig_i\Bigr\|
+\qquad
+d^\ast=\begin{cases}-\,g(\alpha^\ast)/\|g(\alpha^\ast)\| & \text{if the minimum norm is }>0,\\
+0 & \text{if it is }0\ \ (\text{balance: no descent direction}).\end{cases}\;}
+\]
+Best direction $=$ against the point of the gradients' convex hull closest to the
+origin; if that point is the origin, the peaks balance and $\alpha^\ast$ are the prices.
+\textbf{This is not steepest descent: it is the solution of a min--max problem, and it
+coincides with the negative gradient of one peak only when one peak is active.}  (It is
+the steepest descent direction of the nonsmooth $f$ in the Clarke sense; this note says
+``minimax direction''.)  Every ``same swap of players'' below is this paragraph again.
+
+\subsection{Solving the weight problem: the active-set walk}
+\label{sec:activeset}
+Squaring the norm changes nothing: minimise $q(\alpha)=\tfrac12\alpha\T H\alpha$ over
+$\Delta$, $H_{ij}=g_i\T g_j$ --- a QP.  The only difficulty is $\alpha\ge0$: without it,
+``minimise a quadratic subject to $\sum\alpha=1$'' is one linear solve.  Guess the
+support $S$ (the peaks with nonzero weight):
+\[
+\alpha_S=\frac{H_S^{-1}\mathbf 1}{\mathbf 1\T H_S^{-1}\mathbf 1},\qquad\alpha_i=0\ \text{off }S,
+\tag{$\ast$}\label{eq:alphaS}
+\]
+then verify: every weight nonnegative, and no excluded peak ``wants in'' (its reduced
+slope $(H\alpha)_j-\alpha\T H\alpha$ is nonnegative).  Naively, try all $2^m-1$ supports.
+Practically, walk:
+\bx{
+1. $S\leftarrow\{$tallest peak$\}$, $\alpha\leftarrow e_{i_{\max}}$.\quad
+2. $\hat\alpha_S\leftarrow H_S^{-1}\mathbf 1/(\mathbf 1\T H_S^{-1}\mathbf 1)$, zero off $S$.\quad
+3. If $\hat\alpha\ge0$: $\alpha\leftarrow\hat\alpha$, go to 4; else move from $\alpha$
+toward $\hat\alpha$ until the first weight hits $0$ ($t^\star=\min_{\hat\alpha_i<0}\alpha_i/(\alpha_i-\hat\alpha_i)$),
+drop that index from $S$, go to 2.\quad
+4. Entry test $r_j=(H\alpha)_j-\alpha\T H\alpha$ for $j\notin S$: if all $r_j\ge0$
+\textbf{stop} ($g^\star=\sum\alpha_ig_i$, $d=-g^\star/\|g^\star\|$ or $0$); else add
+$\arg\min_jr_j$ to $S$, go to 2.}
+Each cycle is one small solve, $q$ never increases, finitely many supports: it terminates
+in a handful of cycles.  With prices $p_i$ added to the objective
+($\tfrac12\alpha\T H\alpha+p\T\alpha$), the only change is
+$\alpha_S=H_S^{-1}(\mu\mathbf 1-p_S)$ with $\mu=(1+\mathbf 1\T H_S^{-1}p_S)/(\mathbf 1\T H_S^{-1}\mathbf 1)$;
+the walk is identical.  This walk, with these two tests, is what every QP in this note
+reduces to.
+
+\subsection{The step}
+With $d^\ast$ in hand, an Armijo backtracking (\S\ref{sec:linesearch}) from a trial
+length chooses how far to go.  File one point: the acceptance test evaluates the
+\emph{true} maximum, so peaks with zero weight, which had no say in the direction, still
+veto the length.  The full baseline method is: locate peaks $\to$ collect active
+gradients $\to$ weight problem $\to$ line search $\to$ repeat.  It is correct and
+principled, and it is the seed of everything below.
+
+\section{The literature's four methods, each on its own terms}
+\label{sec:lit}
+
+\revc{Each of the four} is the baseline plus a few ingredients.  They are presented first so
+that our method can then be read as a set of choices among known parts.
+
+\subsection{The descent line: Apkarian--Noll 2006 and \textsf{hinfstruct}}
+\label{sec:descent}
+\emph{Ingredient 1: a finite, enlarged, recomputed frequency set.}  At each design the
+$H_\infty$ norm is evaluated by the dense Hamiltonian level-set method (bisect on a level
+$\gamma$; $\gamma$ is attained iff a certain $2n\times2n$ Hamiltonian matrix has an
+eigenvalue on the imaginary axis; its axis eigenvalues bracket the intervals where the
+response exceeds $\gamma$; polish one peak per interval).  The norm $f(\theta)$ being
+known, the axis is probed once more at the level $f-\eps$, and the enlarged set
+$I_\eps$ collects one polished maximiser per interval above it --- small $\eps$: only
+the peaks tied with the maximum; larger $\eps$: suboptimal local maxima too.  Then
+(\S VII.G of the paper) ``a collection of logarithmically spaced frequencies'' is added
+around the peaks, keeping those with $\sigma_1\ge(1-\eps_\omega)\|T\|_\infty$,
+$\eps_\omega\in[0.05,0.5]$, and the set is capped at the 50 largest.  Around a peak
+$\omega_p$ the natural transcription is offsets in geometric progression,
+$\omega_p\pm\delta_0\rho^k$, so that the peak is bracketed at every scale (drift within
+an inner step has no preferred scale); a ladder of levels $\gamma(1-\eps_k)$ with the
+crossing frequencies is an equally defensible reading, keyed to the peak's shape.
+\rev{No frequency persists as a \emph{constraint}: the set is rebuilt from the norm
+evaluation at every design \revb{(the papers describe no carry-over; whether the implementations warm-start the
+peak search numerically from the previous design is unpublished, and would change
+nothing in the bookkeeping).}}
+
+\emph{Ingredient 2: prices and a penalty instead of a ball.}  The direction problem
+becomes the \emph{tangent program}
+\[
+\min_d\ \max_{i\in I_\eps}\bigl[\underbrace{f_i(\theta)-f(\theta)}_{\text{offset}\le0}+g_i\T d\bigr]+\tfrac12\|d\|^2
+\quad\Longleftrightarrow\quad
+\min_{\alpha\in\Delta}\ \tfrac12\Bigl\|\sum_i\alpha_ig_i\Bigr\|^2+\sum_i\alpha_i\bigl(f-f_i\bigr),
+\qquad d=-\sum_i\alpha_ig_i,
+\]
+by the same swap of players.  Two changes against \S\ref{sec:baseline}: the ball is
+replaced by $\tfrac12\|d\|^2$, so the solution arrives with its own length (the trial
+step itself, then Armijo-backtracked); \rev{and each member's gap below the maximum, $f-f_i\ge0$, enters as a \emph{cost
+coefficient on its weight} in the dual objective --- a cost, not a multiplier: the
+multipliers of this problem are the $\alpha_i$ themselves.  The effect is precise:
+starting from a weight vector $\alpha$, giving a little weight to peak $i$ changes the
+dual objective by $(H\alpha)_i-\alpha\T H\alpha+(f-f_i)$ per unit, so a sub-maximal
+peak enters the support exactly when its gap is smaller than the reduction of
+$\tfrac12\|\sum\alpha_jg_j\|^2$ its gradient buys --- when the gain in balancing
+outweighs the gap, i.e.\ when ignoring it would climb its peak fast.  Exactly-active
+peaks have zero cost, and with all costs zero the plain weight problem returns.}  This moves the information about
+sub-maximal peaks from the line search (where the baseline had it: veto on the length)
+into the direction itself, which is what cures the baseline's zigzag.
+
+\emph{Initialisation.}  A stabilising start is obtained by the same optimiser on a
+different objective: \rev{\revb{draw a random controller --- pick a time scale $\omega_\ast$ (the band width or
+the least-damped mode's frequency) and a gain scale $K_\ast$ (the inverse of the plant's
+peak gain); set the tridiagonal $A_c$ with diagonal $-\omega_\ast|\xi|$ and
+off-diagonals $\omega_\ast\xi$, $\xi\sim\mathcal N(0,1)$, compute its $r$ eigenvalues
+and redraw if any has $\mathrm{Re}\ge0$ (a stable $A_c$ is a convenience for the start,
+not a requirement afterwards); the output row $n\sim K_\ast\mathcal N(0,1)$, the gain
+$K\sim0.1K_\ast\mathcal N(0,1)$, positions uniform in their ranges.  HIFOO draws all
+entries unscaled; whether scaling matters is untested and is part of to-do item~1 ---}}
+minimise the closed-loop spectral abscissa $\alpha(\theta)=\max_j\mathrm{Re}\,\lambda_j$
+--- nonsmooth, subgradients from eigenvectors --- until $\alpha<-\eps$, then switch to
+the norm.  Burke--Lewis--Overton 2005; HIFOO 2006; A--N 2006 use it; hinfstruct/systune
+do the same in outline (\code{RandomStart}, preliminary stabilisation phase).  A stable
+$A_c$ is the sensible default for the draw (the loop then starts near the plant's own
+abscissa, not at a defect we planted), not a requirement.
+
+\emph{Theory and tool.}  A--N 2006 prove accumulation at Clarke-stationary points.
+\textsf{hinfstruct} is this method plus engineering (multiple requirements in one max,
+systematic extended sets, multistart, the tridiagonal $A_c$ parametrisation --- a
+near-minimal, numerically tame canonical form, Apkarian--Dao--Noll 2015).
+
+\revd{\subsection{The nonsmooth quasi-Newton line: \textsf{HIFOO}}
+\label{sec:hifoo}
+HIFOO (Burke, Henrion, Lewis \& Overton 2006) minimises the $H_\infty$ norm
+\emph{directly}, as one nonsmooth function of the controller entries, evaluated densely
+(SLICOT's Hamiltonian norm) --- no $\eps$-set, no planes, no epigraph.  The gradient it
+uses is the gradient of the single frequency the norm routine reports as attaining the
+maximum: away from ties that is the gradient of $f$; at a tie it is one of the Clarke
+subgradients (one branch), and the method relies on two things to cope --- an inexact
+line search never lands exactly on a tie, so a gradient always exists (\S\ref{sec:nonsmooth}),
+and the finishing phases below examine several branches at once.  Its engine, HANSO,
+runs three phases: (1)~BFGS with an inexact Armijo--Wolfe line search on the nonsmooth
+norm --- the behaviour of \S\ref{sec:nonsmooth}, ``rather surprisingly'' effective
+through kinks in the authors' words (HIFOO paper, \S3); (2)~a local \emph{bundle} check
+that reuses the gradients already collected at the last few BFGS iterates --- no new
+sampling --- and asks whether some convex combination of them has small norm (the
+certificate of \S\ref{sec:dual}); (3)~if not, \emph{gradient sampling} proper, with fresh
+random points, to refine the point and return an optimality measure.  Ties at the
+optimum --- several frequencies attaining the norm, the generic outcome --- are thus
+handled by (2)--(3): gradients taken at nearby points fall on different branches, and
+their hull reveals the balance.
+
+\emph{Stability.}  Closed-loop stability is a constraint in HIFOO, enforced through the
+value of the objective: the norm routine checks the closed-loop eigenvalues first and
+returns $+\infty$ when any lies in the right half-plane --- the $H_\infty$ norm is
+defined only for stable loops, and the maximum of $\sigma_1$ over the axis, which is
+finite for an unstable loop, is not what is computed --- so no line search ever accepts
+an unstable point.  A stabilisation run (minimise the spectral abscissa from random or
+perturbed initial guesses) precedes the norm phase.  What this cannot do is
+\emph{follow} the boundary: an infinite-valued wall only rejects, it does not project,
+and $H_\infty$ minimisers push closed-loop poles toward the axis.  HIFOO's answer is a
+\emph{barrier} option --- a term added to the objective that grows as closed-loop
+eigenvalues approach the axis --- which is a soft device, not a margin constraint: it
+keeps the poles away, it does not enforce $\alpha\le-\eps$, and the user tunes its
+weight.  Requiring a margin is exactly the need HIFOO does not meet and GRANSO's
+constraints were added for (\S\ref{sec:granso}).  Multistart is built in: several random
+initial controllers, and random perturbations of a user-supplied one.  Its practical
+strengths are simplicity and robustness (phase 3 has convergence theory); its costs are
+the dense norm, a serial chain of thousands of evaluations, and no constraint handling
+beyond the infinite wall and the barrier.  In the comparison of \S\ref{sec:compare} it
+occupies the ``exchange $+$ SQP'' column with the epigraph removed: one nonsmooth
+objective instead of many smooth constraints, curvature in phase 1 only, first-order
+finishing phases.}
+
+\subsection{The bundle line: \textsf{systune}}
+\label{sec:bundle}
+\emph{Cutting planes.}  At a past design $\theta_k$ with value $f(\theta_k)$ and a
+(sub)gradient $g_k$, the tangent model $m_k(\theta)=f(\theta_k)+g_k\T(\theta-\theta_k)$
+lies below the graph of a convex function; the upper envelope of a collection of them,
+$m_{\mathcal B}=\max_km_k$, is a piecewise-linear model built from first-order
+information alone --- and if planes from both sides of a kink are present, their max
+reproduces the V: \emph{the model sees the crease that any single gradient misses}.  The
+collection is the \emph{bundle}; in the refined variants each plane is a
+(design, frequency) pair --- one plane per $\eps$-active frequency of each visited design
+--- so the frequency set is alive inside it, time-stamped.
+
+\emph{Proximity control.}  A plane is trustworthy only near its point, so the trial
+point minimises the model plus a distance penalty to the best design so far, the
+\emph{centre} $\theta_c$: $\theta^+=\arg\min m_{\mathcal B}(\theta)+\tfrac1{2\tau}\|\theta-\theta_c\|^2$.
+The quadratic term is distrust, not curvature --- this is how a first-order method
+carries a quadratic term, and why classical bundle convergence is linear.  \rev{The centre is the current iterate: it moves only to points that improved on it,
+so ``centre'' and ``best design so far'' are the same thing.  Then reality: evaluate
+$f(\theta^+)$; if the actual decrease is at least a fraction of the predicted one,
+\emph{serious step} (move the centre, enlarge $\tau$), else \emph{null step} (do not
+move, add the new plane --- the model just learned why it was wrong --- shrink $\tau$).
+Why no line search along $\theta^+-\theta_c$?  Because in a nonsmooth setting that
+direction is a descent direction of the \emph{model}, and there is no guarantee it is
+one of $f$: a line search cannot tell ``wrong direction'' from ``too long a step'', and
+would shrink uselessly along a bad ray, whereas a null step converts the failure into
+the plane that repairs the model.  (Variants that add a line search still record the
+plane; the null step is the essential move.)}  Either serious steps drive $f$ down or null steps make the model honest: for
+locally Lipschitz, lower-$C^1$ functions (a max of $C^1$ functions, ours away from
+singular-value coalescences), bounded below, every accumulation point of the serious
+steps is Clarke stationary (Noll, Prot \& Rondepierre 2008; Noll 2010) --- kinks
+included, no smoothness management.
+
+\emph{The trial QP, derived.}  Put $\theta=\theta_c+d$ and refer each plane to the
+centre: $m_k(\theta_c+d)=f(\theta_c)-e_k+g_k\T d$ with
+$e_k=f(\theta_c)-m_k(\theta_c)\ge0$ (in the convex picture) the amount by which plane $k$
+sits below the true value at the centre.  For nonconvex $f$ a far-away plane may
+overestimate, so \emph{downshift}: $e_k^+=\max\{e_k,\ c\|\theta_k-\theta_c\|^2\}$ ---
+\rev{by Taylor, if $L_2$ bounds the second derivatives on a ball around the centre,
+then $f(\theta)\ge m_k(\theta)-\tfrac12L_2\|\theta-\theta_k\|^2$ on the ball, so
+lowering plane $k$ by $c\|\theta_k-\theta_c\|^2$ with $c\ge\tfrac12L_2$ makes it an
+underestimate near the centre;} the algorithm
+never computes $L_2$: it fixes $c$ and lets null steps discover where the model is
+inadequate.  The trial problem is $\min_d\max_k[-e_k^++g_k\T d]+\tfrac1{2\tau}\|d\|^2$;
+give the max its own name $\zeta$ (the epigraph of the \emph{model}):
+$\min_{d,\zeta}\zeta+\tfrac1{2\tau}\|d\|^2$ s.t.\ $-e_k^++g_k\T d\le\zeta$ --- a QP; swap
+the players and minimise in $d$ in closed form ($d=-\tau\sum\alpha_kg_k$):
+\[
+\boxed{\;\min_{\alpha\in\Delta}\ \tfrac\tau2\Bigl\|\sum_k\alpha_kg_k\Bigr\|^2+\sum_k\alpha_ke_k^+,
+\qquad \theta^+=\theta_c-\tau\sum_k\alpha_kg_k .\;}
+\]
+The priced weight problem of \S\ref{sec:activeset} with planes for frequencies and
+downshifted errors for gaps.  \rev{(In bundle--Newton variants the Euclidean proximity term becomes the $B$-norm
+$\tfrac12d\T Bd$ with a curvature estimate $B$ --- the same substitution that turns
+the tangent program into our model problem, \S\ref{sec:ours}.)}  \emph{Aggregation}: the plane with slope $\sum\alpha_kg_k$
+and error $\sum\alpha_ke_k^+$ is the model's supporting plane at the trial point; it may
+replace all planes with $\alpha_k>0$ without changing the next solution (Kiwiel 1985),
+which bounds the bundle.  \emph{Constraints}: the \rev{progress function of \S\ref{sec:penalty} --- minimise
+$\max\{f-\eta,g\}$, bisect on $\eta$; each $\eta$ is one bundle run, warm-started, a
+$\times5$--$10$ multiplier on total work rather than a loss of rate, chosen over the
+exact penalty (which a bundle could minimise just as well) for its scale normalisation
+across requirements.}
+
+\emph{What is public about \textsf{systune}} (Apkarian--Gahinet--Buhr 2014; Apkarian--Noll
+2019 survey): objective $=$ max over requirements and models; proximity-control bundle;
+planes over the extended frequency set of each trial (parallelisable in principle,
+serial as shipped); norms by the dense Hamiltonian method ($O(n^3)$); the progress
+function for hard constraints.  \textsf{hinfstruct} descends from the descent line,
+\textsf{systune} from the bundle line; both live in the same toolbox.
+
+\subsection{The BFGS--SQP line: \textsf{GRANSO}}
+\label{sec:granso}
+GRANSO (Curtis, Mitchell \& Overton 2017) solves the generic problem $\min f(x)$ s.t.\
+$c_i(x)\le0$ with $f,c_i$ possibly nonsmooth; the user supplies values and gradients.
+\revd{\emph{Lineage.}  GRANSO is HANSO's BFGS phase (\S\ref{sec:hifoo}) extended to
+constraints, by the same authors eleven years later: the exact penalty and steering
+replace HIFOO's infinite wall and barrier, so that margins and other inequalities can be
+imposed as constraints with multipliers.  The two finishing phases were dropped: in the
+authors' benchmarks (Curtis, Mitchell \& Overton 2017) BFGS--SQP alone was as reliable
+as versions with gradient sampling at a fraction of the cost --- gradient sampling needs
+$m>n_\theta$ gradients per iteration, prohibitive for us --- and the optimality
+certificate it provided is replaced by the solver's own stationarity measure.
+PyGRANSO is the Python port of GRANSO, with the same design: no gradient sampling.  The
+authors' own control examples hand it the nonsmooth norm directly, evaluated densely, as
+objective or constraint --- one function, kinks included, no epigraph; that is the
+intended use, HIFOO's approach with the newer engine.  It works for them because their
+problems are small: a dense norm costs milliseconds, thousands of evaluations are
+affordable, a restart is cheap.  The epigraph formulation is ours; the reason it was
+adopted is recorded, with the history, in \S\ref{sec:which}.}  \rev{It knows nothing
+about frequencies, and it need not: \emph{we} hand it the epigraph problem of
+\S\ref{sec:epigraph} --- variables $(\theta,t)$, objective $t$, and
+one constraint $c_i=\sigma_1(\omega_i;\theta)-t\le0$ per frequency of $\Omega$, each
+re-evaluated by the oracle at every iterate.  The frequencies are the constraints; the
+tight ones are the active set of its QP; ``tracking the peaks'' is nothing more than
+re-evaluating the rows.  Its own slack variables (\S\ref{sec:penalty}) are a second,
+internal use of the epigraph idea, one per row, to make the penalised QP smooth.}  Everything it decides is decided on the exact penalty $\phi_\mu=\mu f+\sum[c_i]_+$
+(\S\ref{sec:penalty}) \revc{--- and therefore so does our shipped inner solve, which is
+PyGRANSO: the exact penalty with steering is the constraint device of the frozen
+pipeline, inherited from the solver, not chosen among the four}: the direction is
+the slack QP with quasi-Newton $B$ (BFGS on $\nabla\phi_\mu$), $\mu$ is driven by
+steering, the step by a weak-Wolfe line search on $\phi_\mu$ from $\beta=1$
+(\S\ref{sec:linesearch}) --- so every constraint's violation, hence every frequency in
+$\Omega$, vetoes a length --- and iterates may be infeasible along the way.  An optional
+trust region (a cap on $\|d\|$ in the QP) exists; the campaign measured it harmful and
+turned it off.  What it lacks: for nonsmooth $f$ or $c_i$ the authors state no
+convergence guarantee; BFGS across a kink of a constraint absorbs a fictitious curvature,
+the line search shortens steps until progress stops, and the solver returns at its own
+tolerance --- silently.  The trade against the Apkarian lines: curvature (and a
+superlinear endgame) in exchange for theory.
+
+\section{The three methods side by side}
+\label{sec:compare}
+
+\revc{(HIFOO is the ``exchange $+$ SQP'' column with the epigraph removed,
+\S\ref{sec:hifoo}, and is not repeated.)}  Every method above is one loop --- (i)~choose the linear pieces to look at, (ii)~solve a
+small QP for a step, (iii)~control the step, (iv)~consult the oracle, (v)~update the
+pieces, and, outside, (vi)~certify and enrich --- with different fillings:
+
+\begin{center}\small
+\begin{tabular}{p{0.19\textwidth}p{0.25\textwidth}p{0.25\textwidth}p{0.25\textwidth}}
+\toprule
+functionality & descent line & bundle line & exchange $+$ SQP (ours) \\
+\midrule
+linear pieces & gradients of the $\eps$-active frequencies at the current design (rebuilt each step) & planes at past designs $\times$ their $\eps$-active frequencies (accumulated, downshifted, aggregated) & gradients of all of a persistent set $\Omega$ at the current design \\
+price of a piece & gap below the max, $f-f_i$ & downshifted error $e_k^+$ & slack below the level, $t-f_i$ \\
+metric of the step & Euclidean $\tfrac12\|d\|^2$ & Euclidean $\tfrac1{2\tau}\|d\|^2$ & curvature $\tfrac12d\T Bd$ \\
+step control & Armijo on true $f$ & serious/null, $\tau$ adapted & Wolfe on $\phi_\mu$; outer governor \\
+kink between frequencies & priced hull & planes & active set \\
+kink inside a frequency ($\sigma_1{=}\sigma_2$) & native (planes of both branches) & native & needs $\sigma_2$-enrollment (managed) \\
+memory & \revb{no persistent constraint set (the papers describe none; internals unpublished)} & the bundle & $\Omega$ (pieces) $+$ $B$ (curvature) \\
+constraints & Armijo on a composite max & progress function, $\eta$-bisection & rows in the QP $+$ guard $+$ certificate \\
+global certification & Hamiltonian (dense, per step) & Hamiltonian (dense, per trial) & disk certificate (sparse, per outer round) \\
+inner/outer & one loop & one loop & explicit inner on $\Omega$, outer certify/enrich \\
+terminal rate & linear & linear (bundle--Newton: superlinear) & superlinear on a smooth active set \\
+theory & Clarke (A--N 2006) & lower-$C^1$ (Noll et al.) & only after enrollment \\
+warm start on the boundary & natural & natural & penalty: natural; IPM: awkward \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\bx{
+\textbf{Descent line.}\ repeat: (i) norm at $\theta$ (Hamiltonian) $\to f$, $I_\eps$, $g_i$;
+(ii) priced weight QP, $d=-\sum\alpha_ig_i$; (iii) Armijo from $\beta=1$;
+(iv) $\theta\leftarrow\theta+\beta d$; (v) nothing kept.\\[2pt]
+\textbf{Bundle line.}\ centre $\theta_c$, bundle $\mathcal B$; repeat: (ii) bundle QP,
+$\theta^+=\theta_c-\tau\sum\alpha_kg_k$; (iv) $f(\theta^+)$ and its $\eps$-active gradients;
+(iii) serious ($\theta_c\leftarrow\theta^+$, $\tau\uparrow$) or null ($\tau\downarrow$);
+(v) add planes, recompute and downshift $e_k$, aggregate if full.\ [Constraints: wrap in
+the $\eta$-bisection.]\\[2pt]
+\textbf{Exchange $+$ SQP.}\ $\Omega\leftarrow$ starter grid $\cup$ seed peaks; outer repeat:
+inner repeat: (i) values and gradients on all of $\Omega$ (parallel, warm-started) $+$
+margin rows if flagged; (ii) epigraph QP with slacks and $\mu$-steering; (iii) Wolfe line
+search on $\phi_\mu$; (iv) update $(\theta,t)$, BFGS on $B$, guard; until inner
+tolerance; (vi) certify the band, add located peaks and refuted points to $\Omega$; until
+nothing new.}
+
+\emph{The two QPs face to face.}  Both are instances of one ancestor --- minimise a level
+$\zeta$ plus a quadratic penalty on the step, subject to every linear piece staying below
+the level:
+$\min_{d,\zeta}\zeta+\tfrac12d\T Qd$ s.t.\ $a_k\T d-p_k\le\zeta$, whose dual is
+$\min_{\alpha\in\Delta}\tfrac12\|\sum\alpha_ka_k\|^2_{Q^{-1}}+\sum\alpha_kp_k$.  Ours:
+pieces $=$ frequencies in $\Omega$ at the current $\theta$, $a_k=g_i$, price $t-f_i$,
+$Q=B$, $\zeta=\delta t$ --- the epigraph of the \emph{true function}.  Bundle: pieces $=$
+planes at past designs, $a_k=g_k$, price $e_k^+$, $Q=\tau^{-1}I$ --- the epigraph of the
+\emph{model}.  Descent line: pieces $=$ $\eps$-active frequencies, price $f-f_i$, $Q=I$.
+Same dual, same active-set walk; the differences are \emph{which} linear information is
+on the table and \emph{how} the step is scaled.  Both methods handle nonsmoothness: the
+bundle by \emph{imitating} the kink in one nonsmooth model, we by \emph{enumerating} it
+in the active set of many smooth constraints.  What neither may do is hand a kinked
+function to a smooth engine --- which is exactly what the un-enrolled status quo does
+(\S\ref{sec:kinks}).
+\section{Our method, as shipped}
+\label{sec:ours}
+
+\subsection{The epigraph reformulation: give the maximum its own name}
+\label{sec:epigraph}
+On the finite list $\Omega$, $\min_\theta\max_if_{\omega_i}(\theta)$ is the same problem as
+\[
+\min_{\theta,t}\ t\qquad\text{s.t.}\qquad f_{\omega_i}(\theta)\le t\ \ \forall\,\omega_i\in\Omega
+\]
+(for fixed $\theta$ the best $t$ is the maximum).  The kink has left the objective ---
+now the linear function $t$ --- and moved into bookkeeping: near the solution several
+smooth constraints are tight at once, and constrained optimisation is built for exactly
+that.  In practice $t$ is a genuine unknown stored next to $\theta$ (the solver's
+variable is $z=(\theta,t)$), sitting at or a hair above the tallest constraint, dipping
+below some $f_{\omega_i}$ during iterations (an infeasible point the penalty repairs), and
+equal to the achieved maximum over $\Omega$ at inner convergence --- the candidate level
+$\gamma$, then certified.  What the reformulation \emph{buys} is a well-behaved
+Lagrangian, $\mathcal L=t+\sum_i\lambda_i(f_{\omega_i}-t)$: a smooth weighted sum of smooth
+pieces, the object every piece of constrained machinery is built around.  Its KKT
+conditions, block by block, are $\sum_i\lambda_ig_i=0$ ($\theta$) and $\sum_i\lambda_i=1$
+($t$): the balance conditions of \S\ref{sec:dual} with the weights $\alpha$ renamed
+multipliers $\lambda$.  The difference is who computes them --- the baseline solves the
+weight problem by hand at every step; here a constrained solver finds the multipliers as a
+by-product, with curvature, with memory, \rev{without a hand-chosen trial length for the line
+search (the model supplies the scale, \S\ref{sec:linesearch}).}
+
+\subsection{The model problem, and where every term comes from}
+Differentiate the Lagrangian twice in $x=(\theta,t)$:
+$\nabla_x\mathcal L=[\sum\lambda_ig_i;\ 1-\sum\lambda_i]$ and
+$\nabla^2_{xx}\mathcal L=\mathrm{blkdiag}\bigl(\sum_i\lambda_i\nabla^2f_{\omega_i},\ 0\bigr)$:
+the Lagrangian is \emph{linear in $t$}, so there is no $\delta t^2$ term and no
+$\theta$--$t$ term, and the only curvature is $B:=\sum\lambda_i\nabla^2f_{\omega_i}$, in
+$\theta$ alone; the objective $t$ has gradient $(0,1)$, so there is no linear term in
+$\delta\theta$.  The SQP model problem of \S\ref{sec:sqp-derive} is therefore
+\[
+\boxed{\;\min_{\delta\theta,\delta t}\ \delta t+\tfrac12\,\delta\theta\T B\,\delta\theta
+\qquad\text{s.t.}\qquad f_{\omega_i}+g_i\T\delta\theta\le t+\delta t\ \ (\omega_i\in\Omega)\ +\text{other rows}.\;}
+\]
+Derived, not proposed; $B$ is the BFGS estimate of the multiplier-weighted curvature of
+the constraints (the objective is linear), \rev{an $n_\theta\times n_\theta$ matrix whose \emph{dimension} is that of $\theta$,
+not of the constraint list --- enrolling a new row changes its size not at all and its
+\emph{content} only gradually, as the secant updates re-weight the estimate toward the
+new multipliers.}  The same fact from the constraint
+side: ``$\min t$ s.t.\ $f_i+g_i\T d+\tfrac12d\T G_id\le t$'' has the same KKT points at
+the true multipliers, with the per-constraint curvatures collapsing into the single
+price-weighted $B$ in the objective (Lemar\'echal 1978; Kiwiel 1985; Luk\v san--Vl\v cek
+1998).  And $\tfrac12d\T Bd$ read as a proximal term is the tangent program's
+$\tfrac12\|d\|^2$ in the $B$-metric --- the bridge to the descent line: \emph{same priced
+program, curvature metric instead of Euclidean, epigraph variable so that a generic NLP
+solver can run it}.
+
+\emph{Walk-through, one step from tied peaks.}  Guess the tight set $\mathcal A$ ($m$
+rows, \rev{gradients stacked as the rows of $G\in\R^{m\times n_\theta}$}, gaps $r_i=f_i-t\le0$).  Stationarity in $\delta\theta$:
+$\delta\theta=-B^{-1}\sum\lambda_ig_i$; in $\delta t$: $\sum\lambda_i=1$ --- the balance,
+bent through $B^{-1}$.  Substituting into the equalities, with $H=GB^{-1}G\T$:
+\[
+\begin{bmatrix}H&\mathbf 1\\ \mathbf 1\T&0\end{bmatrix}\begin{bmatrix}\lambda\\ \delta t\end{bmatrix}
+=\begin{bmatrix}r\\ 1\end{bmatrix}
+\quad\Longrightarrow\quad
+\delta t=\frac{\mathbf 1\T H^{-1}r-1}{\mathbf 1\T H^{-1}\mathbf 1},\qquad
+\lambda=H^{-1}(r-\delta t\,\mathbf 1).
+\]
+Sanity check with $r=0$, $B=I$: $\lambda=H^{-1}\mathbf 1/(\mathbf 1\T H^{-1}\mathbf 1)$ ---
+formula \eqref{eq:alphaS} symbol for symbol --- and $\delta t=-\|\sum\lambda_ig_i\|^2$:
+\emph{the epigraph machinery, run one step from tied peaks with unit curvature, is the
+Apkarian--Noll step}.  Then the two tests of \S\ref{sec:activeset} (a negative multiplier:
+drop the row; a trampled outsider: add it) and repeat; GRANSO delegates this loop to its
+QP solver.  Everything the constrained solver adds is in two symbols: $B$ (curvature,
+replacing the unit-length rule) and $r$ (slack, letting sub-maximal peaks participate ---
+the prices of the descent line under another name).
+
+\subsection{The outer loop: certify and exchange}
+\label{sec:exchange}
+Optimise on a fixed grid and the solver digs the response down at the grid points while
+a peak grows between them; a locally convergent peak-finder (v6) tracks one peak while
+another becomes global.  The cure is \emph{certification}: after each inner solve, ask
+the oracle a question with a guaranteed answer --- ``over the whole band, is the response
+anywhere above $t$, and where?'' --- and act on it.  The sweep, concretely: at a test
+frequency $\omega_0$ one shift-invert eigensolve on the algebra note's pencil returns
+the nearest pencil eigenvalue at distance $r_0$; if $r_0>0$ the interval
+$(\omega_0-r_0,\omega_0+r_0)$ is certified below the level; if $r_0\approx0$ the level is
+attained nearby --- a \emph{refuted point}, polished into a peak.  Test points are placed
+sequentially at the edge of the union of certified disks, $O(10^2)$ per sweep, finite by
+construction; one eigenvalue per shift is needed and one is requested by default, with
+escalation to a few when the residual is loose or the disk is critical.  Known peaks
+are not re-located: they are re-polished \rev{by Newton's method on $\partial_\omega\sigma_1=0$ (first
+derivative from one inner product, second by differencing)} from their previous
+positions (2--4 calls each), the incumbent level is their maximum, and the sweep
+certifies the gaps at $\gamma(1+\mathrm{rtol})$ --- coarse rtol ($10^{-4}$) inside the
+loop, $10^{-6}$ at the final certification.
+
+\bx{
+\textbf{Outer loop.}\ 1.\ Inner solve on $\Omega$ (quasi-Newton constrained solver,
+warm-started).\ 2.\ Guard each accepted step (\S\ref{sec:stability}).\ 3.\ Certify the
+candidate over the band; add every located (near-)active frequency and refuted point to
+$\Omega$.\ 4.\ Stop when certification adds nothing and the inner reports no progress
+--- recording that the second condition means ``inner at its limit'', not ``optimal''.
+\textbf{Cadence of certificates:} peak certification every outer round; line sweep and
+continuation gate every accepted step; winding count (and, at benchmark scale, a dense
+eigensolve) at every save.}
+
+\emph{Working-set policy, as frozen.}  $\Omega$ opens with a uniform grid over the band
+($\approx150$ points) plus the seed's peaks; every outer round adds the certified peaks
+within the certification tolerance of the maximum and any refuted points; \emph{nothing
+is removed}; every member's value and gradient are recomputed, in parallel and
+warm-started, at every inner iteration --- $N=|\Omega|$ independent oracle calls, which
+is the shape a parallel machine wants and the reason the expensive unit of work is
+parallel here.  \reve{This accounting changes if the oracle is the projected one of the
+algebra note (\S10 there): the reduced model serves every member of
+$\Omega$ --- values, $\sigma_2$, gradients --- from $5$--$10$ anchor factorisations made
+once per mesh, so the inner iteration needs no factorisation at all, the cost of a
+member of $\Omega$ drops to a few dozen sparse matvecs, and the case for retiring
+members becomes one of tidiness rather than of cost.  What remains expensive is the
+certification, once per outer round, on the full model; that is where the parallel
+machine is then used.}  Runs end with $|\Omega|\approx90$--$170$, of which $2$--$10$ are tight.
+Against Apkarian--Noll's cap of 50, that is too many for the cavity, where each member
+costs a factorisation per iteration: the next iteration retires the starter grid after
+the first certified round and any member sitting below $(1-\eps_\omega)\gamma$ for two
+outer rounds, seeds level-filtered satellites (the A--N recipe) once per new peak and
+re-seeds only the currently active ones, and targets $|\Omega|\lesssim50$ ---
+certification makes retirement safe, since a wrongly retired frequency is re-located and
+re-added.  Sub-maximal peaks influence the step through their slack (channel 2, the
+direction) and through the line search on $\phi_\mu$ (channel 1, the length): both
+mechanisms of the literature are present; what enrichment adds is frequencies that were in
+neither.
+
+\subsection{Stability: a guard, a certificate, and the fix}
+\label{sec:stability}
+The frequency response of an unstable loop is a finite, smooth function, so the inner
+problem does not see a crossing of the margin line; an optimiser sails across it in
+pursuit of a smaller peak (eight such designs were saved by an early pipeline, caught by
+an independent check).  As shipped, stability enters the inner problem only while
+flagged: $\min t$ s.t.\ $\sigma_1(\omega_i;\theta)\le t$, $|\mathrm{Im}\,\lambda_k(A_c)|\le\omega_{\max}$,
+and $\mathrm{Re}\,\lambda_j(\theta)\le-\eps$ for tracked $j$ while flagged.  Vocabulary,
+then mechanism.  \emph{Watch list} $\mathcal W$: the eigenvalues found near the margin
+line by a sweep of certified disks along $\mathrm{Re}\,s=-\eps$ after each accepted step
+(which also proves nothing lies \emph{on} the line).  \emph{Gate}: for each
+$\lambda_j\in\mathcal W$, continuation along the segment $\theta_k+s(\theta^+-\theta_k)$
+by shift-invert at its last position with adaptive $\Delta s$ and a midpoint check
+(\emph{homotopy split} when it fails); any $\mathrm{Re}\,\lambda_j(1)>-\eps$ rejects the
+candidate.  (Endpoint-only checks were the pre-gate design and failed by eigenvalue
+\emph{identity}: the nearest eigenvalue to an old shift can be the wrong one after a
+swap.)  \rev{\emph{Governor}: a cap $\rho$ on the length of an \emph{accepted outer step},
+i.e.\ on $\|\theta^+-\theta_k\|$ between two verified designs --- not on the inner
+solver's iterations, which keep their line search; the two act at different levels, the
+governor above the inner solve, the line search inside it.  It is a trust region in the
+accept/reject sense (\S\ref{sec:linesearch}), but its radius is tied not to the
+validity of a local model of $f$ but to the validity of the gate's premise (small steps
+keep the eigenvalue tracking unambiguous); it starts at $\rho=\infty$ --- off until the
+gate produces evidence --- is quartered on a rejection, halved on a split, and relaxed
+after clean acceptances.}  \emph{Surrogate row}: when a watched
+eigenvalue enters the \emph{watch band} $-\eps-\delta_w<\mathrm{Re}\,\lambda_j\le-\eps$,
+the constraint $\mathrm{Re}\,\lambda_j(\theta)+\eps\le0$ with gradient
+$\mathrm{Re}[w_j^{\mathsf H}(\partial_\theta A_{\mathrm{cl}})v_j/(w_j^{\mathsf H}M_{\mathrm{cl}}v_j)]$
+(one eigenpair) is added to the solver's list; an active constraint inside the QP makes
+the step tangent to the boundary by itself --- the ``projected gradient'', curvature
+included.  \emph{Layers}: gate (per step, conditional on tracking) and winding certificate
+(per save, an unconditional count right of $\mathrm{Re}\,s=-\eps/2$) rest on different
+assumptions, which is why one caught a bug in the other.  \emph{What a rejection guard
+cannot do}: slide along the boundary; K+B+C converged pinned at a provably non-optimal
+boundary point and was unstuck by hand (worth $0.9\%$).  \rev{The structural fix is to put the margin \emph{inside the QP} as permanent
+per-eigenvalue rows for every near-boundary eigenvalue: an active row makes the QP step
+tangent to the boundary by construction (the projection you would otherwise do by hand),
+ties become several simultaneously active smooth constraints, and the subdifferential of
+the max is never formed --- the first item of the next campaign.}  Controller poles: only the
+$\mathrm{Im}$-cap is enforced, a heuristic proxy for ``no closed-loop dynamics outside the
+certified band''; the rigorous device is the band-safety certificate, and a closed-loop
+bandwidth intent belongs in a frequency-weighted objective.
+
+\subsection{Residual kinks: where the reformulation itself fails}
+\label{sec:kinks}
+Two kinks must be told apart.  \emph{Between frequencies}: several peaks tie --- the
+epigraph dissolved it (each is its own smooth constraint).  \emph{Inside a frequency}:
+$\sigma_1=\sigma_2$ at one $\omega_i$ --- the constraint function itself kinks, the
+epigraph never touched it (it was adopted to dissolve the first kind, which it did; the
+second kind was equally present in the direct use of PyGRANSO and in the descent line
+without branch enrichment --- see \S\ref{sec:which}), BFGS pairs straddling the jump
+encode a fictitious infinite curvature, and GRANSO stalls silently.  \revd{This is not
+in tension with \S\ref{sec:nonsmooth}: there, the kink is in the \emph{objective} being
+minimised, the ill-conditioned $B$ is large \emph{across} the crease, and the steps
+follow the crease --- the curvature is fictitious but usefully oriented.  Here the kink
+sits inside one \emph{constraint} function while the objective $t$ is linear; $B$
+estimates the Lagrangian's curvature for a QP whose constraints are supposed to be
+smooth tangents, the corrupted $B$ has no crease to follow --- the crease of the
+constraint is not a crease of the problem --- and the QP step it produces is simply
+wrong, until the line search shrinks it to nothing.}  This is the measured signature of the cases that
+do not finish cleanly (K+B+C: a two-peak tie at a singular-value crossing, balance
+residual $\sim10^4$, restarts buying $10^{-3}$ per round) --- and the outer stopping rule
+cannot tell ``solved'' from ``gave up'', so a stall reads as convergence (the frozen
+pipeline labels such rows ``inner at its limit'' and measures their balance residuals; it
+does not cure them).  The cure is the same medicine a third time: \emph{name the
+members}.  Enroll $\sigma_2(\omega_i;\theta)\le t$ as its own constraint --- always at the
+active frequencies (one more Lanczos vector), thresholded with hysteresis elsewhere.
+Every branch is then smooth, $B$ stays valid (no reset --- resetting would pay the kink
+twice, once in the crossing and once in the amnesia), and standard SQP theory applies
+locally: convergence to a KKT point, superlinear once the active set settles.
+\rev{With enrollment early enough there is no remaining reason for the inner to stop
+short of optimality other than solver settings (QP accuracy, $\mu$); the algorithmic
+risk that remains is only the timing of the detection.}  The
+residual difference from the bundle line is one word, \emph{detection}: enrollment must
+notice the closing gap; the bundle needs no detector.  Finally, a \emph{Newton polish} of
+the balance system --- unknowns $(\theta,t,\omega_1,\dots,\omega_m,\alpha_1,\dots,\alpha_m)$,
+equations $\sigma_1(\omega_i;\theta)=t$, $\partial_\omega\sigma_1(\omega_i;\theta)=0$,
+$\sum\alpha_i\nabla_\theta\sigma_1=0$, $\sum\alpha_i=1$ (Remez's equioscillation, solved by
+Newton) --- gives a quadratic endgame once the membership is right.
+
+\section{Which method next?  The choices, honestly}
+\label{sec:which}
+
+\emph{The common core} any method needs to reach cavity scale: the sparse certified
+oracle; a finite working set with periodic certified enrichment (a bundle that evaluated
+true band maxima at every trial would spend everything on sweeps); parallel evaluation
+over that set.  \rev{Why the core is non-negotiable: at cavity scale the unit of work is one sparse
+factorisation (minutes, gigabytes), a norm evaluation is hundreds of them, and the
+literature's methods --- dense Hamiltonian norms, one trial design after another ---
+are serial chains of such units, which no machine finishes; the literature does not
+address parallelisation at all, and any method we run must be shaped for it.  Granted
+the core, the bundle line and the exchange share the same expensive primitive --- values
+and gradients on $\Omega$, in parallel, once per trial or per inner iteration --- and
+are equally parallel at that granularity (the descent line's primitive is the bundle's).
+The only bundle that is \emph{not} parallel is one that insists on a certified
+band-maximum at every trial, and that one is too slow for any purpose.}
+\reve{With the projected oracle the primitive itself changes: the reduced model
+evaluates all of $\Omega$ without a factorisation, so the inner loop of \emph{any} of the
+three methods --- exchange, bundle on $\Omega$, or a direct nonsmooth solver on
+$\Omega$ --- runs on one node, and the parallel resource is spent on the two things
+that stay full-model: the anchors (once per mesh) and the certification sweep (per outer
+round, parallel over shifts).  Two consequences for the choice ahead.  The cost of an
+inner iteration no longer discriminates between the methods at all, so the decision
+rests entirely on the convergence differences listed above --- kinks, constraints, rate,
+theory.  And the cluster estimate for the cavity changes class: not fifty nodes held
+for every case, but one fat node for the optimisation and a handful borrowed for
+minutes per outer round --- provided the reduced-subspace dimension in 2-D is what the
+GL numbers suggest, which is the first thing the algebra note's to-do list asks to
+measure.}
+
+\emph{The genuine differences}: kinks (bundle native; SQP needs enrollment and its
+detector); constraints (SQP rows natural; bundle needs the progress function and its
+bisection); terminal rate (SQP superlinear on a settled active set; bundle linear unless
+bundle--Newton); software (IPOPT and active-set SQP mature; a nonconvex constrained bundle
+would be written by us --- two hundred lines, now that the priced QP and the serious/null
+loop are on the table); warm starts (penalty and active-set: on the boundary for free;
+interior point: pushed off it, $5$--$15$ iterations per exchange restart, against
+$10$--$30$ restarts per case --- bounded, not dominant, to be measured).
+
+\rev{\emph{Two levels not to conflate} (\S\ref{sec:qpsolve}).  Level 1 is the NLP method \revb{--- the NLP being the epigraph problem of
+\S\ref{sec:epigraph} itself, $\min t$ subject to its rows}: an SQP loop (a sequence of
+QPs) or an interior point method applied to that problem as a whole (IPOPT --- no QPs,
+one linear system per iteration); the exchange-restart count
+decides between them; the bundle is the third candidate.  Level 2 exists only if level 1
+is SQP: the QP solver inside each step --- active set (qpOASES), interior point on the
+QP, or ADMM --- and the frozen pipeline runs ADMM (OSQP inside PyGRANSO), whose step
+accuracy of a few digits is ample far from a solution and suspect at the terminal K+B+C
+iterates, where six nearly tied constraints are being balanced by the QP's multipliers.}
+
+\emph{Recommendation.}  Plan~A: exchange $+$ explicit constraints $+$ enrollment $+$
+Newton polish, with the inner solver chosen by measurement between IPOPT and an
+active-set SQP (the walk-through QP, a warm-startable QP solver, a Wolfe line search
+--- GRANSO without its nonsmooth ambitions), the 27-case frozen suite as regression
+test.  Plan~B: a proximity-control bundle on the same $\Omega$ with the progress function
+--- the better-covered option at exactly the kinks where Plan~A needs management, cheap
+to prototype, the designated fallback and a legitimate first choice for whoever prefers
+theory to software maturity.  \textsf{systune} is excluded by two hard facts only
+(closed source cannot host our oracle; dense norms cannot reach cavity scale), not by
+architecture; \textsf{hinfstruct} has a norm certificate and convergence theory --- it
+lacks scale, not rigour.  \revd{\emph{What was tried first, why it was abandoned, and a reassessment.}  The
+study did not begin with the epigraph.  Its first approach (report v2, \S3.5 and \S7)
+was PyGRANSO in its intended mode: BFGS--SQP applied directly to the nonsmooth
+$\gamma(\theta)=\max_{\omega\in\Omega}\sigma_1$ with the margin $\alpha(\theta)+\eps\le0$
+as an explicit constraint --- HIFOO's approach with GRANSO's engine, on the same finite
+set $\Omega$ and the same parallel oracle.  Two things went wrong.  First, scaling:
+with gradients of order $10$--$80$ and useful steps of order $10^{-2}$, BFGS's first step
+from $H_0=I$ overshot into the unstable region and several cases made zero progress; a
+calibrated $H_0$, then a fixed ladder of decreasing first steps, then an adaptive ladder
+that inferred the failure mode from each stage's outcome (improved: refine; stalled but
+feasible: enlarge; left the feasible set: shrink) were needed, tuned per case, and
+PyGRANSO's own automatic scalings failed.  Second, the outcome on nineteen designs: nine
+reached a smooth stationary point (one active frequency), five an equalised optimum,
+and five stalled with a non-vanishing gradient and a runner-up peak $0.2$--$1.7\%$
+below the maximum --- iterates creeping toward a tie between two frequencies, the line
+search rejecting every step that crossed the crease, the adaptive ladder unable to
+rescue them.  The diagnosis recorded then: ``a quasi-Newton line search is being asked
+to infer a kink structure from function values alone''.  The epigraph replaced it, and on
+the same cases the ties converged; the scaling problem disappeared with it, because a
+linear objective has no curvature to mis-scale ($H_0=I$ suffices, no ladder).
+
+Reassessed with the material of this note, that record says three things.  (1)~The five
+stalls were the kink-\emph{between}-frequencies failure of \S\ref{sec:nonsmooth}: BFGS
+alone, without HANSO's bundle and sampling phases, approaching a tie from one branch ---
+exactly the case Lewis--Overton describe as ``works in practice, stalls silently when it
+fails''.  The epigraph cured it by making the tie an active set; that comparison, on
+nineteen designs with the same oracle and the same $\Omega$, is the controlled experiment,
+and it was already run.  (2)~The v2 report described PyGRANSO as ``BFGS--SQP with gradient
+sampling''; it has none (\S\ref{sec:granso}).  The correction matters, because the phases
+that were missing are precisely the ones HIFOO uses to handle ties --- so ``direct
+nonsmooth mode'' as tried was a truncated HIFOO, and its failure does not condemn the
+full method.  (3)~The reason for the epigraph is therefore neither parallelism nor
+certification: the direct mode ran on the same finite $\Omega$ with the same parallel
+evaluations, and the certificates belong to the outer loop, which is indifferent to the
+inner solver.  The reason is inner convergence at ties, and nothing else; the earlier
+edition of this note overstated the structural argument.  What follows for the to-do
+list: a retry of PyGRANSO in direct mode is not warranted --- it would reproduce the v2
+record; a retry of the \emph{principled} direct nonsmooth approach is: either a
+HANSO-style three-phase engine, or the bundle inner of Plan~B, which is the same idea
+with theory.  Item~0b is revised accordingly.  One residual defect of the v2 runs is
+worth remembering when reading them: a warm-restart bug in the real-constrained field
+cases (checkpoints not reproduced on resume) that was corrected later and may have
+contributed to two of the five stalls.}
+
+\section{To-do list for the next code iteration}
+\label{sec:todo}
+\begin{enumerate}[leftmargin=1.8em,itemsep=1pt,start=0]
+\item \textbf{QP-solver accuracy, first} --- one line: tighten OSQP by three orders or swap
+in qpOASES, re-run the terminal K+B+C polish, read $\mu$ off the logs \revc{and add the
+$\mu$-regrow detector} (\S\ref{sec:drive}, \S\ref{sec:which}).  \revd{\textbf{0b.} No retry of PyGRANSO in direct mode (the v2 record is that
+experiment); instead, the principled direct-nonsmooth alternative --- Plan~B's bundle
+inner, or a HANSO-style three-phase engine --- on the frozen suite, against the epigraph
+(\S\ref{sec:which}).  Also: correct the v2 report's statement that PyGRANSO uses gradient
+sampling.}
+\item \textbf{Random-start multistart with a stabilisation phase} (\S\ref{sec:descent}):
+scaled random draws, abscissa descent, then the norm; random starts \emph{only} in a
+first study against Chen--Rowley seeds (HIFOO's unscaled recipe as the citable baseline,
+scaling as our variable).  Keep the nesting lattice.
+\item \textbf{Explicit stability constraints}: permanent per-eigenvalue rows for every
+tracked near-boundary eigenvalue; guard and certificates stay (\S\ref{sec:stability}).
+\revf{Cheap form, once the projected oracle exists: impose the margin on the
+\emph{reduced} closed-loop pencil inside the inner loop (Mengi 2023, \S6, shows the
+interpolation properties extend to a barrier on the reduced abscissa), gradients from
+reduced eigenvectors, winding count outside --- algebra note, \S10.6 there.}
+\item \textbf{$\sigma_2$-enrollment}: always at the active frequencies, thresholded with
+hysteresis elsewhere (\S\ref{sec:kinks}).
+\item \textbf{Neighbour seeding}: level-filtered log-spaced satellites per new peak
+(the A--N recipe; test both readings, $\omega$-grid and level ladder) (\S\ref{sec:descent}).
+\item \textbf{Retirement and $|\Omega|\lesssim50$}: retire the starter grid after the
+first certified round and dormant members after two; validate at GL before the cavity
+(\S\ref{sec:exchange}).
+\item \textbf{Parallel gate}, validated by replaying the 27 frozen accepted-step chains
+bit for bit (same replay for the algebra note's parallel winding certificate).
+\item \textbf{Controller-pole cap}: demote to an optional regulariser; band-safety
+certificate is the guarantee; closed-loop bandwidth via a frequency-weighted objective, in
+perspective.
+\item \textbf{Inner solver, two levels}: prototype IPOPT and an active-set SQP, measure
+the restart overhead, let the number decide; give the SQP qpOASES or QPALM by item~0;
+bundle inner as Plan~B.
+\item \textbf{Newton polish} of the final balance system.
+\item \textbf{Visualisation}: $\Omega$, $\sigma_1$ on $\Omega$, $t$, multipliers and
+spectrum per outer round (needs a small dump patch).
+\reve{\item \textbf{Projected oracle in the inner loop} (algebra note, \S10
+there, and its to-do items): once the GL prototype reproduces the 27 certified optima,
+run the inner loop on the reduced model with certification as the enrichment rule, and
+re-measure the exchange-restart and warm-start costs of item~8 on that basis --- the
+inner-iteration cost is then no longer the quantity that decides between IPOPT, an
+active-set SQP and the bundle inner.}
+\revf{The loop itself --- optimise on the reduced model, evaluate the full model at the
+reduced optimum, enrich there --- is Algorithm~2.1 of Aliyev, Benner, Mengi \& Voigt
+(2019), with a superlinear convergence theorem under a single-active-peak assumption;
+our version enriches at all of $\Omega$ (needed at balanced optima, where their
+assumption fails) and certifies (algebra note, \S10.5 there).  Two consequences for this
+list: (a)~the random-start study of item~1 is free on the reduced model, since an
+evaluation costs microseconds; (b)~for the position cases ($n_\theta=2$--$4$) the reduced
+problem can be optimised \emph{globally} (\code{eigopt}-style support functions, as
+they do) before certification --- the first global answers this campaign could
+produce.}
+\item Remove the level scaling constant from the code.
+\end{enumerate}
+
+\revc{\section*{References}
+\small
+\begin{itemize}[leftmargin=1.2em,itemsep=0pt]
+\item Apkarian \& Noll, ``Nonsmooth $H_\infty$ synthesis'', \emph{IEEE TAC} 51 (2006) 71--86; multiband: \emph{IEEE TAC} 52 (2007).
+\item Apkarian, Gahinet \& Buhr, ``Multi-model, multi-objective tuning of fixed-structure controllers'', ECC 2014.
+\item Apkarian \& Noll, ``Structured $H_\infty$ control of infinite-dimensional systems'' / survey, 2018--2019.
+\item Apkarian, Dao \& Noll, ``Parametric robust structured control design'', \emph{IEEE TAC} 60 (2015).
+\item Gahinet \& Apkarian, ``Structured $H_\infty$ synthesis in MATLAB'', IFAC 2011.
+\item Burke, Lewis \& Overton, ``A robust gradient sampling algorithm for nonsmooth, nonconvex optimization'', \emph{SIAM J.\ Optim.}\ 15 (2005).
+\item Burke, Henrion, Lewis \& Overton, ``HIFOO --- a MATLAB package for fixed-order controller design and $H_\infty$ optimization'', IFAC ROCOND 2006.
+\item Lewis \& Overton, ``Nonsmooth optimization via quasi-Newton methods'', \emph{Math.\ Program.}\ 141 (2013) 135--163.
+\item Curtis, Mitchell \& Overton, ``A BFGS-SQP method for nonsmooth, nonconvex, constrained optimization and its evaluation using relative minimization profiles'', \emph{Optim.\ Methods Softw.}\ 32 (2017) 148--181 (GRANSO).
+\item Byrd, Nocedal \& Waltz, ``Steering exact penalty methods for nonlinear programming'', \emph{Optim.\ Methods Softw.}\ 23 (2008).
+\item Han, ``A globally convergent method for nonlinear programming'', \emph{J.\ Optim.\ Theory Appl.}\ 22 (1977); Wilson (1963), Powell (1978) --- SQP as Newton on KKT.
+\item Nocedal \& Wright, \emph{Numerical Optimization}, 2nd ed., Springer 2006 (chs.\ 17--19).
+\item W\"achter \& Biegler, ``On the implementation of an interior-point filter line-search algorithm'', \emph{Math.\ Program.}\ 106 (2006) (IPOPT).
+\item Wright, ``Ill-conditioning and computational error in interior methods'', \emph{SIAM J.\ Optim.}\ 9 (1998).
+\item Stellato et al., ``OSQP: an operator splitting solver for quadratic programs'', \emph{Math.\ Program.\ Comput.}\ 12 (2020); Ferreau et al., qpOASES, \emph{Math.\ Program.\ Comput.}\ 6 (2014).
+\item Kiwiel, \emph{Methods of Descent for Nondifferentiable Optimization}, Springer 1985; Lemar\'echal, ``Nonsmooth optimization and descent methods'', IIASA 1978.
+\item Noll, Prot \& Rondepierre, ``A proximity control algorithm to minimize nonsmooth and nonconvex functions'', \emph{Pacific J.\ Optim.}\ 4 (2008); Noll, ``Cutting plane oracles to minimize non-smooth non-convex functions'', \emph{Set-Valued Var.\ Anal.}\ 18 (2010).
+\item Luk\v san \& Vl\v cek, ``A bundle--Newton method for nonsmooth unconstrained minimization'', \emph{Math.\ Program.}\ 83 (1998).
+\item Hettich \& Kortanek, ``Semi-infinite programming: theory, methods, and applications'', \emph{SIAM Review} 35 (1993); Remez (1934).
+\revf{\item Aliyev, Benner, Mengi, Schwerdtner \& Voigt, ``Large-scale computation of $L_\infty$-norms by a greedy subspace method'', \emph{SIAM J.\ Matrix Anal.\ Appl.}\ 38 (2017); Aliyev, Benner, Mengi \& Voigt, ``A subspace framework for $H_\infty$-norm minimization'', \emph{SIAM J.\ Matrix Anal.\ Appl.}\ 41 (2020), arXiv:1905.04208; Mengi, ``Large-scale estimation of dominant poles of a transfer function by an interpolatory framework'', \emph{SIAM J.\ Sci.\ Comput.}\ 44 (2022); Mengi, ``A subspace framework for $L_\infty$ model reduction'', arXiv:2309.08011 (2023); Schwerdtner, Mengi \& Voigt, ``Certifying global optimality for the $L_\infty$-norm computation of large-scale descriptor systems'', \emph{IFAC-PapersOnLine} 53(2) (2020) --- the certificate of the oracle.}
+\item Boyd \& Vandenberghe, \emph{Convex Optimization}, Cambridge 2004 (\S4.1.3, \S4.2); Parlett, \emph{SIAM J.\ Matrix Anal.\ Appl.}\ 13 (1992) (tridiagonal realisations).
+\end{itemize}}
+
+\section{What to remember}
+Minimising a worst case means balancing peaks, and the balance point is a kink where
+plain calculus fails (\S\ref{sec:problem}).  The balance can be computed by hand at each
+step --- the weight problem, whose weights are the prices of the peaks that fight each
+other (\S\ref{sec:baseline}) --- or delegated to a constrained solver by giving the
+maximum its own variable, whereupon the weights reappear as multipliers
+(\S\ref{sec:epigraph}).  The three methods of the literature and ours are one QP wearing
+four coats (\S\ref{sec:compare}); they differ in which linear pieces they keep and how
+they scale the step.  The continuum of frequencies is handled by certify-and-exchange,
+whose expensive work is parallel (\S\ref{sec:exchange}).  Stability is, in the frozen
+pipeline, a guard rather than a constraint, with a measured limitation at the boundary
+(\S\ref{sec:stability}); the method's residual failures sit exactly where its smoothness
+assumptions break --- singular-value crossings inside a frequency and the inner solver's
+silent stalls there (\S\ref{sec:kinks}) --- which is why the next campaign's first task
+is an inner solver that makes every kink it meets explicit.
+
+\end{document}

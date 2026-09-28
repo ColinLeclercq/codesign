@@ -1,0 +1,15 @@
+{
+ "record": "results_cross/atomslong_n200_self.npz",
+ "nu": 277.9609056931906,
+ "a_c": 4199.746414401676,
+ "beta": 1.0,
+ "gamma_c": 1.0000000000000002,
+ "W": 8399.492828803352,
+ "tail_bound": 0.00027368344237600626,
+ "gamma_band": 3.876296378397272,
+ "w_star": 0.8556673822786911,
+ "certified": true,
+ "gamma_record": 3.876282459697932,
+ "global_certified": true,
+ "method": "dense"
+}

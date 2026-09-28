@@ -1,0 +1,15 @@
+{
+ "ne": 200,
+ "mu0": 0.38,
+ "xa": -1.03,
+ "xs": 0.98,
+ "wlo": -1.2,
+ "whi": 0.2,
+ "nw": 1401,
+ "method": "krylov",
+ "open_loop": 882.814979017974,
+ "sensor_limited": 9.83186451123434,
+ "actuator_limited": 9.660136555484097,
+ "floor": 3.509193044948732,
+ "note": "sensor-limited applies to designs with the sensor at xs, actuator-limited to designs with the actuator at xa, the floor to any single actuator/sensor pair; sup over the grid [wlo, whi] (a lower bound on the sup over all w)"
+}

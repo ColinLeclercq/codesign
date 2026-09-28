@@ -1,0 +1,12 @@
+actuator fields: gauge-invariant M-distance
+                                         0       1       2       3
+ 0 H2 N160 ne200                    0.0000  0.2441  0.2439  0.2616
+ 1 atoms ne200                      0.2441  0.0000  0.0278  0.1624
+ 2 atoms ne400                      0.2439  0.0278  0.0000  0.1642
+ 3 frozen ne200                     0.2616  0.1624  0.1642  0.0000
+sensor fields: gauge-invariant M-distance
+                                         0       1       2       3
+ 0 H2 N160 ne200                    0.0000  0.2470  0.2432  0.2601
+ 1 atoms ne200                      0.2470  0.0000  0.0263  0.1661
+ 2 atoms ne400                      0.2432  0.0263  0.0000  0.1637
+ 3 frozen ne200                     0.2601  0.1661  0.1637  0.0000

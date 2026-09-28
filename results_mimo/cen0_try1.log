@@ -1,0 +1,29 @@
+[central] start: certified gamma 6.399134 at w=-1.4209 (ok); closed-loop abscissa -0.1639, compensator -0.0500; order 16, 114 free complex controller parameters + 4 positions
+  round  0: |Omega|= 71 t=6.320666 certified=6.334573 at w=+3.722 alpha_cl=-0.1104 alpha_c=-0.0500 box=0.05 -> refuse  (34 s)
+  round  1: |Omega|= 81 t=6.378755 certified=6.400454 at w=-0.751 alpha_cl=-0.2042 alpha_c=-0.0500 box=0.0125 -> refuse  (66 s)
+  round  2: |Omega|= 89 t=6.393688 certified=6.398614 at w=-0.351 alpha_cl=-0.1748 alpha_c=-0.0500 box=0.00313 -> ACCEPT  (97 s)
+  round  3: |Omega|= 94 t=6.388752 certified=6.391666 at w=-0.974 alpha_cl=-0.1873 alpha_c=-0.0500 box=0.00313 -> ACCEPT  (130 s)
+  round  4: |Omega|=101 t=6.378850 certified=6.381731 at w=-0.823 alpha_cl=-0.2163 alpha_c=-0.0500 box=0.00625 -> ACCEPT  (165 s)
+  round  5: |Omega|=108 t=6.360093 certified=6.366937 at w=+0.480 alpha_cl=-0.1352 alpha_c=-0.0500 box=0.0125 -> ACCEPT  (196 s)
+  round  6: |Omega|=115 t=6.322053 certified=6.323132 at w=+nan alpha_cl=-0.1039 alpha_c=-0.0500 box=0.025 -> refuse  (231 s)
+Traceback (most recent call last):
+  File "/home/claude/work/tools/mimo_proto.py", line 423, in <module>
+    main()
+  File "/home/claude/work/tools/mimo_proto.py", line 419, in main
+    run(ap.parse_args())
+  File "/home/claude/work/tools/mimo_proto.py", line 337, in run
+    for rr_ in mm.sig(w, S, k=1):
+               ^^^^^^^^^^^^^^^^^
+  File "/home/claude/work/tools/mimo_proto.py", line 171, in sig
+    st = self._setup(w, S)
+         ^^^^^^^^^^^^^^^^^
+  File "/home/claude/work/tools/mimo_proto.py", line 129, in _setup
+    lu = self._lu(w); SK = (1j * w) * np.eye(R) - S['Ac']
+         ^^^^^^^^^^^
+  File "/home/claude/work/tools/mimo_proto.py", line 123, in _lu
+    self.lu_cache[key] = spla.splu(((1j * w) * self.M - self.A).tocsc())
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/scipy/sparse/linalg/_dsolve/linsolve.py", line 433, in splu
+    return _superlu.gstrf(N, A.nnz, A.data, indices, indptr,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: Factor is exactly singular

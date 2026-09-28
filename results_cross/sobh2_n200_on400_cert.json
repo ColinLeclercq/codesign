@@ -1,0 +1,15 @@
+{
+ "record": "results_cross/sobh2_n200_on400.npz",
+ "nu": 1087.8694819885297,
+ "a_c": 4199.7464163980985,
+ "beta": 1.0000000000000002,
+ "gamma_c": 1.0000000000000002,
+ "W": 8399.492832796197,
+ "tail_bound": 0.000141197425362388,
+ "gamma_band": 3.923768128866959,
+ "w_star": 11.610579823001176,
+ "certified": true,
+ "gamma_record": 3.9237628534363824,
+ "global_certified": true,
+ "method": "dense"
+}

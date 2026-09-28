@@ -1,0 +1,13 @@
+[central] start: certified gamma 2.387150 at w=-1.3755 (ok); closed-loop abscissa -0.6011, compensator +nan; order 0, 4 free complex controller parameters + 80 field parameters (atoms)
+  round  0: |Omega|=115 t=2.385402 certified=93.484428 at w=+530.692 alpha_cl=-0.5967 alpha_c=+nan box=0.05 -> refuse  (41 s)
+  round  1: |Omega|=122 t=2.386167 certified=976.269850 at w=+904.169 alpha_cl=-0.0499 alpha_c=+nan box=0.025 -> refuse  (81 s)
+  round  2: |Omega|=127 t=2.386634 certified=5.232753 at w=+992.099 alpha_cl=-0.6006 alpha_c=+nan box=0.0125 -> refuse  (121 s)
+  round  3: |Omega|=129 t=2.386913 certified=2.387085 at w=+0.618 alpha_cl=-0.6011 alpha_c=+nan box=0.00625 -> ACCEPT  (163 s)
+  round  4: |Omega|=131 t=2.386730 certified=2.386943 at w=+2.023 alpha_cl=-0.6012 alpha_c=+nan box=0.00625 -> ACCEPT  (204 s)
+  round  5: |Omega|=133 t=2.386564 certified=2.386617 at w=-0.275 alpha_cl=-0.6011 alpha_c=+nan box=0.00625 -> ACCEPT  (244 s)
+  round  6: |Omega|=136 t=2.386412 certified=2.386460 at w=+2.035 alpha_cl=-0.6009 alpha_c=+nan box=0.00625 -> ACCEPT  (284 s)
+  round  7: |Omega|=137 t=2.386268 certified=2.386287 at w=-0.619 alpha_cl=-0.6006 alpha_c=+nan box=0.00625 -> ACCEPT  (324 s)
+  round  8: |Omega|=138 t=2.386131 certified=2.386144 at w=+0.093 alpha_cl=-0.6002 alpha_c=+nan box=0.00625 -> ACCEPT  (362 s)
+  round  9: |Omega|=139 t=2.385995 certified=2.386009 at w=+2.056 alpha_cl=-0.6000 alpha_c=+nan box=0.00625 -> ACCEPT  (403 s)
+  progress stop: 0.048 % over the last 8 rounds
+[central/atoms] final: certified gamma 2.386009 (global in w); alpha_cl -0.6000, alpha_c +nan; Dc = [[(-40999.856-9344.478j), (-0.024+0.016j)], [(0.004-0.009j), (-5.507-11.071j)]]; 404 s -> results_mimo/atoms_cen.npz

@@ -1,0 +1,5 @@
+[central] start: certified gamma 6.281979 at w=-0.5058 (ok); closed-loop abscissa -0.0517, compensator -0.0500; order 16, 114 free complex controller parameters + 4 field parameters (gauss)
+  round  0: |Omega|= 77 t=6.194435 certified=6.889159 at w=-0.709 alpha_cl=-0.0500 alpha_c=-0.0500 box=0.05 -> refuse  (37 s)
+  round  1: |Omega|= 90 t=6.234075 certified=6.249488 at w=-0.526 alpha_cl=-0.0520 alpha_c=-0.0499 box=0.025 -> refuse  (77 s)
+  round  2: |Omega|=100 t=6.257799 certified=6.261679 at w=-2.705 alpha_cl=-0.0500 alpha_c=-0.0500 box=0.0125 -> refuse  (108 s)
+  round  3: |Omega|=110 t=6.269388 certified=6.270460 at w=-2.524 alpha_cl=-0.0500 alpha_c=-0.0500 box=0.00625 -> ACCEPT  (141 s)

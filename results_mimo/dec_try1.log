@@ -1,0 +1,9 @@
+[decentral] start: certified gamma 6.399134 at w=-1.4209 (ok); closed-loop abscissa -0.1639, compensator -0.0500; order 16, 62 free complex controller parameters + 4 positions
+  round  0: |Omega|= 71 t=6.340716 certified=6.343339 at w=-2.327 alpha_cl=-0.1725 alpha_c=-0.0500 box=0.05 -> refuse  (34 s)
+  round  1: |Omega|= 79 t=6.384390 certified=6.389175 at w=-1.506 alpha_cl=-0.1646 alpha_c=-0.0500 box=0.0125 -> refuse  (68 s)
+  round  2: |Omega|= 85 t=6.394984 certified=6.398408 at w=+1.683 alpha_cl=-0.1622 alpha_c=-0.0500 box=0.00313 -> refuse  (106 s)
+  round  3: |Omega|= 91 t=6.397704 certified=6.400561 at w=-0.725 alpha_cl=-0.1623 alpha_c=-0.0500 box=0.000781 -> refuse  (141 s)
+  round  4: |Omega|= 93 t=6.398427 certified=6.398952 at w=-0.715 alpha_cl=-0.1634 alpha_c=-0.0500 box=0.000195 -> ACCEPT  (161 s)
+  round  5: |Omega|= 94 t=6.398185 certified=6.398500 at w=+2.480 alpha_cl=-0.1630 alpha_c=-0.0500 box=0.000195 -> ACCEPT  (180 s)
+  progress stop: 0.010 % over the last 4 rounds
+[decentral] final: certified gamma 6.398500 (global in w), positions xa = -2.317, -6.000; xs = +2.317, +6.000; alpha_cl -0.1630, alpha_c -0.0500; 180 s -> results_mimo/dec.npz

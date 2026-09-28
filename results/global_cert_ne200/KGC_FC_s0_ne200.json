@@ -1,0 +1,15 @@
+{
+ "record": "results/KGC_FC_s0_ne200.npz",
+ "nu": 277.9609056931906,
+ "a_c": 4199.74641780391,
+ "beta": 1.0,
+ "gamma_c": 1.0,
+ "W": 8399.49283560782,
+ "tail_bound": 0.00012362167142864237,
+ "gamma_band": 9.660143816197127,
+ "w_star": NaN,
+ "certified": true,
+ "gamma_record": 9.66014382585727,
+ "global_certified": true,
+ "method": "dense"
+}

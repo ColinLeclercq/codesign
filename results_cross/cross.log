@@ -1,0 +1,50 @@
+va: P2 evaluation
+vs: P2 evaluation
+grid max of sigma_1 at ne=400: 3.923763 (source record 3.911740)
+-> results_cross/sobh2_n200_on400.npz (certify with tools/tail_certificate.py --ne 400)
+dense level-set certificate on [-W, W]: 3.92376813 at w=+11.61058 (certified, 2 calls, 12.5 s); record 3.92376285 (rel 1.3e-06); GLOBAL: yes (tail bound 0.000141 < 3.9238); partial ARPACK sets 0 (retried 0, bisected 0, uncovered 0)
+va: P2 evaluation
+vs: P2 evaluation
+grid max of sigma_1 at ne=400: 4.605058 (source record 3.888738)
+-> results_cross/free160_n200_on400.npz (certify with tools/tail_certificate.py --ne 400)
+dense level-set certificate on [-W, W]: 4.60526865 at w=+27.83833 (certified, 2 calls, 11.0 s); record 4.60505752 (rel 4.6e-05); GLOBAL: yes (tail bound 0.000146 < 4.6053); partial ARPACK sets 0 (retried 0, bisected 0, uncovered 0)
+va: P2 evaluation
+vs: P2 evaluation
+grid max of sigma_1 at ne=200: 5.520556 (source record 3.898938)
+-> results_cross/free80_n100_on200.npz (certify with tools/tail_certificate.py --ne 200)
+dense level-set certificate on [-W, W]: 5.52096295 at w=+17.97210 (certified, 2 calls, 1.9 s); record 5.52055594 (rel 7.4e-05); GLOBAL: yes (tail bound 0.000128 < 5.5210); partial ARPACK sets 0 (retried 0, bisected 0, uncovered 0)
+va: P2 evaluation
+vs: P2 evaluation
+grid max of sigma_1 at ne=200: 4.134948 (source record 3.909258)
+-> results_cross/sobh2_n100_on200.npz (certify with tools/tail_certificate.py --ne 200)
+dense level-set certificate on [-W, W]: 4.13513979 at w=+12.63477 (certified, 2 calls, 2.0 s); record 4.13494784 (rel 4.6e-05); GLOBAL: yes (tail bound 0.000127 < 4.1351); partial ARPACK sets 0 (retried 0, bisected 0, uncovered 0)
+va: P2 evaluation
+vs: P2 evaluation
+grid max of sigma_1 at ne=200: 5.470964 (source record 3.895803)
+-> results_cross/sobh1_n100_on200.npz (certify with tools/tail_certificate.py --ne 200)
+dense level-set certificate on [-W, W]: 5.47098835 at w=+18.00838 (certified, 2 calls, 1.9 s); record 5.47096351 (rel 4.5e-06); GLOBAL: yes (tail bound 0.000129 < 5.4710); partial ARPACK sets 0 (retried 0, bisected 0, uncovered 0)
+grid max of sigma_1 at ne=400: 3.930885 (source record 3.925389)
+dense level-set certificate on [-W, W]: 3.93088998 at w=+8.40486 (certified, 2 calls, 8.9 s); record 3.93088478 (rel 1.3
+grid max of sigma_1 at ne=200: 3.938071 (source record 3.935632)
+dense level-set certificate on [-W, W]: 3.93807138 at w=+nan (certified, 1 calls, 0.9 s); record 3.93807138 (rel 1.0e-09
+va: atoms (exact), source field reproduced to 0.0e+00
+vs: atoms (exact), source field reproduced to 0.0e+00
+grid max of sigma_1 at ne=200: 3.903935 (source record 3.903930)
+-> results_cross/atoms_n400_on200.npz (certify with tools/tail_certificate.py --ne 200)
+dense level-set certificate on [-W, W]: 3.90396262 at w=+0.75242 (certified, 2 calls, 1.9 s); record 3.90393549 (rel 6.9e-06); GLOBAL: yes (tail bound 0.000134 < 3.9040); partial ARPACK sets 0 (retrie
+va: atoms (exact), source field reproduced to 0.0e+00
+vs: atoms (exact), source field reproduced to 0.0e+00
+grid max of sigma_1 at ne=800: 3.903987 (source record 3.903930)
+-> results_cross/atoms_n400_on800.npz (certify with tools/tail_certificate.py --ne 800)
+dense level-set certificate on [-W, W]: 3.90402639 at w=+8.15609 (certified, 2 calls, 58.5 s); record 3.90398680 (rel 1.0e-05); GLOBAL: yes (tail bound 0.000273 < 3.9040); partial ARPACK sets 0 (retri
+dense level-set certificate on [-W, W]: 3.89095892 at w=+10.23546 (certified, 2 calls, 17.7 s); record 3.89094636 (rel 3.2e-06); GLOBAL: yes
+grid max of sigma_1 at ne=200: 3.928785 (source record 3.914071)
+dense level-set certificate on [-W, W]: 3.92878497 at w=+nan (certified, 1 calls, 0.9 s); record 3.92878498 (rel 1.0e-09); GLOBAL: yes (tail
+grid max of sigma_1 at ne=800: 3.915950 (source record 3.914071)
+dense level-set certificate on [-W, W]: 3.91596220 at w=+11.51232 (certified, 2 calls, 66.6 s); record 3.91594954 (rel 3.2e-06); GLOBAL: yes
+grid max of sigma_1 at ne=200: 3.876282 (source record 3.876296)
+dense level-set certificate on [-W, W]: 3.87629638 at w=+0.85567 (certified, 2 calls, 1.9 s); record 3.87628246 (rel 3.6e-06); GLOBAL: yes (
+grid max of sigma_1 at ne=400: 3.879101 (source record 3.876296)
+dense level-set certificate on [-W, W]: 3.87910084 at w=+nan (certified, 1 calls, 4.3 s); record 3.87910085 (rel 1.0e-09); GLOBAL: yes (tail
+grid max of sigma_1 at ne=800: 3.879283 (source record 3.876296)
+dense level-set certificate on [-W, W]: 3.87928271 at w=+nan (certified, 1 calls, 30.4 s); record 3.87928272 (rel 1.0e-09); GLOBAL: yes (tai

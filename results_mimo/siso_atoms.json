@@ -1,0 +1,31 @@
+{
+ "mode": "decentral",
+ "fields": "atoms",
+ "ne": 100,
+ "R": 0,
+ "gamma": 3.87701567375195,
+ "w_star": -1.7061435152865918,
+ "alpha_cl": -0.4546959456193418,
+ "alpha_c": NaN,
+ "positions": null,
+ "Dc": [
+  [
+   "(-2838.4958586831117+3450.081855034102j)",
+   "0j"
+  ],
+  [
+   "0j",
+   "0j"
+  ]
+ ],
+ "seconds": 3.315371513366699,
+ "rounds": 0,
+ "history": [
+  {
+   "round": -1,
+   "gamma": 3.87701567375195,
+   "t": 0.0
+  }
+ ],
+ "start": "results_n100_kbc/K_B_C_s0_ne100.npz"
+}
