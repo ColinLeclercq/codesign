@@ -949,7 +949,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
     nu = 100.0                                            # merit penalty
     best = {'g': np.inf, 'z': None, 'al': None, 't': np.inf, 'clr': None}
     lim = max(-eps, ctrl_max)
-    hist = []; code = 4; t_start = time.time(); added = []
+    hist = []; code = 4; t_start = time.time(); added = []; exit_info = None
     sub_status_log = []                                  # subproblem failures (status strings)
     if refine_grid is None:
         refine_grid = np.linspace(float(W[0]), float(W[-1]), 1201)
@@ -1200,7 +1200,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                 ev_fn.pair_mode = False
                 e = ev_fn(z); t = max(t, e['smax'])
                 continue
-            code = 0; break
+            code = 0; exit_info = dict(stat=stat, gscale=_gscale, viol=_v, n_active=len(_act)); break
     if oracle is not None and added and cands:
         # the working set grew during the solve: a candidate's recorded smax is
         # on the set of its time; re-evaluate all on the FINAL set (cheap on
@@ -1242,7 +1242,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         best.update(g=np.inf, z=None, al=None, t=np.inf, clr=None)
     def _tops_at(zb):
         ev_fn.w_star = {}; ev_fn(zb); return dict(ev_fn.w_star)
-    stats = dict(iters=len(hist), fn_evals=ev_fn.ncalls, termination_code=code, certified_checks=code_cert,
+    stats = dict(iters=len(hist), fn_evals=ev_fn.ncalls, termination_code=code, exit_info=exit_info, certified_checks=code_cert,
                  stat_value=(hist[-1].get('stat') if hist else None),
                  wall=time.time() - t_start, inner='sqp', kink_block=kink_block,
                  ctrl_lmi=bool(ctrl_lmi), alpha_rows=ev_fn.n_alpha_rows, alpha_fallback=ev_fn.n_fallback,

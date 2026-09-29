@@ -1789,6 +1789,9 @@ def main():
                          '0 = the controller must itself be stable '
                          '(safe default); a positive value must be '
                          'seen by the closed-loop check.')
+    ap.add_argument('--wind-accept', dest='wind_accept', choices=['auto', 'on', 'off'], default='auto',
+                    help='winding count (global in w) on every candidate the continuation gate accepts; '
+                         'auto = on for MIMO, off for SISO (STAGE6)')
     ap.add_argument('--n-act', dest='n_act', type=int, default=1,
                     help='MIMO (STAGE6): number of actuators (with --n-sens > 1 or > 1 itself: the MIMO path)')
     ap.add_argument('--n-sens', dest='n_sens', type=int, default=1, help='MIMO: number of sensors')
@@ -1967,6 +1970,35 @@ def main():
             raise SystemExit("MIMO: start from --mimo-start (a MIMO record), not --resume")
         if not a.mimo_start:
             raise SystemExit("MIMO: --mimo-start REC is required (tools/mimo_start.py builds one from a SISO record)")
+        if not a.band_first:
+            # STAGE6 6.7: high-gain branches move far between candidates (|Im| 30 ->
+            # 700 in one step); certified on the band of the PREVIOUS design, a
+            # candidate with a peak of 12.25 at w = -700.5 was accepted as 2.5877
+            a.band_first = True
+            print("MIMO: --band-first on (the candidate's band before its certificate)", flush=True)
+    _wind_accept = (a.wind_accept == 'on') or (a.wind_accept == 'auto' and MIMO)
+    n_wind_accept, n_wind_refused, n_gate_wind = [0], [0], [0]
+
+    def _wind_right_of_margin(bb_, cc_, aa_, nn_, KK_, seen_):
+        """Exact count of closed-loop eigenvalues right of Re = -eps (argument
+        principle, global in w).  None when the plant pole data is unavailable
+        (n above the dense limit).  The line certificate just proved nothing lies
+        ON Re = -eps, which is what the argument principle needs there, so count
+        0 <=> alpha <= -eps, unconditionally."""
+        import winding_cert as _wc
+        _line = -a.eps
+        if getattr(D, '_wind_plant_eps', None) is None and D.n <= a.dense_nmax * 4:
+            D._wind_plant_eps = _wc.plant_pole_data(D.A, D.M, _line)
+        _pp, _hot = (D._wind_plant_eps if getattr(D, '_wind_plant_eps', None) else (None, None))
+        if _pp is None:
+            return None
+        # the near-line eigenvalues as zeros_hint and a fine step floor: a design
+        # pinned at the margin (alpha -0.050123, 1.2e-4 from the line) was
+        # INCONCLUSIVE without them, conclusive with (957 pts)
+        _zh = [complex(x) for x in (seen_ or []) if abs(complex(x).real - _line) < 0.3]
+        return _wc.winding_count(D.A, D.M, bb_, cc_, aa_, nn_, KK_, line=_line, mc=D.mc,
+                                 p_plant=_pp, hot=_hot, zeros_hint=_zh, hmin_frac=1e-8,
+                                 ctrl_exact=(a.wind_ctrl == 'exact'))
     tag = os.path.join(a.outdir, f"{a.case.replace('+','_')}_s{a.start}_ne{a.ne}"
                        + (f"_mimo{a.n_act}x{a.n_sens}_{a.ctrl_struct}" if MIMO else ''))
     t_start = time.time()
@@ -3088,6 +3120,7 @@ def main():
         aa, nn, KK, xa_, xs_, va_, vs_ = pk.unpack(zc)
         bb, cc, *_ = D.bc(xa_, xs_, va_, vs_)
         _seen_c = []
+        _wind_done = None                 # the candidate's winding count, once computed
         _gate_reduced = False
         if _prov and a.prov_gate == 'reduced':
             # PROVISIONAL GATE (2026-09-24): the closed-loop abscissa from the
@@ -3160,6 +3193,18 @@ def main():
                     ctl.Bc_of(aa, D.r, D.mc), nn, KK, eps=a.eps,
                     shrink=a.cert_shrink, wlo=a.wlo, whi=a.whi,
                     ctrl_max=a.ctrl_max, skip=_skip)
+                if not okr and why.startswith('INCONCLUSIVE') and _wind_accept:
+                    # MIMO (STAGE6 6.5): with the loops at high gain the band follows a
+                    # closed-loop branch out to |Im| ~ 850 (the band grew to +-1269 at
+                    # ne=100 atoms) and the line sweep runs out of shifts on it (85
+                    # uncovered); the exact winding count, global in w, decides.
+                    _o = _wind_right_of_margin(bb, cc, aa, nn, KK, _seen_c)
+                    if _o is not None:
+                        _wind_done = _o
+                        if _o['ok'] and _o['count'] == 0:
+                            print(f"    gate: line sweep {why}; winding count right of Re=-eps is 0 "
+                                  f"({_o['npts']} pts): clear", flush=True)
+                            okr = True; n_gate_wind[0] += 1
                 # BOTH must hold.  The certificate can only CONFIRM
                 # feasibility, never overrule a positive abscissa: its region is
                 # bounded and alpha is now trustworthy.
@@ -3251,24 +3296,12 @@ def main():
                 # chain there.  (scaled_002: a design certified at 7.237 was
                 # refused on the path from its 95.0 start.)
                 try:
-                    import winding_cert as _wc
                     # count right of the MARGIN itself, Re = -eps (2026-09-25; was
                     # -eps/2, which left the gap (-eps, -eps/2) the Stage-0 report
-                    # flagged): the line certificate just proved nothing lies ON
-                    # Re = -eps, which is what the argument principle needs there,
-                    # so count 0 <=> alpha <= -eps, unconditionally
-                    _line = -a.eps
-                    if getattr(D, '_wind_plant_eps', None) is None and D.n <= a.dense_nmax * 4:
-                        D._wind_plant_eps = _wc.plant_pole_data(D.A, D.M, _line)
-                    _pp, _hot = (D._wind_plant_eps if getattr(D, '_wind_plant_eps', None) else (None, None))
-                    if _pp is not None:
-                        # the gate's near-line eigenvalues as zeros_hint and a fine step
-                        # floor: a design pinned at the margin (alpha -0.050123, 1.2e-4 from
-                        # the line) was INCONCLUSIVE without them, conclusive with (957 pts)
-                        _zh = [complex(x) for x in (_seen_c or []) if abs(complex(x).real - _line) < 0.3]
-                        _o = _wc.winding_count(D.A, D.M, bb, cc, aa, nn, KK, line=_line, mc=D.mc,
-                                               p_plant=_pp, hot=_hot, zeros_hint=_zh, hmin_frac=1e-8,
-                                               ctrl_exact=(a.wind_ctrl == 'exact'))
+                    # flagged)
+                    _o = _wind_right_of_margin(bb, cc, aa, nn, KK, _seen_c)
+                    if _o is not None:
+                        _wind_done = _o
                         if not (_o['ok'] and _o['count'] == 0):
                             print(f"    continuation refused; winding count right of Re=-eps: "
                                   f"{'INCONCLUSIVE' if not _o['ok'] else _o['count']} ({_o['npts']} pts): not accepted",
@@ -3280,6 +3313,26 @@ def main():
                             _okc = True; watch_cand = _topk_watch(list(_seen_c or []), a.cont_k, a.eps)
                 except Exception as _e:
                     print(f"    winding check failed: {type(_e).__name__}", flush=True)
+            if _okc and _wind_accept and _wind_done is None:
+                # STAGE6 (2026-09-29): the continuation gate watches the near-line
+                # eigenvalues of the certified BAND; a high loop gain can bring an
+                # eigenvalue from far left to Re > 0 far OUTSIDE the band in one
+                # step (MIMO atoms, ne=100: +17.1 - 111.8i, accepted, caught only by
+                # the dense save veto).  The winding count is global in w: every
+                # accepted candidate must have none right of Re = -eps.
+                try:
+                    _o = _wind_right_of_margin(bb, cc, aa, nn, KK, _seen_c)
+                    n_wind_accept[0] += 1
+                    if not (_o is not None and _o['ok'] and _o['count'] == 0):
+                        _okc = False
+                        print(f"    winding check at acceptance: "
+                              + ('unavailable (no plant pole data)' if _o is None else
+                                 f"{'INCONCLUSIVE' if not _o['ok'] else str(_o['count']) + ' eigenvalue(s) right of Re=-eps'} "
+                                 f"({_o['npts']} pts)") + ": REFUSED", flush=True)
+                        n_wind_refused[0] += 1
+                except Exception as _e:
+                    _okc = False
+                    print(f"    winding check at acceptance failed ({type(_e).__name__}): refused", flush=True)
             if not _okc:
                 feasible = False
                 n_located[0] += 1
@@ -3880,6 +3933,29 @@ def main():
     gain = np.array([_clg.gain(w, arow, nvec, K, want_vectors=False)['sigma']
                      for w in ws])
     gam = max(gam, gbest)
+    # DENSE ALL-FREQUENCY CHECK (STAGE6 6.7) -- check only, like the dense save
+    # veto on alpha.  The loop certifies gamma over its band; the band follows the
+    # closed-loop spectrum, which is a heuristic for where peaks can be.  The
+    # dense level set on the full even pencil computes ALL its eigenvalues at each
+    # level, so no crossing of the imaginary axis at any frequency is missed.  A
+    # higher value means the band missed a peak: reported loudly, and the record
+    # stores the true value.
+    gam_dense_all = None
+    if a.dense_check and (D.n + D.r) <= min(a.dense_nmax, 1000):
+        try:
+            _sof = lambda w_: clh.gain(float(w_), arow, nvec, K, want_vectors=False)['sigma']
+            _gd = csp.hinf_dense_levelset(D.A, D.M, b, c, ctl.A_of(*arow[:3]), ctl.Bc_of(arow, D.r, D.mc),
+                                          nvec, K, _sof, 0.95 * gam, wlo=-np.inf, whi=np.inf, rtol=1e-6)
+            gam_dense_all = float(_gd[0])
+            if gam_dense_all > gam * (1.0 + 1e-5):
+                print(f"WARNING: dense level set over ALL w gives gamma {gam_dense_all:.6f} at w = {_gd[1]:+.4f}, "
+                      f"above the loop's certified {gam:.6f} over [{a.wlo:.2f}, {a.whi:.2f}]: the band missed a "
+                      f"peak; the record stores the dense value", flush=True)
+                gam = gam_dense_all
+            else:
+                print(f"dense all-frequency check: gamma {gam_dense_all:.6f} (certified {gam:.6f})", flush=True)
+        except Exception as _e:
+            print(f"dense all-frequency check failed non-fatally: {_e!r}", flush=True)
     if MIMO:          # per-port fields; the pre-Sobolev coordinates are a SISO-resume device only
         xia = xis = np.zeros(0)
     else:
@@ -3943,6 +4019,7 @@ def main():
     summ = dict(case=a.case, start=a.start, ne=a.ne, n=D.n, NZ=len(z) + 1,
                 gamma=float(gam), alpha=float(al),
                 alpha_dense=(float(al_d) if al_d is not None else None),
+                gamma_dense_all_w=gam_dense_all,
                 eps=float(a.eps),
                 wind_count=wind_n,
                 sym=bool(a.sym),
@@ -3994,6 +4071,8 @@ def main():
                 xs=(np.atleast_1d(xs).astype(float).tolist() if MIMO else float(xs)),
                 norm_psi_a=([D.norm_M(pa[:, j]) for j in range(pa.shape[1])] if MIMO else D.norm_M(pa)),
                 norm_psi_s=([D.norm_M(ps[:, j]) for j in range(ps.shape[1])] if MIMO else D.norm_M(ps)),
+                wind_accept=dict(on=bool(_wind_accept), checks=int(n_wind_accept[0]), refused=int(n_wind_refused[0]),
+                                 gate_inconclusive_cleared=int(n_gate_wind[0])),
                 mimo=(dict(m=int(flags['m']), p=int(flags['p']), struct=flags['struct'], loop_orders=list(flags['loop_orders']),
                            start=a.mimo_start, D_c=[[str(v) for v in row] for row in np.asarray(K).reshape(flags['m'], flags['p'])])
                       if MIMO else None),

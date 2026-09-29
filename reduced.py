@@ -636,7 +636,8 @@ class _ReducedCL:
         mv = lambda x: GVh @ self._blkS((GWh @ np.asarray(x, complex).reshape(-1, 1)))[:, 0]
         rmv = lambda y: GWh.conj().T @ self._blkSH((GVh.conj().T @ np.asarray(y, complex).reshape(-1, 1)))[:, 0]
         try:
-            U, s_, Vh = svds(LinearOperator((kd, kd), matvec=mv, rmatvec=rmv, dtype=complex), k=max(1, min(k, kd - 2)), tol=1e-13)
+            U, s_, Vh = svds(LinearOperator((kd, kd), matvec=mv, rmatvec=rmv, dtype=complex), k=max(1, min(k, kd - 2)), tol=1e-13,
+                             v0=np.ones(kd, complex) / np.sqrt(kd))
         except Exception:
             # last resort: the dense path (form the reduced operator, full SVD)
             Sfull = GVh @ self._blkS(GWh @ np.eye(kd, dtype=complex))
@@ -723,7 +724,14 @@ class _ReducedCL:
         ro._nl_count = getattr(ro, '_nl_count', 0) + 1
         shifts = ro._nl_shifts
         tracked = getattr(ro, '_nl_track', None)
-        if (TRACK_EIGS and tracked and ro._nl_count % TRACK_FULL_EVERY != 0 and nd > TRACK_MIN_DIM
+        # MIMO: no tracking (STAGE6 6.4).  Tracking follows the eigenvalues
+        # already near the line and finds newcomers only at the full eig every
+        # TRACK_FULL_EVERY calls; a high-gain branch of a two-loop design went
+        # from Re = -23 to +38 (Im ~ -164) in ONE accepted SQP step, unseen, and
+        # the solve then stalled on an unstable iterate.  The dense eig of the
+        # reduced pencil (dim ~ 170) sees every mode of the basis at every call.
+        _track = TRACK_EIGS and not getattr(self, 'mimo', False)
+        if (_track and tracked and ro._nl_count % TRACK_FULL_EVERY != 0 and nd > TRACK_MIN_DIM
                 and getattr(ro, '_nl_track_dim', None) == nd):
             res_ = self._track_eigs(Acl, Mcl, tracked)
             if res_ is not None:
@@ -731,9 +739,9 @@ class _ReducedCL:
                 keep = lam.real >= -eps - reach
                 ro._nl_track = [(complex(lam[j]), VR[:, j], VL[:, j]) for j in range(len(lam)) if keep[j]]
                 return lam, VL, VR
-        if TRACK_EIGS and nd > TRACK_MIN_DIM and ro._nl_count % TRACK_FULL_EVERY != 0 and not tracked:
+        if _track and nd > TRACK_MIN_DIM and ro._nl_count % TRACK_FULL_EVERY != 0 and not tracked:
             ro._nl_count = 0                                   # force a full eig now
-        if TRACK_EIGS and nd > TRACK_MIN_DIM:
+        if _track and nd > TRACK_MIN_DIM:
             lam, VL, VR = deig(Acl, Mcl, left=True, right=True)
             fin = np.isfinite(lam); lam, VL, VR = lam[fin], VL[:, fin], VR[:, fin]
             keep = lam.real >= -eps - reach

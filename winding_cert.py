@@ -101,9 +101,10 @@ def _plant_tail_constants(A, M):
     As = A.tocsc().astype(complex)
     OP = spla.LinearOperator((n, n), dtype=complex,
                              matvec=lambda x: As.conj().T @ Mlu.solve(Mlu.solve(As @ x), trans='H'))
-    nu = float(np.sqrt(spla.eigsh(OP, k=1, which='LA', tol=1e-12, maxiter=20000,
+    v0 = np.random.default_rng(12345).standard_normal(n)          # fixed start: deterministic runs
+    nu = float(np.sqrt(spla.eigsh(OP, k=1, which='LA', tol=1e-12, maxiter=20000, v0=v0.astype(complex),
                                   return_eigenvectors=False)[0].real))
-    lam_min = float(spla.eigsh(M.tocsc().real, k=1, which='SM',
+    lam_min = float(spla.eigsh(M.tocsc().real, k=1, which='SM', v0=v0,
                                return_eigenvectors=False)[0])
     return nu, lam_min
 

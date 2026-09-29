@@ -82,8 +82,13 @@ def laplace_basis(D, lo, hi, N, pad=0.0):
     # asking for (nearly) every mode of a small mesh is the only dense case.
     if N < len(idx) - 1:
         import scipy.sparse.linalg as _spla
-        lam, V = _spla.eigsh(Ks, k=N, M=Ms, sigma=0.0, which='LM', tol=1e-12)
+        # fixed start vector and sign (2026-09-29, STAGE6 6.8): ARPACK's random
+        # start made the basis -- and through the reduced model's input basis
+        # every field run -- differ from run to run (t at 1e-4 in round 0)
+        v0 = np.random.default_rng(12345).standard_normal(Ks.shape[0])
+        lam, V = _spla.eigsh(Ks, k=N, M=Ms, sigma=0.0, which='LM', tol=1e-12, v0=v0)
         o = np.argsort(lam); lam, V = lam[o], V[:, o]
+        V = V * np.sign(V[np.argmax(np.abs(V), axis=0), np.arange(V.shape[1])])
     else:
         lam, V = eigh(Ks.toarray(), Ms.toarray())
     Phi = np.zeros((len(x), N))

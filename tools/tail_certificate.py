@@ -79,6 +79,7 @@ def main():
     OP = spla.LinearOperator(Ms.shape, dtype=complex, matvec=lambda x: As.conj().T @ Mlu.solve(As @ x))
     Minv = spla.LinearOperator(Ms.shape, dtype=complex, matvec=lambda x: Mlu.solve(x))
     nu = float(np.sqrt(spla.eigsh(OP, k=1, M=Ms, Minv=Minv, which='LA', tol=1e-12, maxiter=20000,
+                                  v0=np.random.default_rng(12345).standard_normal(Ms.shape[0]).astype(complex),
                                   return_eigenvectors=False)[0].real))
     bb = np.asarray(b, complex); cc = np.asarray(c, complex)
     beta = float(np.sqrt(abs(np.vdot(bb, Mlu.solve(bb)))))

@@ -337,6 +337,29 @@ class FECoDesign:
         self._warm_fp = fp                 # reference for the step gate
         return al, lamb, v, u, cl
 
+    def cert_region_mimo(self, Ac, Kfb, b, c, wlo=None, whi=None):
+        """The part of the line Re = -eps the MIMO abscissa certificate sweeps
+        (STAGE6 6.4).  certify_sparse.stability_region brackets the plant's
+        rightmost modes and the compensator poles; with m loops at high gain
+        the closed loop also has HIGH-GAIN branches far from both, near the
+        eigenvalues of D_c C^H M^-1 B (the static part of the loop at infinite
+        frequency; atoms, ne=100: estimate -1.7-144.7i against the true
+        -0.05-156.9i, which the band [-30, 30] missed).  The region is widened
+        to cover each estimate with a margin of |lambda| / 4 + 2.  One sparse
+        solve with the cached LU of M per call; M only as a factorised product."""
+        import certify_sparse as _csp
+        w0, w1, _ = _csp.stability_region(self.A, self.M, Ac)
+        if getattr(self, '_MluC', None) is None:
+            import scipy.sparse.linalg as _spla
+            self._MluC = _spla.splu(self.M.tocsc().astype(complex))
+        G0 = np.asarray(c, complex).conj().T @ self._MluC.solve(np.asarray(b, complex))
+        m_, p_ = G0.shape[1], G0.shape[0]
+        hg = np.linalg.eigvals(np.asarray(Kfb, complex).reshape(m_, p_) @ G0)
+        for l_ in hg:
+            pad = 0.25 * abs(l_) + 2.0
+            w0 = min(w0, l_.imag - pad); w1 = max(w1, l_.imag + pad)
+        return (w0 if wlo is None else wlo), (w1 if whi is None else whi)
+
     def alpha_certified(self, arow, nvec, Kfb, b, c, eps=1e-3,
                         wlo=None, whi=None, eigs_seen=None):
         """Spectral abscissa from the 1-D CERTIFICATE, with eigenvectors.
@@ -361,6 +384,8 @@ class FECoDesign:
         cl = self.cl(b, c)
         Ac = _ctl.A_of(*arow)
         Bc = _ctl.Bc_of(arow, self.r, self.mc)
+        if (wlo is None or whi is None) and np.ndim(b) == 2:
+            wlo, whi = self.cert_region_mimo(Ac, Kfb, b, c, wlo, whi)
         clear, a_seen, ns, unc, wit = _csp.stability_and_abscissa(
             self.A, self.M, b, c, Ac, Bc, nvec, Kfb, eps=eps,
             wlo=wlo, whi=whi, eps_int=self.cert_eps_int,
