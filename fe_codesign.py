@@ -169,6 +169,31 @@ class FECoDesign:
 
     # ---------- build b, c from the active parameterisation ----------
     def bc(self, xa, xs, va=None, vs=None):
+        if np.ndim(xa) >= 1 or np.ndim(xs) >= 1 or isinstance(va, (list, tuple)) or isinstance(vs, (list, tuple)):
+            return self.bc_mimo(xa, xs, va, vs)
+        return self._bc_siso(xa, xs, va, vs)
+
+    def bc_mimo(self, xa, xs, va=None, vs=None):
+        """MIMO (2026-09-29, STAGE6): m actuators, p sensors.  xa (m,), xs (p,)
+        centres; va / vs lists of m / p raw fields (entries None -> the Gaussian
+        at the centre).  Returns B (n x m), C (n x p), PA (n x m), PS (n x p),
+        NA (m,), NS (p,) -- each column the SISO bc() of that port."""
+        xa = np.atleast_1d(np.asarray(xa, float)); xs = np.atleast_1d(np.asarray(xs, float))
+        va = list(va) if va is not None else [None] * len(xa)
+        vs = list(vs) if vs is not None else [None] * len(xs)
+        m, p = max(len(xa), len(va)), max(len(xs), len(vs))
+        cols = []
+        for i in range(max(m, p)):
+            cols.append(self._bc_siso(float(xa[i]) if i < len(xa) else 0.0,
+                                      float(xs[i]) if i < len(xs) else 0.0,
+                                      va[i] if i < len(va) else None,
+                                      vs[i] if i < len(vs) else None))
+        B = np.column_stack([cols[i][0] for i in range(m)]); PA = np.column_stack([cols[i][2] for i in range(m)])
+        C = np.column_stack([cols[j][1] for j in range(p)]); PS = np.column_stack([cols[j][3] for j in range(p)])
+        NA = np.array([cols[i][4] for i in range(m)]); NS = np.array([cols[j][5] for j in range(p)])
+        return B, C, PA, PS, NA, NS
+
+    def _bc_siso(self, xa, xs, va=None, vs=None):
         # profiles are ALWAYS unit-L2 (||psi||_M = 1), whether they come from a
         # Gaussian centre (placement) or an optimised field.  The controller
         # gauge absorbs the scaling, so gamma is invariant; this guarantees B/C
@@ -201,6 +226,12 @@ class FECoDesign:
         return self.M @ pa, self.M @ ps, pa, ps, na, ns
 
     def cl(self, b, c):
+        if np.ndim(b) == 2 or np.ndim(c) == 2:          # MIMO (STAGE6)
+            from closedloop_mimo import ClosedLoopResolventMIMO
+            R = ClosedLoopResolventMIMO(self.M, self.A, b, c, r=self.r, mc=self.mc)
+            R.lu_cache = self._lu_cache
+            R.lu_cache_max = self.lu_cache_max
+            return R
         R = ClosedLoopResolvent(self.M, self.A, b, c, r=self.r, mc=self.mc)
         # S_p(omega) = i*omega*M - A is INDEPENDENT of the design: the
         # controller and the actuator/sensor enter only through the low-rank
@@ -329,7 +360,7 @@ class FECoDesign:
         import controller as _ctl
         cl = self.cl(b, c)
         Ac = _ctl.A_of(*arow)
-        Bc = np.full(self.r, self.mc, complex)
+        Bc = _ctl.Bc_of(arow, self.r, self.mc)
         clear, a_seen, ns, unc, wit = _csp.stability_and_abscissa(
             self.A, self.M, b, c, Ac, Bc, nvec, Kfb, eps=eps,
             wlo=wlo, whi=whi, eps_int=self.cert_eps_int,
@@ -399,15 +430,23 @@ class FECoDesign:
         from scipy.linalg import eig as _deig
         n, r = self.n, self.r
         Ac = _ctl.A_of(*arow)
-        Bc = np.full(r, self.mc, complex)
+        Bc = _ctl.Bc_of(arow, r, self.mc)
         Ad = np.asarray(self.A.todense())
         Md = np.asarray(self.M.todense())
-        nv = np.asarray(nvec, complex).ravel()
         Acl = np.zeros((n + r, n + r), complex)
         Mcl = np.zeros((n + r, n + r), complex)
-        Acl[:n, :n] = Ad + complex(Kfb) * np.outer(b, np.conj(c))
-        Acl[:n, n:] = np.asarray(b).reshape(-1, 1) @ nv.reshape(1, r)
-        Acl[n:, :n] = Bc.reshape(-1, 1) @ np.conj(c).reshape(1, n)
+        if np.ndim(b) == 2 or np.ndim(c) == 2:          # MIMO (STAGE6)
+            B = np.asarray(b, complex).reshape(n, -1); C = np.asarray(c, complex).reshape(n, -1)
+            m, p = B.shape[1], C.shape[1]
+            Cc = np.asarray(nvec, complex).reshape(m, r); Dc = np.asarray(Kfb, complex).reshape(m, p)
+            Acl[:n, :n] = Ad + B @ Dc @ C.conj().T
+            Acl[:n, n:] = B @ Cc
+            Acl[n:, :n] = np.asarray(Bc).reshape(r, p) @ C.conj().T
+        else:
+            nv = np.asarray(nvec, complex).ravel()
+            Acl[:n, :n] = Ad + complex(Kfb) * np.outer(b, np.conj(c))
+            Acl[:n, n:] = np.asarray(b).reshape(-1, 1) @ nv.reshape(1, r)
+            Acl[n:, :n] = Bc.reshape(-1, 1) @ np.conj(c).reshape(1, n)
         Acl[n:, n:] = Ac
         Mcl[:n, :n] = Md
         Mcl[n:, n:] = np.eye(r)
@@ -421,6 +460,8 @@ class FECoDesign:
     # ---------- gradients for every group, from (x, z) or (v, u) ----------
     def grads(self, cl, x, z, arow, nvec, Kfb, xa, xs, pa, ps, na, ns,
               flags, eta=1.0):
+        if getattr(cl, 'm', None) is not None:          # MIMO (STAGE6)
+            return self.grads_mimo(cl, x, z, arow, nvec, Kfb, xa, xs, pa, ps, na, ns, flags, eta)
         n = self.n
         xp, xc = x[:n], x[n:]
         zp, zc = z[:n], z[n:]
@@ -458,6 +499,41 @@ class FECoDesign:
         if flags['FC']:
             Gs = Sc * (self.M @ xp) / eta
             out['vs'] = self._retract(Gs.real, +Gs.imag, ps, ns)
+        return out
+
+    def grads_mimo(self, cl, x, z, arow, nvec, Kfb, xa, xs, pa, ps, na, ns, flags, eta=1.0):
+        """MIMO gradients (STAGE6): the controller entries (d, e, f, B_c, C_c,
+        D_c) from the resolvent, and per port the SISO formulas with the
+        actuator-side scalar act_i and the sensor-side scalar sen_j
+        (ClosedLoopResolventMIMO.port_sides).  xa / xs / va / vs come back as
+        arrays / lists over the ports."""
+        n = self.n
+        xp = x[:n]; zp = z[:n]
+        out = {}
+        res = dict(x=x, z=z)
+        if flags['K']:
+            g = cl.design_grad_tri(res)
+            for k_ in ('d', 'e', 'f', 'Bc', 'n', 'K'):
+                out[k_] = np.asarray(g[k_]) / eta
+        act, sen = cl.port_sides(res, arow, nvec, Kfb)
+        if flags['B']:
+            out['xa'] = np.array([float(np.real(np.vdot(zp, self.M @ self.dpsi_dx(float(xa[i]))) * act[i] / eta))
+                                  for i in range(cl.m)])
+        if flags['C']:
+            out['xs'] = np.array([float(np.real(sen[j] * np.vdot(self.M @ self.dpsi_dx(float(xs[j])), xp) / eta))
+                                  for j in range(cl.p)])
+        if flags['FB']:
+            Mz = self.M @ zp
+            out['va'] = []
+            for i in range(cl.m):
+                Ga = np.conj(Mz) * act[i] / eta
+                out['va'].append(self._retract(Ga.real, -Ga.imag, pa[:, i], na[i]))
+        if flags['FC']:
+            Mx = self.M @ xp
+            out['vs'] = []
+            for j in range(cl.p):
+                Gs = sen[j] * Mx / eta
+                out['vs'].append(self._retract(Gs.real, +Gs.imag, ps[:, j], ns[j]))
         return out
 
     def _retract(self, gR, gI, psi, nv):

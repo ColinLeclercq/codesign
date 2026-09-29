@@ -130,8 +130,8 @@ def continuation_gate(D, pk, z0, z1, watch0, eps, depth=4,
                 print("    continuation: empty watch list -> cannot prove; "
                       "reject", flush=True)
             return False, wa
-        _, nvec_b, K_b, b_b, c_b, Ac_b = _design(zb)
-        Bc = np.full(D.r, D.mc, complex)
+        arow_b, nvec_b, K_b, b_b, c_b, Ac_b = _design(zb)
+        Bc = ctl.Bc_of(arow_b, D.r, D.mc)
         ok, split, wb, worst = csp.continuation_step(
             D.A, D.M, b_b, c_b, Ac_b, Bc, nvec_b, K_b, wa_use, eps=eps,
             motion_frac=motion_frac, motion_floor=motion_floor, pool=pool)
@@ -445,9 +445,9 @@ def solve_epigraph(D, pk, flags, z0, Omega, t0, eps, wall, H0mode='auto',
             gei = np.array([_Gm[i, i + 1] for i in range(_rr - 1)])
             gfi = np.array([_Gm[i + 1, i] for i in range(_rr - 1)])
             try:
-                g_im = np.real(pk.grad(dict(d=gdi, e=gei, f=gfi,
-                                            n=np.zeros(_rr, complex), K=0j,
-                                            xa=0.0, xs=0.0)))
+                _gz = pk.zero_grad() if getattr(pk, 'mimo', False) else dict(n=np.zeros(_rr, complex), K=0j, xa=0.0, xs=0.0)
+                _gz.update(d=gdi, e=gei, f=gfi)
+                g_im = np.real(pk.grad(_gz))
             except Exception:
                 g_im = np.zeros(NZ)
         if _G is not None and flags['K'] \
@@ -455,9 +455,8 @@ def solve_epigraph(D, pk, flags, z0, Omega, t0, eps, wall, H0mode='auto',
             gd = np.array([_G[i, i] for i in range(_rr)])
             ge = np.array([_G[i, i + 1] for i in range(_rr - 1)])
             gf = np.array([_G[i + 1, i] for i in range(_rr - 1)])
-            gc = dict(d=gd.real * 0 + gd, e=ge, f=gf,
-                      n=np.zeros(_rr, complex), K=0j,
-                      xa=0.0, xs=0.0)
+            gc = pk.zero_grad() if getattr(pk, 'mimo', False) else dict(n=np.zeros(_rr, complex), K=0j, xa=0.0, xs=0.0)
+            gc.update(d=gd.real * 0 + gd, e=ge, f=gf)
             try:
                 g_ctrl = np.real(pk.grad(gc))
             except Exception:
@@ -574,7 +573,7 @@ def solve_epigraph(D, pk, flags, z0, Omega, t0, eps, wall, H0mode='auto',
             # instead.  Last row, so no index used elsewhere moves.
             try:
                 import scipy.sparse as _sp
-                _P = cl.P; _Ac = ctl.A_of(*arow); _Bc = np.full(D.r, D.mc, complex)
+                _P = cl.P; _Ac = ctl.A_of(*arow); _Bc = ctl.Bc_of(arow, D.r, D.mc)
                 _sr = lambda w_: cl.gain(float(w_), arow, nvec, K, want_vectors=False)['sigma']
                 _gb, _wb, _, _okb = _reduced_cert(
                     _sp.csc_matrix(_P['At']), _sp.csc_matrix(_P['Mt']), cl.W.conj().T @ b, cl.V.conj().T @ c,
@@ -1229,7 +1228,7 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
     b, c, *_ = D.bc(xa, xs, va, vs)
     cl = D.cl(b, c)
     sig = lambda w: cl.gain(w, arow, nvec, K, want_vectors=False)['sigma']
-    Ac = ctl.A_of(*arow); Bc = np.full(D.r, D.mc, complex)
+    Ac = ctl.A_of(*arow); Bc = ctl.Bc_of(arow, D.r, D.mc)
     # PROVISIONAL rounds return here, BEFORE the full certificate (2026-09-24:
     # placed after it, provisional rounds paid for the full level-set
     # certificate -- its heaviest, most sequential part -- and discarded it)
@@ -1363,6 +1362,71 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
         cands_w.append(float(ws[gs.argmax()]))
         w = max(cands_w, key=lambda x: sig(x))
     return float(g), float(w), bool(ok), peaks
+
+
+def _mimo_setup(a, D, flags, tag):
+    """MIMO start (STAGE6): the design from --mimo-start (or this run's own
+    checkpoint when it is better), the controller order from it, the flags the
+    MIMO packer needs, and the atoms of every port.  Record format (as written
+    by tools/mimo_start.py and by this driver): d, e, f, Bc (r x p), nvec = C_c
+    (m x r), K = D_c (m x p), xa (m), xs (p), va / vs (m / p x n raw fields,
+    or empty), atoms_a_p / atoms_s_p (m / p x 5 n_atoms, or empty), gamma."""
+    import fieldbasis as _fb
+    src = a.mimo_start; g0 = None
+    try:
+        g0 = float(json.load(open(src[:-4] + '.json'))['gamma'])
+    except Exception:
+        try:
+            g0 = float(np.load(src, allow_pickle=True)['gamma'])
+        except Exception:
+            g0 = None
+    ck = tag + '_ckpt.npz'
+    if os.path.exists(ck):
+        try:
+            gck = float(json.load(open(tag + '_ckpt.json'))['gamma'])
+            if g0 is None or gck < g0:
+                print(f"CHECKPOINT found (gamma={gck:.6f}) -- resuming from {ck}", flush=True)
+                src, g0 = ck, gck
+        except Exception:
+            pass
+    z = np.load(src, allow_pickle=True)
+    m, p = int(a.n_act), int(a.n_sens)
+    R = len(np.atleast_1d(z['d']))
+    D.r = R
+    arow0 = (np.asarray(z['d'], complex), np.asarray(z['e'], complex), np.asarray(z['f'], complex),
+             np.asarray(z['Bc'], complex).reshape(R, p))
+    nvec0 = np.asarray(z['nvec'], complex).reshape(m, R)
+    K0 = np.asarray(z['K'], complex).reshape(m, p)
+    xa0 = np.atleast_1d(np.asarray(z['xa'], float)); xs0 = np.atleast_1d(np.asarray(z['xs'], float))
+    def _fields(key, xs_, cnt):
+        v = np.asarray(z[key]) if key in z.files else np.zeros(0)
+        if v.size == cnt * D.n:
+            return [np.asarray(row, complex) for row in v.reshape(cnt, D.n)]
+        return [D.gauss(float(x)) for x in xs_]
+    va0 = _fields('va', xa0, m) if flags.get('FB') else None
+    vs0 = _fields('vs', xs0, p) if flags.get('FC') else None
+    orders = a.loop_orders
+    if orders is None and 'loop_orders' in z.files and np.asarray(z['loop_orders']).size == m:
+        orders = [int(v) for v in np.asarray(z['loop_orders'])]
+    if orders is None:
+        orders = [R // m] * m
+    flags.update(m=m, p=p, struct=a.ctrl_struct, loop_orders=orders)
+    if a.field_atoms:
+        for key, fk, v0_, cnt in (('a', 'FB', va0, m), ('s', 'FC', vs0, p)):
+            if not flags.get(fk):
+                continue
+            P = np.asarray(z[f'atoms_{key}_p']) if f'atoms_{key}_p' in z.files else np.zeros(0)
+            npar = _fb.NATOM_PAR * a.field_atoms
+            if P.size == cnt * npar:
+                p0 = [np.asarray(row, float) for row in P.reshape(cnt, npar)]; how = 'from the record'
+            else:
+                p0 = [_fb.fit_atoms(D.xn, v_, D.M, a.field_atoms, a.atom_smin, a.atom_kmax)[0] for v_ in v0_]
+                how = 'fitted to the start fields'
+            setattr(D, 'atoms_' + key, dict(n=int(a.field_atoms), smin=float(a.atom_smin), kmax=float(a.atom_kmax), p0=p0))
+            print(f"field atoms ({'actuators' if key == 'a' else 'sensors'}): {cnt} x {a.field_atoms} Gabor atoms; {how}",
+                  flush=True)
+    return (arow0, nvec0, K0, xa0, xs0, va0, vs0), g0
+
 
 
 def main():
@@ -1725,6 +1789,15 @@ def main():
                          '0 = the controller must itself be stable '
                          '(safe default); a positive value must be '
                          'seen by the closed-loop check.')
+    ap.add_argument('--n-act', dest='n_act', type=int, default=1,
+                    help='MIMO (STAGE6): number of actuators (with --n-sens > 1 or > 1 itself: the MIMO path)')
+    ap.add_argument('--n-sens', dest='n_sens', type=int, default=1, help='MIMO: number of sensors')
+    ap.add_argument('--ctrl-struct', dest='ctrl_struct', choices=['central', 'decentral'], default='central',
+                    help='MIMO: one m x p compensator (central) or m = p SISO loops, sensor k -> actuator k (decentral)')
+    ap.add_argument('--loop-orders', dest='loop_orders', type=lambda t: [int(v) for v in t.split(',')], default=None,
+                    help='MIMO decentral: the compensator order of each loop (default: equal split of the start record)')
+    ap.add_argument('--mimo-start', dest='mimo_start', default=None,
+                    help='MIMO: the start record (tools/mimo_start.py or a previous MIMO record)')
     ap.add_argument('--cont-track', dest='cont_track', choices=['full', 'reduced'], default='full',
                     help='continuation gate: eigenvalues tracked on the full model (shift-invert per watched '
                          'eigenvalue, line certificate at every homotopy midpoint) or on the reduced pencil with '
@@ -1888,7 +1961,14 @@ def main():
         # Re <= -eps everywhere: the gate's allowance and every consumer of ctrl_max
         a.ctrl_max = min(float(a.ctrl_max), -float(a.eps))
     os.makedirs(a.outdir, exist_ok=True)
-    tag = os.path.join(a.outdir, f"{a.case.replace('+','_')}_s{a.start}_ne{a.ne}")
+    MIMO = (a.n_act > 1 or a.n_sens > 1)
+    if MIMO:
+        if a.resume:
+            raise SystemExit("MIMO: start from --mimo-start (a MIMO record), not --resume")
+        if not a.mimo_start:
+            raise SystemExit("MIMO: --mimo-start REC is required (tools/mimo_start.py builds one from a SISO record)")
+    tag = os.path.join(a.outdir, f"{a.case.replace('+','_')}_s{a.start}_ne{a.ne}"
+                       + (f"_mimo{a.n_act}x{a.n_sens}_{a.ctrl_struct}" if MIMO else ''))
     t_start = time.time()
 
     # The controller order is set by the SEED CATALOGUE (the common order from
@@ -1956,7 +2036,7 @@ def main():
     # checkpoint goes through the same resume path and the same anchor
     # verification (line sweep + dense at GL) as any other start.
     _ck = tag + '_ckpt.npz'
-    if os.path.exists(_ck):
+    if os.path.exists(_ck) and not MIMO:
         try:
             _ckg = float(json.load(open(tag + '_ckpt.json'))['gamma'])
         except Exception:
@@ -2202,7 +2282,16 @@ def main():
             setattr(D, 'atoms_' + key, dict(n=int(a.field_atoms), smin=float(a.atom_smin), kmax=float(a.atom_kmax), p0=p0))
             print(f"field atoms ({'actuator' if key == 'a' else 'sensor'}): {a.field_atoms} Gabor atoms, width >= {a.atom_smin}, "
                   f"|wavenumber| <= {a.atom_kmax}; {how}", flush=True)
-    pk = Packer(D, flags, *pk_args)
+    if MIMO:
+        pk_args, _mimo_g0 = _mimo_setup(a, D, flags, tag)
+        from packer import PackerMIMO
+        pk = PackerMIMO(D, flags, *pk_args)
+        print(f"MIMO: {flags['m']} actuators, {flags['p']} sensors, {flags['struct']} compensator of order {D.r}"
+              + (f" (loops {flags['loop_orders']})" if flags['struct'] == 'decentral' else '')
+              + f"; {pk.nth} free complex controller entries; start {a.mimo_start}"
+              + (f" (record gamma {_mimo_g0:.6f})" if _mimo_g0 is not None else ''), flush=True)
+    else:
+        pk = Packer(D, flags, *pk_args)
     z = pk.z0()
     _stab_rec = None
     if a.stabilise:
@@ -2262,6 +2351,8 @@ def main():
         D.cert_pool = _pool if nseg > 1 else None
         D.cert_nseg = nseg
         try:
+            if MIMO:
+                raise NotImplementedError('MIMO: the worker pool builds SISO packers (the SQP path does not use it)')
             from parallel import ParallelOracle
             _par = ParallelOracle(a.ne, a.r, a.sob_len, a.case, pk_args,
                                   nproc=a.nproc,
@@ -2560,7 +2651,7 @@ def main():
 
         def _ac_cached(arow_, nvec_, K_, b_, c_, eps=1e-3, eigs_seen=None, **kw):   # same default as fe_codesign
             key = (tuple(np.round(np.concatenate([np.asarray(v, complex).ravel() for v in arow_]), 14)),
-                   tuple(np.round(np.asarray(nvec_, complex).ravel(), 14)), complex(np.round(complex(K_), 14)),
+                   tuple(np.round(np.asarray(nvec_, complex).ravel(), 14)), tuple(np.round(np.asarray(K_, complex).ravel(), 14)),
                    hash(np.round(np.asarray(b_, complex), 14).tobytes()),
                    hash(np.round(np.asarray(c_, complex), 14).tobytes()), eps, tuple(sorted(kw.items())))
             if key in _ac_memo:
@@ -2628,10 +2719,11 @@ def main():
             w_ = round(float(w_), 6)
             prev = _anchored.get(w_)
             # re-anchor when the fields moved (Woodbury columns refresh)
-            if prev is not None and abs(prev[0] - xa_) < 1e-9 and abs(prev[1] - xs_) < 1e-9:
+            if prev is not None and np.all(np.abs(np.asarray(prev[0]) - xa_) < 1e-9) \
+                    and np.all(np.abs(np.asarray(prev[1]) - xs_) < 1e-9):
                 continue
             _ro.enrich(clf, w_, aa_, nn_, KK_, nvec_dirs=a.oracle_nvec)
-            _anchored[w_] = (float(xa_), float(xs_)); nadd += 1
+            _anchored[w_] = (np.array(xa_, float), np.array(xs_, float)); nadd += 1
         if nadd:
             print(f"    oracle: +{nadd} anchor(s) ({why}) -> dim {_ro.dim}", flush=True)
         return nadd
@@ -2702,7 +2794,7 @@ def main():
                 _ro.compact(D.cl(_bb_, _cc_), _keep, _aa_, _nn_, _KK_, lams=_lams_c, nvec_dirs=a.oracle_nvec)
                 _anchored.clear()
                 for w_ in _keep:
-                    _anchored[w_] = (float(_xa_), float(_xs_))
+                    _anchored[w_] = (np.array(_xa_, float), np.array(_xs_, float))
                 _nlu += len(_keep) + len(_lams_c)
                 print(f"    oracle: basis compacted {_old} -> {_ro.dim}", flush=True)
                 _sweep_anchor(zbest)
@@ -3065,7 +3157,7 @@ def main():
                     _skip = csp.stability_region(D.A, D.M, ctl.A_of(*aa))[:2]
                 okr, why, nsr = csp.stability_gate(
                     D.A, D.M, bb, cc, ctl.A_of(*aa),
-                    np.full(D.r, D.mc, complex), nn, KK, eps=a.eps,
+                    ctl.Bc_of(aa, D.r, D.mc), nn, KK, eps=a.eps,
                     shrink=a.cert_shrink, wlo=a.wlo, whi=a.whi,
                     ctrl_max=a.ctrl_max, skip=_skip)
                 # BOTH must hold.  The certificate can only CONFIRM
@@ -3247,7 +3339,7 @@ def main():
                     if a.rect_cert:
                         try:
                             _okr_p, _, _ = csp.stability_gate(D.A, D.M, _bb_p, _cc_p, ctl.A_of(*_aa_p),
-                                                              np.full(D.r, D.mc, complex), _nn_p, _KK_p, eps=a.eps,
+                                                              ctl.Bc_of(_aa_p, D.r, D.mc), _nn_p, _KK_p, eps=a.eps,
                                                               shrink=a.cert_shrink, wlo=a.wlo, whi=a.whi,
                                                               ctrl_max=a.ctrl_max)
                         except Exception:
@@ -3292,6 +3384,7 @@ def main():
                 _apa, _aps = pk.atom_params(zbest)
                 np.savez(tag + '_ckpt.npz', d=aa[0], e=aa[1], f=aa[2],
                          nvec=nn, K=KK, xa=xa_, xs=xs_,
+                         **(dict(Bc=np.asarray(aa[3]), loop_orders=np.array(flags['loop_orders'])) if MIMO else {}),
                          atoms_a_p=(_apa if _apa is not None else np.zeros(0)),
                          atoms_s_p=(_aps if _aps is not None else np.zeros(0)),
                          va=(va_ if va_ is not None else np.zeros(0)),
@@ -3457,8 +3550,9 @@ def main():
         if a.field_basis != 'none' or a.field_atoms:       # STAGE5 32: the fields' shape, every round
             try:
                 _fv = pk.unpack(zbest)[5:7]
+                _fv = [v_ for grp in _fv if grp is not None for v_ in (grp if isinstance(grp, list) else [grp])]
                 _rk = [float(np.sqrt(np.real(np.vdot(v, D.Kstiff @ v)) / np.real(np.vdot(v, D.M @ v))))
-                       for v in _fv if v is not None]
+                       for v in _fv]
                 print("    fields (best): RMS wavenumber " + ", ".join(f"{x:.4f}" for x in _rk)
                       + (f" (bound {a.field_kmax:g}, order {a.field_order})" if a.field_kmax else ''), flush=True)
             except Exception as _e:
@@ -3677,7 +3771,7 @@ def main():
         try:
             _okf, why_final, _ = csp.stability_gate(
                 D.A, D.M, b, c, ctl.A_of(*arow),
-                np.full(D.r, D.mc, complex), nvec, K, eps=a.eps,
+                ctl.Bc_of(arow, D.r, D.mc), nvec, K, eps=a.eps,
                 shrink=a.cert_shrink, wlo=a.wlo, whi=a.whi,
                 ctrl_max=a.ctrl_max)
         except Exception:
@@ -3786,8 +3880,11 @@ def main():
     gain = np.array([_clg.gain(w, arow, nvec, K, want_vectors=False)['sigma']
                      for w in ws])
     gam = max(gam, gbest)
-    xia = D.smooth_unmap(va) if va is not None else np.zeros(0)
-    xis = D.smooth_unmap(vs) if vs is not None else np.zeros(0)
+    if MIMO:          # per-port fields; the pre-Sobolev coordinates are a SISO-resume device only
+        xia = xis = np.zeros(0)
+    else:
+        xia = D.smooth_unmap(va) if va is not None else np.zeros(0)
+        xis = D.smooth_unmap(vs) if vs is not None else np.zeros(0)
     prev = None
     if os.path.exists(tag + '.npz'):
         try:
@@ -3805,7 +3902,10 @@ def main():
             # acceptable there only because the run that wrote it enforced
             # the continuation gate.
             prev_ok = False
-            if a.dense_check and (D.n + D.r) <= a.dense_nmax:
+            if MIMO:
+                prev_ok = ('alpha_dense' in pz.files and np.isfinite(float(pz['alpha_dense']))
+                           and float(pz['alpha_dense']) + a.eps <= 0.0)
+            elif a.dense_check and (D.n + D.r) <= a.dense_nmax:
                 import warmstart as _ws
                 prev_ok = _ws.is_stable(D, tag + '.npz', eps=a.eps,
                                         dense=True)
@@ -3835,6 +3935,8 @@ def main():
              va=(va if va is not None else np.zeros(0)),
              vs=(vs if vs is not None else np.zeros(0)),
              psi_a=pa, psi_s=ps, gamma=gam, alpha=al,
+             **(dict(Bc=np.asarray(arow[3]), loop_orders=np.array(flags['loop_orders']), m=int(flags['m']),
+                     p=int(flags['p']), struct=flags['struct']) if MIMO else {}),
              alpha_dense=(al_d if al_d is not None else np.nan),
              n_active=nact,
              omega_grid=ws, gain=gain, gain_model=_gain_model, active_freqs=np.array(sorted(Omega)))
@@ -3888,8 +3990,13 @@ def main():
                 exchange_converged=bool(exch_converged),
                 exchange_fixed_point=bool(exch_fixed_point), exchange_progress_stop=bool(exch_progress_stop),
                 exchange_stalled=bool(exch_stalled),
-                ladder=[], xa=float(xa), xs=float(xs),
-                norm_psi_a=D.norm_M(pa), norm_psi_s=D.norm_M(ps),
+                ladder=[], xa=(np.atleast_1d(xa).astype(float).tolist() if MIMO else float(xa)),
+                xs=(np.atleast_1d(xs).astype(float).tolist() if MIMO else float(xs)),
+                norm_psi_a=([D.norm_M(pa[:, j]) for j in range(pa.shape[1])] if MIMO else D.norm_M(pa)),
+                norm_psi_s=([D.norm_M(ps[:, j]) for j in range(ps.shape[1])] if MIMO else D.norm_M(ps)),
+                mimo=(dict(m=int(flags['m']), p=int(flags['p']), struct=flags['struct'], loop_orders=list(flags['loop_orders']),
+                           start=a.mimo_start, D_c=[[str(v) for v in row] for row in np.asarray(K).reshape(flags['m'], flags['p'])])
+                      if MIMO else None),
                 eps_stab=a.eps, sob_len=a.sob_len, parent=a.parent,
                 parent_gamma=None, spike_suspect=bool(al > -0.01),
                 gain_peak_over_median=float(gain.max() /

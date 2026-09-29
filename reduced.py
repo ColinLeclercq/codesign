@@ -66,6 +66,24 @@ class _ProxyCL:
         return self._r.design_grad(self._reduce(res))
 
 
+class _ProxyCLMIMO(_ProxyCL):
+    """MIMO proxy (STAGE6): D.grads_mimo needs m, p, the controller gradient
+    of the REDUCED loop (x, z reduced as for SISO) and the port-side vectors,
+    computed here with the FULL-length B, C and the lifted x, z."""
+    def __init__(self, b, c, rcl, V, W, n):
+        super().__init__(b, c, rcl, V, W, n)
+        self.m, self.p = rcl.m, rcl.p
+    def port_sides(self, res, arow, nvec, K):
+        n, r, m, p = self._n, self._r.r, self.m, self.p
+        x, z = res['x'], res['z']
+        xp, xc, zp, zc = x[:n], x[n:], z[:n], z[n:]
+        Cc = np.asarray(nvec, complex).reshape(m, r); Dc = np.asarray(K, complex).reshape(m, p)
+        zB = np.conj(self.b.conj().T @ zp)
+        act = Dc @ (self.c.conj().T @ xp) + Cc @ xc
+        sen = zB @ Dc + np.conj(zc) @ self._r.Bc_of(arow)
+        return act, sen
+
+
 class ReducedOracle:
     def __init__(self, D):
         self.D = D
@@ -254,6 +272,12 @@ class ReducedOracle:
         """The reduced closed loop for a design's fields: the frozen class on
         the k x k plant.  Its 'factorisations' are k x k dense; not counted."""
         P = self._proj
+        if np.ndim(b) == 2 or np.ndim(c) == 2:                     # MIMO (STAGE6)
+            from closedloop_mimo import ClosedLoopResolventMIMO, as_ports
+            B, C = as_ports(b, c)
+            rcl = ClosedLoopResolventMIMO(sp.csc_matrix(P['Mt']), sp.csc_matrix(P['At']),
+                                          self.W.conj().T @ B, self.V.conj().T @ C, r, mc=mc)
+            return _ReducedCL(self, rcl, B, C)
         rcl = ClosedLoop(sp.csc_matrix(P['Mt']), sp.csc_matrix(P['At']),
                          self.W.conj().T @ b, self.V.conj().T @ c, r, mc=mc)
         return _ReducedCL(self, rcl, b, c)
@@ -307,8 +331,13 @@ class _ReducedCL:
         # this object is alive (a 16-dim projection was read through a 12-dim
         # closed loop once), and a per-design object must stay consistent
         self.V, self.W, self.P, self.n, self.M = ro.V, ro.W, dict(ro._proj), ro.n, ro.M
-        self.b, self.c = np.asarray(b, complex).ravel(), np.asarray(c, complex).ravel()
-        self.proxy = _ProxyCL(self.b, self.c, rcl, self.V, self.W, self.n)
+        self.mimo = getattr(rcl, 'm', None) is not None
+        if self.mimo:
+            self.b, self.c = np.asarray(b, complex), np.asarray(c, complex)
+            self.proxy = _ProxyCLMIMO(self.b, self.c, rcl, self.V, self.W, self.n)
+        else:
+            self.b, self.c = np.asarray(b, complex).ravel(), np.asarray(c, complex).ravel()
+            self.proxy = _ProxyCL(self.b, self.c, rcl, self.V, self.W, self.n)
         self.ncalls = 0
 
     def gain_k(self, omega, arow, nvec, K, k=2, want_vectors=True):
@@ -460,6 +489,8 @@ class _ReducedCL:
         om = np.asarray(omegas, float); m = len(om); wv = np.asarray(want_vectors, bool)
         if m == 0:
             return []
+        if self.mimo:                    # MIMO (STAGE6): the per-row path (batched rank-(m+p) coupling not built)
+            return [self.gain(float(om[i]), arow, nvec, K, want_vectors=bool(wv[i])) for i in range(m)]
         P = self.P; GVh, GWh = P['GV_h'], P['GW_h']; kd = GVh.shape[0]
         GVhH, GWhH = np.conj(GVh.T), np.conj(GWh.T)
         bs = self._batch_setup(om, arow, nvec, K)
@@ -537,6 +568,10 @@ class _ReducedCL:
         once for all columns (triangular, QZ form)."""
         st = self.rcl._st; kd = X.shape[0]
         Tp = st['lu'].solve(X)
+        if self.mimo:
+            rc = self.rcl
+            Vt = rc._Vmat(np.vstack([Tp, np.zeros((rc.r, Tp.shape[1]), complex)]))
+            return Tp - st['Y'][:kd] @ np.linalg.solve(st['G'], Vt)
         if not hasattr(self, '_cconj'):
             self._cconj = np.conj(self.rcl.c); self._bconj = np.conj(self.rcl.b)
         cHq = self._cconj @ Tp                             # c~^H Tp  (row)
@@ -546,6 +581,10 @@ class _ReducedCL:
     def _blkSH(self, X):
         st = self.rcl._st; kd = X.shape[0]
         Tp = st['lu'].solve(X, trans='H')
+        if self.mimo:
+            rc = self.rcl
+            Ub = np.vstack([rc.b.conj().T @ Tp, np.zeros((rc.p, Tp.shape[1]), complex)])
+            return Tp - st['Z'][:kd] @ np.linalg.solve(st['G'].conj().T, Ub)
         if not hasattr(self, '_bconj'):
             self._cconj = np.conj(self.rcl.c); self._bconj = np.conj(self.rcl.b)
         Ub = np.vstack([self._bconj @ Tp, np.zeros(X.shape[1], complex)])
@@ -613,17 +652,21 @@ class _ReducedCL:
         import controller as ctl
         P, V, W, n = self.P, self.V, self.W, self.n
         kd = V.shape[1]; r = len(np.asarray(arow[0]))
-        Ac = ctl.A_of(*arow); Bc = np.full(r, mc, complex)
-        nv = np.asarray(nvec, complex).ravel()
-        bt = W.conj().T @ self.b; ct = V.conj().T @ self.c
-        Acl = np.zeros((kd + r, kd + r), complex); Mcl = np.zeros_like(Acl)
-        Acl[:kd, :kd] = P['At'] + complex(K) * np.outer(bt, np.conj(ct))
-        Acl[:kd, kd:] = np.outer(bt, nv); Acl[kd:, :kd] = np.outer(Bc, np.conj(ct)); Acl[kd:, kd:] = Ac
-        Mcl[:kd, :kd] = P['Mt']; Mcl[kd:, kd:] = np.eye(r)
-        # the rank-2 controller coupling, EXACTLY: A_cl - blkdiag(At, Ac) = U V^H
-        Uc = np.zeros((kd + r, 2), complex); Uc[:kd, 0] = bt; Uc[kd:, 1] = Bc
-        Vc = np.zeros((kd + r, 2), complex); Vc[:kd, 0] = np.conj(complex(K)) * ct; Vc[kd:, 0] = np.conj(nv); Vc[:kd, 1] = ct
-        self._cpl = (Uc, Vc)
+        if self.mimo:
+            Acl, Mcl, Uc, Vc = self._reduced_pencil_mimo(arow, nvec, K, mc)
+            self._cpl = (Uc, Vc)
+        else:
+            Ac = ctl.A_of(*arow); Bc = np.full(r, mc, complex)
+            nv = np.asarray(nvec, complex).ravel()
+            bt = W.conj().T @ self.b; ct = V.conj().T @ self.c
+            Acl = np.zeros((kd + r, kd + r), complex); Mcl = np.zeros_like(Acl)
+            Acl[:kd, :kd] = P['At'] + complex(K) * np.outer(bt, np.conj(ct))
+            Acl[:kd, kd:] = np.outer(bt, nv); Acl[kd:, :kd] = np.outer(Bc, np.conj(ct)); Acl[kd:, kd:] = Ac
+            Mcl[:kd, :kd] = P['Mt']; Mcl[kd:, kd:] = np.eye(r)
+            # the rank-2 controller coupling, EXACTLY: A_cl - blkdiag(At, Ac) = U V^H
+            Uc = np.zeros((kd + r, 2), complex); Uc[:kd, 0] = bt; Uc[kd:, 1] = Bc
+            Vc = np.zeros((kd + r, 2), complex); Vc[:kd, 0] = np.conj(complex(K)) * ct; Vc[kd:, 0] = np.conj(nv); Vc[:kd, 1] = ct
+            self._cpl = (Uc, Vc)
         lam, VL, VR = self._near_line_eigs(Acl, Mcl, eps, reach, kmax)
         out = []
         for j in np.argsort(-lam.real):
@@ -637,6 +680,26 @@ class _ReducedCL:
             ul = np.concatenate([W @ VL[:kd, j], VL[kd:, j]])
             out.append(dict(lam=complex(lam[j]), v=vr, u=ul, eta=np.vdot(ul, Mv), res=float(res)))
         return out
+
+    def _reduced_pencil_mimo(self, arow, nvec, K, mc):
+        """The reduced closed-loop pencil (A_cl, M_cl) and its exact controller
+        coupling A_cl - blkdiag(At, A_c) = Uc Vc^H, MIMO (STAGE6):
+            Uc = [[B~, 0], [0, B_c]],   Vc = [[C~ D_c^H, C~], [C_c^H, 0]]."""
+        import controller as ctl
+        P, V, W = self.P, self.V, self.W
+        kd = V.shape[1]; r = len(np.asarray(arow[0]))
+        rc = self.rcl; m, p = rc.m, rc.p
+        Ac = ctl.A_of(*arow); Bc = rc.Bc_of(arow)
+        Cc = np.asarray(nvec, complex).reshape(m, r); Dc = np.asarray(K, complex).reshape(m, p)
+        Bt = W.conj().T @ self.b; Ct = V.conj().T @ self.c
+        Acl = np.zeros((kd + r, kd + r), complex); Mcl = np.zeros_like(Acl)
+        Acl[:kd, :kd] = P['At'] + Bt @ Dc @ Ct.conj().T
+        Acl[:kd, kd:] = Bt @ Cc; Acl[kd:, :kd] = Bc @ Ct.conj().T; Acl[kd:, kd:] = Ac
+        Mcl[:kd, :kd] = P['Mt']; Mcl[kd:, kd:] = np.eye(r)
+        Uc = np.zeros((kd + r, m + p), complex); Uc[:kd, :m] = Bt; Uc[kd:, m:] = Bc
+        Vc = np.zeros((kd + r, m + p), complex); Vc[:kd, :m] = Ct @ Dc.conj().T; Vc[kd:, :m] = Cc.conj().T
+        Vc[:kd, m:] = Ct
+        return Acl, Mcl, Uc, Vc
 
     def _near_line_eigs(self, Acl, Mcl, eps, reach, kmax, full_every=1):
         # full_every = 1: the shift-invert path is OFF (2026-09-23).  Its left
@@ -791,15 +854,18 @@ class _ReducedCL:
         import controller as ctl
         P, V, W, n = self.P, self.V, self.W, self.n
         kd = V.shape[1]; r = len(np.asarray(arow[0]))
-        Ac = ctl.A_of(*arow); Bc = np.full(r, mc, complex)
-        nv = np.asarray(nvec, complex).ravel()
-        bt = W.conj().T @ self.b; ct = V.conj().T @ self.c
-        Acl = np.zeros((kd + r, kd + r), complex); Mcl = np.zeros_like(Acl)
-        Acl[:kd, :kd] = P['At'] + complex(K) * np.outer(bt, np.conj(ct))
-        Acl[:kd, kd:] = np.outer(bt, nv)
-        Acl[kd:, :kd] = np.outer(Bc, np.conj(ct))
-        Acl[kd:, kd:] = Ac
-        Mcl[:kd, :kd] = P['Mt']; Mcl[kd:, kd:] = np.eye(r)
+        if self.mimo:
+            Acl, Mcl, _, _ = self._reduced_pencil_mimo(arow, nvec, K, mc)
+        else:
+            Ac = ctl.A_of(*arow); Bc = np.full(r, mc, complex)
+            nv = np.asarray(nvec, complex).ravel()
+            bt = W.conj().T @ self.b; ct = V.conj().T @ self.c
+            Acl = np.zeros((kd + r, kd + r), complex); Mcl = np.zeros_like(Acl)
+            Acl[:kd, :kd] = P['At'] + complex(K) * np.outer(bt, np.conj(ct))
+            Acl[:kd, kd:] = np.outer(bt, nv)
+            Acl[kd:, :kd] = np.outer(Bc, np.conj(ct))
+            Acl[kd:, kd:] = Ac
+            Mcl[:kd, :kd] = P['Mt']; Mcl[kd:, kd:] = np.eye(r)
         lam, VL, VR = deig(Acl, Mcl, left=True, right=True)
         fin = np.isfinite(lam); lam, VL, VR = lam[fin], VL[:, fin], VR[:, fin]
         order = np.argsort(-lam.real)

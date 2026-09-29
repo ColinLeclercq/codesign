@@ -203,6 +203,56 @@ class _F:
         return f, fp, k, G
 
 
+class _FM:
+    """MIMO (2026-09-29, STAGE6): f(s) = det(I_m - K(s) G(s)) and f'(s),
+        G(s) = C^H (s M - A)^-1 B  (p x m),   K(s) = D_c + C_c (s I - A_c)^-1 B_c  (m x p),
+    det(s M_cl - A_cl) = det(s M - A) det(s I - A_c) f(s) (Schur complements).
+    ctrl_exact: g(s) = det(s I - A_c) f(s) = det([[s I - A_c, -B_c G], [-C_c, I - D_c G]])
+    -- an (r + m) x (r + m) determinant with no poles at the compensator's
+    eigenvalues; g'/g = tr(Blk^-1 Blk').  One sparse LU and 2m solves per point."""
+    def __init__(self, A, M, B, C, arow, nvec, K, mc=1.0):
+        self.A, self.M = A.tocsc(), M.tocsc()
+        B = np.asarray(B, complex); C = np.asarray(C, complex)
+        self.b = B[:, None] if B.ndim == 1 else B
+        self.ch = (C[:, None] if C.ndim == 1 else C).conj().T          # p x n
+        self.m, self.p = self.b.shape[1], self.ch.shape[0]
+        self.Ac = np.asarray(ctl.A_of(*arow), complex)
+        self.r = self.Ac.shape[0]
+        self.Bc = np.asarray(ctl.Bc_of(arow, self.r, mc), complex).reshape(self.r, self.p)
+        self.nv = np.asarray(nvec, complex).reshape(self.m, self.r)     # C_c
+        self.K = np.asarray(K, complex).reshape(self.m, self.p)         # D_c
+        self.nsolve = 0
+
+    def __call__(self, s):
+        lu = spla.splu((s * self.M - self.A).tocsc())
+        X = lu.solve(self.b)                        # S^-1 B
+        Y = lu.solve(np.asarray(self.M @ X))        # S^-1 M S^-1 B
+        self.nsolve += 2 * self.m
+        G = self.ch @ X                             # p x m
+        Gp = -self.ch @ Y
+        r, m = self.r, self.m
+        if getattr(self, 'ctrl_exact', False) and r:
+            Blk = np.zeros((r + m, r + m), complex); dBlk = np.zeros_like(Blk)
+            Blk[:r, :r] = s * np.eye(r) - self.Ac; Blk[:r, r:] = -self.Bc @ G
+            Blk[r:, :r] = -self.nv;                 Blk[r:, r:] = np.eye(m) - self.K @ G
+            dBlk[:r, :r] = np.eye(r);               dBlk[:r, r:] = -self.Bc @ Gp
+            dBlk[r:, r:] = -self.K @ Gp
+            g = np.linalg.det(Blk)
+            gp = g * np.trace(np.linalg.solve(Blk, dBlk))
+            return g, gp, None, G
+        if r:
+            Sc = s * np.eye(r) - self.Ac
+            W = np.linalg.solve(Sc, self.Bc)
+            Ks = self.K + self.nv @ W
+            Kp = -self.nv @ np.linalg.solve(Sc, W)
+        else:
+            Ks, Kp = self.K, np.zeros_like(self.K)
+        X_ = np.eye(m) - Ks @ G
+        f = np.linalg.det(X_)
+        fp = f * np.trace(np.linalg.solve(X_, -(Kp @ G + Ks @ Gp)))
+        return f, fp, Ks, G
+
+
 def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
                   mc=1.0, p_plant=None, tail=None, hot=None, zeros_hint=None,
                   hmin_frac=1e-6, maxpts=20000, verbose=False, ctrl_exact=False):
@@ -223,7 +273,8 @@ def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
     floor (f passes too close to zero -- an eigenvalue essentially ON the
     line) and the count must not be trusted; the caller should move the line.
     """
-    F = _F(A, M, b, c, arow, nvec, K, mc=mc)
+    mimo = np.ndim(b) == 2 or np.ndim(c) == 2
+    F = (_FM if mimo else _F)(A, M, b, c, arow, nvec, K, mc=mc)
     pol = np.linalg.eigvals(F.Ac) if F.r else np.zeros(0)
     p_ctrl = int(np.count_nonzero(pol.real > line))
     # CTRL_EXACT (2026-09-26, STAGE5 30): track g = det(sI - A_c) f instead of
@@ -237,7 +288,8 @@ def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
     if ctrl_exact:
         F.ctrl_exact = True
         F.lam_c = pol
-        F.lam_c2 = np.linalg.eigvals(F.Ac - np.outer(F.Bc, F.nv))
+        if not mimo:
+            F.lam_c2 = np.linalg.eigvals(F.Ac - np.outer(F.Bc, F.nv))
     if p_plant is None or hot is None:
         p_plant2, hot2 = plant_pole_data(A, M, line)
         p_plant = p_plant2 if p_plant is None else p_plant
@@ -250,7 +302,11 @@ def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
         if abs(z.real - line) < 0.6:
             hot.append((float(z.imag), max(1e-6, float(abs(z.real - line)))))
     nu, lam_min = tail if tail is not None else plant_tail_constants(A, M)
-    nrm_bc = float(np.linalg.norm(F.b)) * float(np.linalg.norm(F.ch))
+    nrm_bc = float(np.linalg.norm(F.b, 2 if mimo else None)) * float(np.linalg.norm(F.ch, 2 if mimo else None))
+    # tail: |det(I - K G) - ...|: with ||K G||_2 <= q every eigenvalue mu of K G has
+    # |mu| <= q, arg det = sum arg(1 - mu_i) stays within m arcsin(q) -- no winding
+    # for m arcsin(q) < pi/2; SISO keeps q = 1/2 (m = 1), MIMO uses q = 1/(2m)
+    q_tail = 0.5 / (F.m if mimo else 1)
 
     def h_hot(w):
         # mandatory resolution near known poles of f and hinted zeros: within
@@ -270,6 +326,13 @@ def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
         # the resolvent bounded by 1/(|s| - ||A_c||) (Neumann; 2026-09-26: was
         # 1/(distance to the poles), which holds only for NORMAL A_c -- the
         # tridiagonal compensator is not, ||A_c|| = 66 against |Im poles| <= 17)
+        if mimo:
+            kD = float(np.linalg.norm(F.K, 2))
+            if F.r and np.any(F.nv):
+                if w <= a_c:
+                    return np.inf
+                return kD + float(np.linalg.norm(F.nv, 2)) * float(np.linalg.norm(F.Bc, 2)) / (w - a_c)
+            return kD
         if F.r and np.any(F.nv):
             if w <= a_c:
                 return np.inf
@@ -282,7 +345,7 @@ def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
             return False
         gb = nrm_bc / (lam_min * (s_abs - nu))
         km = kmax_at(w)
-        return np.isfinite(km) and km * gb < 0.5
+        return np.isfinite(km) and km * gb < q_tail
 
     # find the tail truncation W_T: start from w0, double until certified
     WT = max(w0, 1.0)
@@ -323,7 +386,11 @@ def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
     f, fp, *_ = F(s_of(w))
     args = [np.angle(f)]
     total = 0.0
-    hmin = hmin_frac * WT
+    # step floor: relative to the truncation W_T (SISO, unchanged); MIMO caps the
+    # reference at 4000 -- a high static gain (abs(D_c) ~ 5e3 with the atom fields)
+    # pushes W_T to ~1e5 and a floor of 0.1 in w cannot resolve the plant's
+    # near-line poles (INCONCLUSIVE with the right count, 2026-09-29)
+    hmin = hmin_frac * (min(WT, 4000.0) if mimo else WT)
     npts = 1
     ok = True
     h = max(hmin, 0.35 * abs(f) / max(abs(fp), 1e-300))

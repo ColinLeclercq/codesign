@@ -200,6 +200,13 @@ class Packer:
             out += [gx.real] if self.f.get('real_fc') else [gx.real, gx.imag]
         return np.concatenate(out)
 
+    def zero_grad(self):
+        """The gradient dict with every entry zero (rows that touch only some groups)."""
+        r, n = self.D.r, self.D.n
+        return dict(d=np.zeros(r, complex), e=np.zeros(max(r - 1, 0), complex), f=np.zeros(max(r - 1, 0), complex),
+                    n=np.zeros(r, complex), K=0j, xa=0.0, xs=0.0,
+                    va=np.zeros(n, complex), vs=np.zeros(n, complex))
+
     def atom_params(self, z):
         """The atom parameter vectors (FB, FC) inside z, or (None, None)."""
         import fieldbasis as _fb
@@ -211,3 +218,196 @@ class Packer:
         z = np.asarray(z, float); i0 = len(z) - m_a - m_s          # the field blocks are last
         return (z[i0:i0 + m_a] if m_a else None), (z[i0 + m_a:] if m_s else None)
 
+
+
+class PackerMIMO:
+    """MIMO design vector (2026-09-29, STAGE6): m actuators, p sensors.
+
+    Physical design: arow = (d, e, f, B_c) (A_c tridiagonal r x r, B_c r x p),
+    nvec = C_c (m x r), K = D_c (m x p), xa (m,), xs (p,), va / vs lists of m / p
+    fields (or None).  flags: 'm', 'p', 'struct' in {'central', 'decentral'},
+    'loop_orders' (decentral: the order of each loop, summing to r), the SISO
+    keys K / ctrl_mode / B / C / FB / FC.
+
+    Controller entries are free under a mask:
+      central    -- every entry of d, e, f, B_c, C_c, D_c;
+      decentral  -- loop k (sensor k -> its own compensator block -> actuator k,
+                    m = p): its tridiagonal block (e, f zero across blocks), its
+                    row of C_c on its block, D_c[k, k]; B_c FIXED to the SISO
+                    gauge mc * ones on each block (as the SISO code fixes it);
+      ctrl_mode 'sp': D_c fixed 0;  'gain' (static): only D_c free (masked as above).
+    Scales per complex entry: max(|theta0|, a floor per group -- 0.1 x the median
+    nonzero magnitude of the group, at least 1e-3 x its max (the SISO rule) --)
+    so entries that start at zero (a switched-off loop, the cross couplings)
+    take steps of the size of their group."""
+
+    def __init__(self, D, flags, arow0, nvec0, K0, xa0, xs0, va0, vs0):
+        self.D, self.f = D, flags
+        self.m, self.p, self.r = int(flags['m']), int(flags['p']), int(D.r)
+        m, p, r = self.m, self.p, self.r
+        self.mimo = True
+        d0, e0, f0 = (np.asarray(v, complex) for v in arow0[:3])
+        Bc0 = np.asarray(arow0[3], complex).reshape(r, p) if len(arow0) > 3 else np.full((r, p), D.mc, complex)
+        self.th0 = np.concatenate([d0, e0, f0, Bc0.ravel(), np.asarray(nvec0, complex).reshape(m, r).ravel(),
+                                   np.asarray(K0, complex).reshape(m, p).ravel()])
+        self.sizes = [('d', r), ('e', max(r - 1, 0)), ('f', max(r - 1, 0)), ('Bc', r * p), ('n', m * r), ('K', m * p)]
+        self.off = {}; o = 0
+        for nm_, sz in self.sizes:
+            self.off[nm_] = (o, o + sz); o += sz
+        self.xa0 = np.atleast_1d(np.asarray(xa0, float)); self.xs0 = np.atleast_1d(np.asarray(xs0, float))
+        self.va0, self.vs0 = va0, vs0
+        # free mask
+        mode = flags.get('ctrl_mode', 'full')
+        free = np.zeros(len(self.th0), bool)
+        if flags['K']:
+            if mode in ('full', 'sp'):
+                free[:] = True
+                if flags.get('struct', 'central') == 'decentral':
+                    orders = list(flags.get('loop_orders') or [r // m] * m)
+                    assert sum(orders) == r and m == p == len(orders), 'decentral: m = p loops whose orders sum to r'
+                    bnd = np.cumsum(orders)[:-1]
+                    for k_ in bnd:                                   # e, f across block boundaries
+                        free[self.off['e'][0] + k_ - 1] = False; free[self.off['f'][0] + k_ - 1] = False
+                    free[slice(*self.off['Bc'])] = False             # B_c: the SISO gauge per block
+                    Cm = np.zeros((m, r), bool); Km = np.zeros((m, p), bool); s0 = 0
+                    for k_, ok_ in enumerate(orders):
+                        Cm[k_, s0:s0 + ok_] = True; Km[k_, k_] = True; s0 += ok_
+                    free[slice(*self.off['n'])] = Cm.ravel(); free[slice(*self.off['K'])] = Km.ravel()
+                if mode == 'sp':
+                    free[slice(*self.off['K'])] = False
+            elif mode in ('gain',):
+                Km = np.ones((m, p), bool) if flags.get('struct', 'central') == 'central' else np.eye(m, p, dtype=bool)
+                free[slice(*self.off['K'])] = Km.ravel()
+            else:
+                raise NotImplementedError(f"MIMO ctrl_mode {mode}")
+        self.free = free
+        # scales
+        sc = np.ones(len(self.th0))
+        mag = np.abs(self.th0)
+        for nm_, (a_, b_) in self.off.items():
+            g = mag[a_:b_]
+            if g.size == 0:
+                continue
+            nz = g[g > 0]
+            floor = max(1e-3 * max(g.max(), 1.0), 0.1 * float(np.median(nz)) if nz.size else 1.0)
+            sc[a_:b_] = np.maximum(g, floor)
+        self.sc = sc
+        self.sx = 0.30
+        self.nth = int(free.sum())
+
+    # ------------------------------------------------------------ helpers
+    def _fields_cfg(self):
+        D = self.D
+        return (getattr(D, 'field_basis_a', None), getattr(D, 'field_basis_s', None),
+                getattr(D, 'atoms_a', None), getattr(D, 'atoms_s', None))
+
+    def z0(self):
+        z = []
+        th = self.th0[self.free]; sc = self.sc[self.free]
+        if self.nth:
+            z += [th.real / sc, th.imag / sc]
+        if self.f['B']:
+            z += [self.xa0 / self.sx]
+        if self.f['C']:
+            z += [self.xs0 / self.sx]
+        Pa, Ps, Aa, As = self._fields_cfg()
+        for key, flag, P_, A_, v0, cnt in (('va', 'FB', Pa, Aa, self.va0, self.m), ('vs', 'FC', Ps, As, self.vs0, self.p)):
+            if not self.f[flag]:
+                continue
+            for i in range(cnt):
+                if A_ is not None:
+                    z += [np.asarray(A_['p0'][i], float)]
+                else:
+                    v = np.asarray(v0[i], complex)
+                    x_ = (P_.T @ (self.D.M @ v)) if P_ is not None else v
+                    z += [x_.real, x_.imag]
+        return np.concatenate(z) if z else np.zeros(0)
+
+    def unpack(self, z):
+        z = np.asarray(z, float)
+        i = 0; m, p, r, n = self.m, self.p, self.r, self.D.n
+        th = self.th0.copy()
+        if self.nth:
+            k = self.nth; sc = self.sc[self.free]
+            th[self.free] = (z[i:i + k] + 1j * z[i + k:i + 2 * k]) * sc; i += 2 * k
+        g = lambda nm_: th[slice(*self.off[nm_])]
+        arow = (g('d'), g('e'), g('f'), g('Bc').reshape(r, p))
+        nvec = g('n').reshape(m, r); K = g('K').reshape(m, p)
+        xa, xs = self.xa0.copy(), self.xs0.copy()
+        if self.f['B']:
+            xa = z[i:i + m] * self.sx; i += m
+        if self.f['C']:
+            xs = z[i:i + p] * self.sx; i += p
+        va = vs = None
+        Pa, Ps, Aa, As = self._fields_cfg()
+        import fieldbasis as _fb
+        out = {}
+        for key, flag, P_, A_, cnt in (('va', 'FB', Pa, Aa, m), ('vs', 'FC', Ps, As, p)):
+            if not self.f[flag]:
+                continue
+            L = []
+            for _ in range(cnt):
+                if A_ is not None:
+                    mm_ = _fb.NATOM_PAR * A_['n']
+                    L.append(_fb.atom_field(self.D.xn, *_fb.split_atoms(z[i:i + mm_], A_['n']), A_['smin'], A_['kmax']))
+                    i += mm_
+                else:
+                    nb = P_.shape[1] if P_ is not None else n
+                    xi = z[i:i + nb] + 1j * z[i + nb:i + 2 * nb]; i += 2 * nb
+                    L.append((P_ @ xi) if P_ is not None else self.D.smooth_map(xi))
+            out[key] = L
+        va, vs = out.get('va'), out.get('vs')
+        self._atom_z = (z.copy(), i)
+        return arow, nvec, K, xa, xs, va, vs
+
+    def zero_grad(self):
+        m, p, r, n = self.m, self.p, self.r, self.D.n
+        return dict(d=np.zeros(r, complex), e=np.zeros(max(r - 1, 0), complex), f=np.zeros(max(r - 1, 0), complex),
+                    Bc=np.zeros((r, p), complex), n=np.zeros((m, r), complex), K=np.zeros((m, p), complex),
+                    xa=np.zeros(m), xs=np.zeros(p),
+                    va=[np.zeros(n, complex)] * m, vs=[np.zeros(n, complex)] * p)
+
+    def grad(self, g, z=None):
+        out = []
+        m, p, r = self.m, self.p, self.r
+        if self.nth:
+            gz = self.zero_grad()
+            gc = np.concatenate([np.asarray(g.get(k_, gz[k_]), complex).ravel() for k_ in ('d', 'e', 'f', 'Bc', 'n', 'K')])
+            gc = gc[self.free]; sc = self.sc[self.free]
+            out += [np.real(gc) * sc, -np.imag(gc) * sc]
+        if self.f['B']:
+            out += [np.asarray(g.get('xa', np.zeros(m)), float) * self.sx]
+        if self.f['C']:
+            out += [np.asarray(g.get('xs', np.zeros(p)), float) * self.sx]
+        Pa, Ps, Aa, As = self._fields_cfg()
+        import fieldbasis as _fb
+        zz = np.asarray(z if z is not None else self._atom_z[0], float)
+        i = sum(len(o) for o in out)
+        for key, flag, P_, A_, cnt in (('va', 'FB', Pa, Aa, m), ('vs', 'FC', Ps, As, p)):
+            if not self.f[flag]:
+                continue
+            gl = g.get(key) or [np.zeros(self.D.n, complex)] * cnt
+            for j in range(cnt):
+                gv = np.asarray(gl[j], complex)
+                if A_ is not None:
+                    mm_ = _fb.NATOM_PAR * A_['n']
+                    out += [_fb.atom_grad(self.D.xn, *_fb.split_atoms(zz[i:i + mm_], A_['n']), A_['smin'], A_['kmax'], gv)]
+                    i += mm_
+                else:
+                    gx = (P_.T @ gv) if P_ is not None else self.D.smooth_map_adj(gv)
+                    out += [gx.real, gx.imag]; i += 2 * len(gx)
+        return np.concatenate(out) if out else np.zeros(0)
+
+    def atom_params(self, z):
+        """Lists of the atom parameter vectors (m actuator, p sensor fields) inside z."""
+        import fieldbasis as _fb
+        Pa, Ps, Aa, As = self._fields_cfg()
+        if Aa is None and As is None:
+            return None, None
+        ma = _fb.NATOM_PAR * Aa['n'] if (self.f['FB'] and Aa is not None) else 0
+        ms = _fb.NATOM_PAR * As['n'] if (self.f['FC'] and As is not None) else 0
+        z = np.asarray(z, float); i0 = len(z) - self.m * ma - self.p * ms
+        A_list = [z[i0 + j * ma:i0 + (j + 1) * ma] for j in range(self.m)] if ma else None
+        i1 = i0 + self.m * ma
+        S_list = [z[i1 + j * ms:i1 + (j + 1) * ms] for j in range(self.p)] if ms else None
+        return A_list, S_list

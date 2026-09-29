@@ -43,8 +43,9 @@ def unpack(theta, r):
     return d, e, f, nv, K
 
 
-def A_of(d, e, f):
-    """Tridiagonal controller state matrix."""
+def A_of(d, e, f, *rest):
+    """Tridiagonal controller state matrix.  (MIMO: arow = (d, e, f, B_c); the
+    input matrix B_c, if present, is ignored here -- see Bc_of.)"""
     r = len(d)
     A = np.zeros((r, r), complex)
     A[np.arange(r), np.arange(r)] = d
@@ -110,3 +111,12 @@ def transfer(theta, r, s, mc=1.0):
     A = A_of(d, e, f); B = B_of(r, mc)
     return K + (np.asarray(nv).reshape(1, r)
                 @ np.linalg.solve(s * np.eye(r) - A, B))[0, 0]
+
+
+def Bc_of(arow, r, mc=1.0):
+    """The compensator input matrix from arow: SISO arow = (d, e, f) with the
+    fixed gauge B_c = mc * ones(r) (a VECTOR, as the SISO code uses it); MIMO
+    arow = (d, e, f, B_c) with B_c an r x p matrix (2026-09-29, STAGE6)."""
+    if len(arow) > 3 and arow[3] is not None:
+        return np.asarray(arow[3], complex).reshape(r, -1)
+    return np.full(r, mc, complex)

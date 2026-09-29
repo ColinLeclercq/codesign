@@ -159,9 +159,16 @@ class Evaluator:
         D, pk, flags = self.D, self.pk, self.flags
         _, _, _, _, _, va, vs = pk.unpack(z)
         rows = []
+        mimo = getattr(pk, 'mimo', False)
+        items = []
         for key, v in (('va', va), ('vs', vs)):
             if v is None or not flags.get('FB' if key == 'va' else 'FC'):
                 continue
+            if mimo:                                      # one row per port (STAGE6)
+                items += [(key, j, vj) for j, vj in enumerate(v)]
+            else:
+                items.append((key, None, v))
+        for key, j_port, v in items:
             v = np.asarray(v, complex)
             Kv = D.Kstiff @ v; Mv = D.M @ v
             if FIELD_ORDER == 2:                              # S v = K M^-1 K v (M factored once per mesh)
@@ -173,10 +180,13 @@ class Evaluator:
             vMv = float(np.real(np.vdot(v, Mv))); R = float(np.real(np.vdot(v, Kv))) / vMv
             gv = 2.0 * (Kv - R * Mv) / vMv / kk               # d(R/kmax^2p)/dRe v + i d/dIm v
             r = D.r
-            g = dict(d=np.zeros(r, complex), e=np.zeros(max(r - 1, 0), complex), f=np.zeros(max(r - 1, 0), complex),
-                     n=np.zeros(r, complex), K=0j, xa=0.0, xs=0.0,
-                     va=np.zeros(D.n, complex), vs=np.zeros(D.n, complex))
-            g[key] = gv
+            if mimo:
+                g = pk.zero_grad(); g[key] = list(g[key]); g[key][j_port] = gv
+            else:
+                g = dict(d=np.zeros(r, complex), e=np.zeros(max(r - 1, 0), complex), f=np.zeros(max(r - 1, 0), complex),
+                         n=np.zeros(r, complex), K=0j, xa=0.0, xs=0.0,
+                         va=np.zeros(D.n, complex), vs=np.zeros(D.n, complex))
+                g[key] = gv
             rows.append((R / kk - 1.0, np.asarray(pk.grad(g), float)))
         return rows
 
@@ -266,7 +276,7 @@ class Evaluator:
         # 0.05 spacing missed a peak at +2.34 that the model held at 1e-15
         try:
             import scipy.sparse as _sp, controller as _ctl, certify_sparse as _csp
-            P = rc.P; Ac = _ctl.A_of(*arow); Bc = np.full(D.r, D.mc, complex)
+            P = rc.P; Ac = _ctl.A_of(*arow); Bc = _ctl.Bc_of(arow, D.r, D.mc)
             _cert = _csp.hinf_dense_levelset if REDUCED_CERT == 'dense' else _csp.hinf_certified_sparse
             gr, wr, _, okr = _cert(
                 _sp.csc_matrix(P['At']), _sp.csc_matrix(P['Mt']), rc.W.conj().T @ b, rc.V.conj().T @ c,
@@ -536,10 +546,10 @@ class Evaluator:
                     if abs(den) < 1e-12:
                         continue
                     Gm = np.outer(wl.conj(), vr) / den
-                    gc = dict(d=np.array([Gm[i, i] for i in range(rr)]),
+                    gc = pk.zero_grad() if getattr(pk, 'mimo', False) else dict(n=np.zeros(rr, complex), K=0j, xa=0.0, xs=0.0)
+                    gc.update(d=np.array([Gm[i, i] for i in range(rr)]),
                               e=np.array([Gm[i, i + 1] for i in range(rr - 1)]),
-                              f=np.array([Gm[i + 1, i] for i in range(rr - 1)]),
-                              n=np.zeros(rr, complex), K=0j, xa=0.0, xs=0.0)
+                              f=np.array([Gm[i + 1, i] for i in range(rr - 1)]))
                     ctrl_rows.append((float(w_[k].real), np.real(np.asarray(pk.grad(gc), float))))
             except Exception:
                 ctrl_rows.append((float(np.max(np.linalg.eigvals(Acm).real)), np.zeros(NZ)))

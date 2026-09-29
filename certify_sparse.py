@@ -70,6 +70,25 @@ def _v0(n, seed=12345):
 
 
 
+def _cl_arow(M, A, b, c, Ac, Bc=None):
+    """The closed-loop resolvent and the arow its methods expect, from A_c (and
+    B_c): SISO -> ClosedLoopResolvent with arow = (d, e, f) (B_c = ones);
+    MIMO (b or c 2-D) -> ClosedLoopResolventMIMO with arow = (d, e, f, B_c)."""
+    Ac = np.asarray(Ac, complex)
+    r = Ac.shape[0] if Ac.size else 0
+    if r:
+        arow = (np.diag(Ac).copy(),
+                np.diag(Ac, 1).copy() if r > 1 else np.zeros(0, complex),
+                np.diag(Ac, -1).copy() if r > 1 else np.zeros(0, complex))
+    else:
+        arow = (np.zeros(0, complex), np.zeros(0, complex), np.zeros(0, complex))
+    if np.ndim(b) == 2 or np.ndim(c) == 2:
+        from closedloop_mimo import ClosedLoopResolventMIMO
+        cl = ClosedLoopResolventMIMO(M, A, b, c, r=r, mc=1.0)
+        return cl, arow + (np.asarray(Bc, complex).reshape(r, cl.p),)
+    return ClosedLoopResolvent(M, A, b, c, r=r, mc=1.0), arow
+
+
 class SparsePencil:
     """Matrix-free (A_H, E_H) with Woodbury shifted solves."""
 
@@ -90,19 +109,33 @@ class SparsePencil:
         self.AHb = sp.bmat([[Ap, g2inv * MP], [MP, Ap.conj().T.tocsc()]],
                            format='csc')
         self.EH = sp.bmat([[Mcl, None], [None, -Mcl]], format='csc')
-        # rank-2 controller coupling U V
-        b = np.asarray(b, complex).ravel(); c = np.asarray(c, complex).ravel()
-        nvec = np.asarray(nvec, complex).ravel()
-        Bc = np.asarray(Bc, complex).ravel()
-        U = np.zeros((N, 2), complex); V = np.zeros((2, N), complex)
-        U[:self.n, 0] = b; U[self.n:, 1] = Bc
-        V[0, :self.n] = Kfb * c.conj(); V[0, self.n:] = nvec
-        V[1, :self.n] = c.conj()
+        if np.ndim(b) == 2 or np.ndim(c) == 2:
+            # MIMO (2026-09-29, STAGE6): rank-(m+p) coupling
+            #   U = [[B, 0], [0, B_c]],  V = [[D_c C^H, C_c], [C^H, 0]]   (A_cl = A_p + U V)
+            B = np.asarray(b, complex); C = np.asarray(c, complex)
+            B = B[:, None] if B.ndim == 1 else B; C = C[:, None] if C.ndim == 1 else C
+            m, p = B.shape[1], C.shape[1]; k = m + p
+            Bcm = np.asarray(Bc, complex).reshape(self.r, p)
+            Ccm = np.asarray(nvec, complex).reshape(m, self.r); Dcm = np.asarray(Kfb, complex).reshape(m, p)
+            U = np.zeros((N, k), complex); V = np.zeros((k, N), complex)
+            U[:self.n, :m] = B; U[self.n:, m:] = Bcm
+            V[:m, :self.n] = Dcm @ C.conj().T; V[:m, self.n:] = Ccm
+            V[m:, :self.n] = C.conj().T
+        else:
+            # rank-2 controller coupling U V
+            k = 2
+            b = np.asarray(b, complex).ravel(); c = np.asarray(c, complex).ravel()
+            nvec = np.asarray(nvec, complex).ravel()
+            Bc = np.asarray(Bc, complex).ravel()
+            U = np.zeros((N, 2), complex); V = np.zeros((2, N), complex)
+            U[:self.n, 0] = b; U[self.n:, 1] = Bc
+            V[0, :self.n] = Kfb * c.conj(); V[0, self.n:] = nvec
+            V[1, :self.n] = c.conj()
         self.U, self.V = U, V
-        # doubled low-rank factors (rank 4)
-        UH = np.zeros((2 * N, 4), complex); VH = np.zeros((4, 2 * N), complex)
-        UH[:N, 0:2] = U;            VH[0:2, :N] = V
-        UH[N:, 2:4] = V.conj().T;   VH[2:4, N:] = U.conj().T
+        # doubled low-rank factors (rank 2k)
+        UH = np.zeros((2 * N, 2 * k), complex); VH = np.zeros((2 * k, 2 * N), complex)
+        UH[:N, 0:k] = U;            VH[0:k, :N] = V
+        UH[N:, k:2 * k] = V.conj().T;   VH[k:2 * k, N:] = U.conj().T
         self.UH, self.VH = UH, VH
         self._lu = None; self._shift = None; self._G = None; self._Y = None
 
@@ -114,7 +147,7 @@ class SparsePencil:
         self._lu = spla.splu(S)
         self._shift = s
         self._Y = self._lu.solve(self.UH)                  # S^{-1} U_H
-        self._G = np.eye(4, dtype=complex) + self.VH @ self._Y
+        self._G = np.eye(self.VH.shape[0], dtype=complex) + self.VH @ self._Y
         return self._lu
 
     def solve(self, w):
@@ -601,10 +634,7 @@ def stability_and_abscissa(A, M, b, c, Ac, Bc, nvec, Kfb, eps=1e-3,
         w0, w1, _ = stability_region(A, M, Ac)
         wlo = w0 if wlo is None else wlo
         whi = w1 if whi is None else whi
-    cl = ClosedLoopResolvent(M, A, b, c, r=r, mc=1.0)
-    arow = (np.diag(Ac).copy(),
-            np.diag(Ac, 1).copy() if r > 1 else np.zeros(0, complex),
-            np.diag(Ac, -1).copy() if r > 1 else np.zeros(0, complex))
+    cl, arow = _cl_arow(M, A, b, c, Ac, Bc)
     CI = [(float(wlo), float(whi))]
     uncovered = 0.0
     nshift = 0
@@ -682,16 +712,8 @@ def _track_worker(t):
     """One tracked eigenvalue, for a process pool.  Queries at different old
     locations are independent (each is its own LU + Arnoldi), so they scale
     like the |Omega| constraints do."""
-    (A, M, b, c, Ac, nvec, Kfb, lam0, off, k) = t
-    r = np.asarray(Ac).shape[0] if np.asarray(Ac).size else 0
-    cl = ClosedLoopResolvent(M, A, b, c, r=r, mc=1.0)
-    if r:
-        arow = (np.diag(Ac).copy(),
-                np.diag(Ac, 1).copy() if r > 1 else np.zeros(0, complex),
-                np.diag(Ac, -1).copy() if r > 1 else np.zeros(0, complex))
-    else:
-        arow = (np.zeros(0, complex), np.zeros(0, complex),
-                np.zeros(0, complex))
+    (A, M, b, c, Ac, Bc, nvec, Kfb, lam0, off, k) = t
+    cl, arow = _cl_arow(M, A, b, c, Ac, Bc)
     return _track_one(cl, arow, nvec, Kfb, complex(lam0), off, k)
 
 
@@ -734,14 +756,7 @@ def continuation_step(A, M, b, c, Ac, Bc, nvec, Kfb, watch, eps=1e-3,
                   need_split, since an unconverged track proves nothing);
       worst       the rightmost tracked eigenvalue, for logging.
     """
-    r = np.asarray(Ac).shape[0] if np.asarray(Ac).size else 0
-    if r:
-        arow = (np.diag(Ac).copy(),
-                np.diag(Ac, 1).copy() if r > 1 else np.zeros(0, complex),
-                np.diag(Ac, -1).copy() if r > 1 else np.zeros(0, complex))
-    else:
-        arow = (np.zeros(0, complex), np.zeros(0, complex),
-                np.zeros(0, complex))
+    cl, arow = _cl_arow(M, A, b, c, Ac, Bc)
     ok, need_split = True, False
     new_watch, worst = [], None
     # dedupe: the sweep reports the same eigenvalue from several shifts, and
@@ -755,10 +770,9 @@ def continuation_step(A, M, b, c, Ac, Bc, nvec, Kfb, watch, eps=1e-3,
     # the tracked queries are INDEPENDENT (one LU + short Arnoldi each), so
     # they parallelise exactly like the |Omega| constraints; serial otherwise.
     if pool is not None and len(dedup) > 2:
-        tasks = [(A, M, b, c, Ac, nvec, Kfb, lam0, off, k) for lam0 in dedup]
+        tasks = [(A, M, b, c, Ac, Bc, nvec, Kfb, lam0, off, k) for lam0 in dedup]
         tracked = pool.map(_track_worker, tasks, chunksize=1)
     else:
-        cl = ClosedLoopResolvent(M, A, b, c, r=r, mc=1.0)
         tracked = [_track_one(cl, arow, nvec, Kfb, lam0, off, k)
                    for lam0 in dedup]
     for lam0, lam1 in zip(dedup, tracked):
