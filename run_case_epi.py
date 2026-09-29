@@ -1273,6 +1273,32 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
     g, w, ncall, ok = csp.hinf_certified_sparse(
         D.A, D.M, b, c, Ac, Bc, nvec, K, sig, gam_lb=max(gam_lb, 1e-8),
         wlo=wlo, whi=whi, rtol=float(getattr(certified_norm, 'rtol', 1e-4)))
+    # ALL FREQUENCIES (STAGE6 6.22, --cert-all-w): the band is a heuristic; the
+    # tail bound W (numerical range, sparse_spectrum.closed_loop_tail) proves
+    # sigma_1 < g beyond W, and one more level-set question on [-W, W] at g
+    # proves nothing exceeds g inside -- g is then the norm over ALL w.  A peak
+    # found outside the band is returned (and the caller widens the band).
+    certified_norm.last_all_w = None
+    _below = getattr(certified_norm, 'all_w_below', None)     # only a value that would be accepted needs it
+    if getattr(certified_norm, 'all_w', False) and ok and np.isfinite(g) and g > 0 \
+            and (_below is None or g < _below):
+        try:
+            import sparse_spectrum as _ss
+            Wt, _ = _ss.closed_loop_tail(D.A, D.M, b, c, Ac, Bc, nvec, K, float(g))
+            aw = dict(W=float(Wt), band=float(max(whi, -wlo)))
+            if np.isfinite(Wt) and Wt > max(whi, -wlo):
+                g2, w2, nc2, ok2 = csp.hinf_certified_sparse(
+                    D.A, D.M, b, c, Ac, Bc, nvec, K, sig, gam_lb=float(g),
+                    wlo=-Wt, whi=Wt, rtol=float(getattr(certified_norm, 'rtol', 1e-4)))
+                aw.update(g=float(g2), w=float(w2), calls=int(nc2), ok=bool(ok2))
+                if ok2 and g2 > g * (1.0 + 1e-9):
+                    g, w = g2, w2
+                ok = ok and ok2
+            elif not np.isfinite(Wt):
+                aw.update(ok=False)
+            certified_norm.last_all_w = aw
+        except Exception as _e:
+            certified_norm.last_all_w = dict(error=f"{type(_e).__name__}: {str(_e)[:60]}")
     # collect the local peaks too: they are the frequencies most likely to
     # become active next, so seeding them saves outer iterations
     # coarse-then-fine (STAGE 5 4.2): the full sweep is the truth reference
@@ -1799,6 +1825,9 @@ def main():
                          "'pred' also requires the QP's predicted decrease <= 1e-7 t (STAGE6 6.14); "
                          "'auto': pred for MIMO, rel for SISO (the ne=100 K+B+C A/B: 6.404012 in 22.2 min vs "
                          "6.399134 in 22.6 -- faster early, stopped 0.08 % higher; SISO adoption waits for the cluster)")
+    ap.add_argument('--cert-all-w', dest='cert_all_w', choices=['on', 'off'], default='on',
+                    help='every full certificate also proves the value over ALL w: tail bound + one level-set '
+                         'question on [-W, W] (STAGE6 6.22)')
     ap.add_argument('--force-mimo', dest='force_mimo', action='store_true',
                     help='run m = p = 1 through the MIMO path (validation of the MIMO code on SISO, STAGE6 6.16)')
     ap.add_argument('--ctrl-struct', dest='ctrl_struct', choices=['central', 'decentral'], default='central',
@@ -2408,6 +2437,7 @@ def main():
                  f"certificate in {D.cert_nseg} segments"), flush=True)
 
     _band_last = dict(lam=[], info={})          # the last located set (dumps, records)
+    n_allw_outside = [0]                         # all-w certificates that found the norm outside the band
     n_band_incomplete = [0]
 
     def band_from_closedloop(arow_, nvec_, K_, b_, c_, count=False, extra=()):
@@ -2732,6 +2762,7 @@ def main():
             return out
         D.alpha_certified = _ac_cached
     certified_norm.band_check = bool(a.band_check)
+    certified_norm.all_w = (a.cert_all_w == 'on')
     _anchored = {}                       # freq -> (xa, xs) it was last anchored with
     _last_peaks = [float(w0)] + [float(x) for x in peaks0]
     _oracle_log = []
@@ -3110,8 +3141,20 @@ def main():
         _prov = bool(a.cert_every > 1 and _ro is not None and (it % a.cert_every != 0)
                      and it < a.outer - 1 and _ro.dim > 0)
         certified_norm.provisional = _prov
+        certified_norm.all_w_below = float(gbest)         # a candidate above the best is refused anyway
         g, w, ok, peaks = certified_norm(D, pk, zc, a.wlo, a.whi,
                                          gam_lb=best['g'], w_hint=best.get('w'))
+        certified_norm.all_w_below = None
+        _aw = getattr(certified_norm, 'last_all_w', None)
+        if _aw and _aw.get('ok') and np.isfinite(_aw.get('w', np.nan)) and abs(_aw['w']) > a.whi \
+                and _aw.get('g', 0.0) >= g * (1.0 - 1e-12):
+            # the all-w question found the norm OUTSIDE the band (STAGE6 6.22): the
+            # band grows to cover it, the witness joins Omega as usual
+            _hw_new = 1.2 * abs(_aw['w']) + a.wpad
+            print(f"    all-w certificate: peak {_aw['g']:.6f} at w = {_aw['w']:+.3f} outside the band; band widened "
+                  f"to [{-_hw_new:.2f}, {_hw_new:.2f}]", flush=True)
+            a.wlo, a.whi = -_hw_new, _hw_new
+            n_allw_outside[0] += 1
         if not _prov and np.isfinite(g) and ok and np.isfinite(w):
             # WITNESS INVARIANT (2026-09-25): the certificate's witness must attain
             # the certified value, sigma_1(w) >= g (1 - rtol).  One full solve per
@@ -4098,6 +4141,7 @@ def main():
                 alpha_dense=(float(al_d) if al_d is not None else None),
                 gamma_dense_all_w=gam_dense_all,
                 band_incomplete=int(n_band_incomplete[0]), band_check=band_check, all_w=all_w,
+                all_w_outside_band=int(n_allw_outside[0]),
                 eps=float(a.eps),
                 wind_count=wind_n,
                 sym=bool(a.sym),
