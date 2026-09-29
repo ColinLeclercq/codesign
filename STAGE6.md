@@ -715,6 +715,73 @@ as `results_mimo_prod/kbc_cen_c4cf908_sisoscale` (5.070 after 20 rounds, stopped
   a hard wall. No ne >= 400 production runs in the sandbox (user); the ne = 400
   runs of this pass were validation only (plant counts, the 107 s certificate).
 
+## 6.25 Where a K+B+C centralized round goes (user, 2026-09-29 23:13: "something is taking too much time at such low dimensions")
+
+**Pruning was already tested (my 6.24 suggestion was stale).**
+- STAGE3 5-6: a cap of ~50 frequencies cost gamma (10.16 against 9.41). Its
+  "the working-set size is not where the cost is" was stated for the full-model
+  oracle.
+- STAGE5 28: pruning to the local maxima (401 -> 7) stalled on the flat optimum:
+  the rows between the ripples let a step lower the whole plateau.
+
+**Profile (py-spy).**
+- Reproduction: one round from the final record with a SYNTHETIC checkpoint
+  holding the round-28 working set (1225 frequencies, 255 followed members, 347
+  sigma_2 blocks; scratch `mkck.py`).
+- Round length: 742 s. The SQP takes 86 % of it: 99 evaluations and 40
+  iterations, ~6.5 s per evaluation.
+- Split of the round (after the batching below):
+  - reduced-model rows (gain_batch): 44 %; that is 1225 frequencies x (reduced
+    dimension 128)^2 triangular solves x ~3 subspace iterations per evaluation --
+    arithmetic, not overhead;
+  - QP (Clarabel; ~1225 linear rows, 347 SOC blocks, the LMIs): 24 %;
+  - gradient assembly (grads_mimo, 5 per sigma_2 block): 14 %.
+- The dimension n does not enter the SQP (reduced model). The certificates,
+  winding counts and the band are ~10 %.
+- Why 1225 rows: the optimum is EQUALISED. 788 rows lie within 1 % of gamma and
+  909 within 5 %; 1036 rows are in |w| <= 16; median spacing 0.008. Every row
+  near the level is a constraint the step must respect, and STAGE5 28 shows the
+  step needs them.
+- Anytime behaviour:
+  - kbc_cen: within 10 % of its final value after 99 min (round 17); 5 %: 142 min;
+    2 %: 212 min; 1 %: 236 min.
+  - kbc_dec: 5 % after 11 min, 2 % after 76 min, 1 % after 119 min.
+  - Early kbc_cen rounds are short (2.5 min at |Omega| ~ 180) but gain only a
+    few % each.
+
+**Changes (same mathematics; checked against the per-row path).**
+- `lu_counter._caller`: a frame walk (sys._getframe) instead of
+  `traceback.extract_stack`, which read source lines on every counted solve.
+  Site strings are identical. It cost 6 % of a round at |Omega| ~ 180.
+- sigma_2 blocks batched:
+  - `reduced.gain_batch(..., k=2)`: the leading k pairs in one subspace
+    iteration, block size k + 4, all k residuals converged; `_batch_pairs`
+    assembles the pairs;
+  - the enrolled rows' peak following goes into `follow_batch`.
+  - Per-row path kept when rows are not batched.
+- Measured, same start, same flags:
+  - 2 rounds at |Omega| ~ 175: same t to 5e-9 (3.7147118 / 3.7135816 against
+    3.7147118 / 3.7135819), 29.2 + 47.9 s -> 25.1 + 39.0 s;
+  - 1 round at |Omega| = 1225: t 3.713568 (old) / 3.713573 (new), both certified,
+    742 s -> 642 s (-14 %).
+- SISO identity (8.754365110002194), frozen path (10.23128516441147), witness
+  invariant: PASS.
+
+**Reading.**
+- The time of the centralized case is the equalised plateau: rows x
+  evaluations x rounds.
+- A || K ||_inf bound does not address it: the rows are in |w| <= 16, where
+  |K(iw)| ~ 10-300. The peaks of |K| (~5000) are at w ~ 60, where 40 of the 1225
+  rows lie.
+- Levers, by expected effect:
+  1. frequency-parallel row evaluation (rows are independent; linear on the
+     cluster);
+  2. rows below the level evaluated lazily, with a margin re-checked at
+     acceptance;
+  3. QP warm start / row aggregation;
+  4. a time budget with the anytime numbers above;
+  5. fewer design parameters (a lower-order compensator flattens less).
+
 ## 6.23 Open items
 
 - the plant heights of the tail certificate: ~100 s at ne = 400 per process

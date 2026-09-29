@@ -511,13 +511,16 @@ class _ReducedCL:
         bRX = np.einsum('km,fkq->fmq', np.conj(bs['bt']), RX)
         return RX + np.matmul(bs['RHc'][idx], np.matmul(np.conj(np.transpose(bs['Gam'][idx], (0, 2, 1))), bRX))
 
-    def gain_batch(self, omegas, arow, nvec, K, want_vectors, maxit=40):
+    def gain_batch(self, omegas, arow, nvec, K, want_vectors, maxit=40, k=1):
         """sigma_1 at every frequency of `omegas` in one batched subspace
         iteration (warm-started from the same per-frequency cache as
         _leading_svd), and the singular pairs (x, z, gprime) in gain()'s
         conventions where want_vectors[i].  Rows that do not converge fall back
         to gain().  Same mathematics as gain_k/_leading_svd; tolerance 1e-10
-        (vectors) / 1e-6 (values) on the residual."""
+        (vectors) / 1e-6 (values) on the residual.
+        k > 1 (2026-09-29, the sigma_2 blocks): the leading k pairs, block size
+        k + 4 as in _leading_svd, every one of the k residuals converged; the
+        result per frequency is gain_k()'s list of k dicts."""
         om = np.asarray(omegas, float); m = len(om); wv = np.asarray(want_vectors, bool)
         if m == 0:
             return []
@@ -527,7 +530,7 @@ class _ReducedCL:
             bs = self._batch_setup_mimo(om, arow, nvec, K); Tt, TtH = self._Tt_mimo, self._TtH_mimo
         else:
             bs = self._batch_setup(om, arow, nvec, K); Tt, TtH = self._Tt, self._TtH
-        p = min(kd, 5)
+        p = min(kd, 5) if k == 1 else min(kd, k + 4)
         cache = getattr(self.ro, '_svcache', None)
         if cache is None or getattr(self.ro, '_svcache_dim', None) != kd:
             cache = {}; self.ro._svcache = cache; self.ro._svcache_dim = kd
@@ -542,7 +545,7 @@ class _ReducedCL:
                         break
             V[i] = Vc if (Vc is not None and Vc.shape == (kd, p)) else V0
         tol = np.where(wv, 1e-10, 1e-6)
-        sig = np.full(m, np.nan); v1 = np.zeros((m, kd), complex)
+        sig = np.full((m, k), np.nan); v1 = np.zeros((m, kd, k), complex)
         act = np.arange(m)
         for it in range(maxit):
             Va = V[act]
@@ -552,10 +555,13 @@ class _ReducedCL:
             WhH = np.conj(np.transpose(Whb, (0, 2, 1)))
             Vr = np.matmul(Va, WhH)
             SHU = np.matmul(C, WhH) / np.maximum(sb, 1e-300)[:, None, :]
-            res = np.linalg.norm(SHU[:, :, 0] - Vr[:, :, 0] * sb[:, :1], axis=1)
+            if k == 1:
+                res = np.linalg.norm(SHU[:, :, 0] - Vr[:, :, 0] * sb[:, :1], axis=1)
+            else:
+                res = np.linalg.norm(SHU[:, :, :k] - Vr[:, :, :k] * sb[:, None, :k], axis=1).max(axis=1)
             done = res <= tol[act] * sb[:, 0]
             for jj in np.where(done)[0]:
-                i = act[jj]; sig[i] = sb[jj, 0]; v1[i] = Vr[jj, :, 0]
+                i = act[jj]; sig[i] = sb[jj, :k]; v1[i] = Vr[jj, :, :k]
                 cache[int(round(float(om[i]) * 1000.0))] = Vr[jj]
             keep = ~done
             if not np.any(keep):
@@ -564,43 +570,55 @@ class _ReducedCL:
             act = act[keep]
         out = [None] * m
         for i in act:                                   # not converged: the per-row path
-            out[i] = self.gain(float(om[i]), arow, nvec, K, want_vectors=bool(wv[i]))
+            out[i] = (self.gain(float(om[i]), arow, nvec, K, want_vectors=bool(wv[i])) if k == 1 else
+                      self.gain_k(float(om[i]), arow, nvec, K, k=k, want_vectors=bool(wv[i])))
         for i in range(m):
             if out[i] is None and not wv[i]:
-                out[i] = dict(omega=float(om[i]), sigma=float(sig[i]))
+                out[i] = (dict(omega=float(om[i]), sigma=float(sig[i, 0])) if k == 1 else
+                          [dict(omega=float(om[i]), sigma=float(sig[i, j])) for j in range(k)])
         iv = np.array([i for i in range(m) if out[i] is None], int)
         if iv.size:
             self.ncalls += iv.size
-            bsv = {k_: (v_[iv] if (isinstance(v_, np.ndarray) and v_.shape[:1] == (m,) and k_ != 'Ts') else v_) for k_, v_ in bs.items()}
-            s_ = sig[iv]; shat = v1[iv]
-            rhs = (GWh @ shat.T).T[:, :, None]
-            if self.mimo:
-                xtp = Tt(bs, rhs, iv)[:, :, 0]
-                xtc = np.matmul(bs['SKiBc'][iv], np.einsum('kp,fk->fp', np.conj(bs['ct']), xtp)[:, :, None])[:, :, 0]
-            else:
-                RX = self._R(bs['om'], rhs, bs['Ts'], iv); cHq = np.einsum('k,mkp->mp', np.conj(bsv['ct']), RX)[:, 0]
-                xtp = RX[:, :, 0] - bsv['Rb'] * (bsv['g'] * cHq)[:, None]
-                xtc = -bsv['SKe'] * (bsv['g2'] * cHq)[:, None]
-            GV = P['GV']
-            qMq = np.real(np.einsum('mk,kl,ml->m', np.conj(xtp), GV, xtp))
-            sc = np.where(qMq > 0, s_ / np.sqrt(np.maximum(qMq, 1e-300)), 1.0)
-            xtp = xtp * sc[:, None]; xtc = xtc * sc[:, None]
-            w = (GV @ xtp.T).T[:, :, None]
-            if self.mimo:
-                ztp = TtH(bs, w, iv)[:, :, 0] / s_[:, None]
-                ztc = np.matmul(bs['SKHiCcH'][iv], np.einsum('km,fk->fm', np.conj(bs['bt']), ztp)[:, :, None])[:, :, 0]
-            else:
-                RHw = self._RH(bs['om'], w, bs['Ts'], iv); bRH = np.einsum('k,mkp->mp', np.conj(bsv['bt']), RHw)[:, 0]
-                ztp = (RHw[:, :, 0] - bsv['RHc'] * (np.conj(bsv['g']) * bRH)[:, None]) / s_[:, None]
-                ztc = (bsv['SKHn'] * (bsv['Gi00'] * bRH)[:, None]) / s_[:, None]
-            Vb, Wb, M, n = self.V, self.W, self.M, self.n
-            XP = Vb @ xtp.T; ZP = Wb @ ztp.T; MXP = M @ XP
+            pairs = [self._batch_pairs(bs, Tt, TtH, iv, m, sig[iv, j], v1[iv, :, j]) for j in range(k)]
             for jj, i in enumerate(iv):
-                xp, zp = XP[:, jj], ZP[:, jj]
-                x = np.concatenate([xp, xtc[jj]]); z = np.concatenate([zp, ztc[jj]])
-                gp = float(np.imag(np.vdot(zp, MXP[:, jj]) + np.vdot(ztc[jj], xtc[jj])))
-                out[i] = dict(omega=float(om[i]), sigma=float(s_[jj]), x=x, z=z, gprime=gp)
+                out[i] = pairs[0][jj] if k == 1 else [pairs[j][jj] for j in range(k)]
         return out
+
+    def _batch_pairs(self, bs, Tt, TtH, iv, m, s_, shat):
+        """gain()'s singular pairs (x, z, gprime) at the frequencies iv of a
+        batch, from the converged singular values s_ and right singular vectors
+        shat of S = GV^1/2 T~ GW^1/2."""
+        P = self.P; GWh = P['GW_h']; om = bs['om']
+        bsv = {k_: (v_[iv] if (isinstance(v_, np.ndarray) and v_.shape[:1] == (m,) and k_ != 'Ts') else v_) for k_, v_ in bs.items()}
+        rhs = (GWh @ shat.T).T[:, :, None]
+        if self.mimo:
+            xtp = Tt(bs, rhs, iv)[:, :, 0]
+            xtc = np.matmul(bs['SKiBc'][iv], np.einsum('kp,fk->fp', np.conj(bs['ct']), xtp)[:, :, None])[:, :, 0]
+        else:
+            RX = self._R(bs['om'], rhs, bs['Ts'], iv); cHq = np.einsum('k,mkp->mp', np.conj(bsv['ct']), RX)[:, 0]
+            xtp = RX[:, :, 0] - bsv['Rb'] * (bsv['g'] * cHq)[:, None]
+            xtc = -bsv['SKe'] * (bsv['g2'] * cHq)[:, None]
+        GV = P['GV']
+        qMq = np.real(np.einsum('mk,kl,ml->m', np.conj(xtp), GV, xtp))
+        sc = np.where(qMq > 0, s_ / np.sqrt(np.maximum(qMq, 1e-300)), 1.0)
+        xtp = xtp * sc[:, None]; xtc = xtc * sc[:, None]
+        w = (GV @ xtp.T).T[:, :, None]
+        if self.mimo:
+            ztp = TtH(bs, w, iv)[:, :, 0] / s_[:, None]
+            ztc = np.matmul(bs['SKHiCcH'][iv], np.einsum('km,fk->fm', np.conj(bs['bt']), ztp)[:, :, None])[:, :, 0]
+        else:
+            RHw = self._RH(bs['om'], w, bs['Ts'], iv); bRH = np.einsum('k,mkp->mp', np.conj(bsv['bt']), RHw)[:, 0]
+            ztp = (RHw[:, :, 0] - bsv['RHc'] * (np.conj(bsv['g']) * bRH)[:, None]) / s_[:, None]
+            ztc = (bsv['SKHn'] * (bsv['Gi00'] * bRH)[:, None]) / s_[:, None]
+        Vb, Wb, M, n = self.V, self.W, self.M, self.n
+        XP = Vb @ xtp.T; ZP = Wb @ ztp.T; MXP = M @ XP
+        res = []
+        for jj, i in enumerate(iv):
+            xp, zp = XP[:, jj], ZP[:, jj]
+            x = np.concatenate([xp, xtc[jj]]); z = np.concatenate([zp, ztc[jj]])
+            gp = float(np.imag(np.vdot(zp, MXP[:, jj]) + np.vdot(ztc[jj], xtc[jj])))
+            res.append(dict(omega=float(om[i]), sigma=float(s_[jj]), x=x, z=z, gprime=gp))
+        return res
 
     # -------- block closed-loop solves (plant-only right-hand sides) --------
     def _blkS(self, X):

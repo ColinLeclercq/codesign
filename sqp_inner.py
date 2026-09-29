@@ -332,10 +332,9 @@ class Evaluator:
         s = np.zeros(m); Gs = np.zeros((m, NZ))
         blocks = {}
 
-        def _block_at(i, wb):
-            # the sigma_2 (Clarke 2x2) block of row i at frequency wb: sigma_1's row,
-            # and the block's entry gradients from the two singular pairs
-            P = cl.gain_k(wb, arow, nvec, K, k=2)
+        def _block_set(i, P):
+            # the sigma_2 (Clarke 2x2) block of row i from its two leading singular
+            # pairs P: sigma_1's row, and the block's entry gradients
             s[i] = P[0]['sigma']; Gs[i] = G(cl, P[0]['x'], P[0]['z'])
             Gc = np.zeros((2, 2, NZ), complex)
             for a_ in range(2):
@@ -343,13 +342,20 @@ class Evaluator:
                     Gc[a_, b_] = (G(cl, P[b_]['x'], P[a_]['z'])
                                   + 1j * G(cl, P[b_]['x'], 1j * P[a_]['z']))
             blocks[i] = dict(sig=np.array([P[0]['sigma'], P[1]['sigma']]), Gc=Gc)
+
+        def _block_at(i, wb):
+            _block_set(i, cl.gain_k(wb, arow, nvec, K, k=2))
+        _batched = BATCH_ROWS and self.oracle is not None and hasattr(cl, 'gain_batch')
         _pending = []
+        _blk_pending = []
         _fb = {}
         if BATCH_ROWS and self.follow and self.oracle is not None and FOLLOW_SCAN <= 2 and hasattr(cl, 'gain_batch'):
             # BATCHED PEAK FOLLOWING (2026-09-25): every followed member's Newton
             # iteration in one batched evaluation (peakfollow.follow_batch)
-            _fi = [i for i, w in enumerate(W) if not (self.kink_block and i in self.enroll)
-                   and self.follow.get(round(float(w), 6))]
+            # (the sigma_2-enrolled rows too, 2026-09-29: their tops were found one
+            # row at a time -- with 1/3 of the rows enrolled on an equalised MIMO
+            # optimum, 15 % of a round)
+            _fi = [i for i, w in enumerate(W) if self.follow.get(round(float(w), 6))]
             if _fi:
                 from peakfollow import follow_batch as _fbatch
                 _keys = [round(float(W[i]), 6) for i in _fi]
@@ -365,12 +371,18 @@ class Evaluator:
                 # unseen (refused round, K+B+C ne=200)
                 wb = float(w)
                 radb = self.follow.get(round(float(w), 6)) if (self.follow and self.oracle is not None) else None
-                if radb:
+                if radb and i in _fb:
+                    wb = _fb[i][0]
+                    self.w_star[round(float(w), 6)] = wb
+                elif radb:
                     from peakfollow import follow as _follow
                     wb, _ = _follow(cl, w, arow, nvec, K, radb, hint=self.w_star.get(round(float(w), 6)), nscan=FOLLOW_SCAN, gtol=FOLLOW_GTOL,
                                          state=(self.follow_state.setdefault(round(float(w), 6), {}) if FOLLOW_SCAN <= 2 else None))
                     self.w_star[round(float(w), 6)] = wb
-                _block_at(i, wb)
+                if _batched:
+                    _blk_pending.append((i, wb))              # batched below
+                else:
+                    _block_at(i, wb)
             else:
                 wf = float(w)
                 rad = self.follow.get(round(float(w), 6)) if (self.follow and self.oracle is not None) else None
@@ -399,6 +411,13 @@ class Evaluator:
                 else:
                     r = cl.gain(wf, arow, nvec, K)
                     s[i] = r['sigma']; Gs[i] = G(cl, r['x'], r['z'])
+        if _blk_pending:
+            # BATCHED sigma_2 blocks (2026-09-29): the two leading pairs at every
+            # enrolled top in one subspace iteration (reduced.gain_batch, k = 2)
+            _Pb = cl.gain_batch(np.array([wb for _, wb in _blk_pending]), arow, nvec, K,
+                                np.ones(len(_blk_pending), bool), k=2)
+            for (i, _), P_ in zip(_blk_pending, _Pb):
+                _block_set(i, P_)
         if _pending and BATCH_ROWS and hasattr(cl, 'gain_batch'):
             # BATCHED rows (2026-09-25): every pending frequency in one subspace
             # iteration (reduced.gain_batch; agreement with the per-row path 4e-13

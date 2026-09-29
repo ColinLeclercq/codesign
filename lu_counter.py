@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import contextlib
 import threading
-import traceback
+import sys
 from collections import Counter
 
 _state = threading.local()
@@ -62,19 +62,22 @@ _lock = threading.Lock()
 
 
 def _caller(skip: int = 3) -> str:
-    """file:line of the first frame outside this module."""
+    """file:line of the first frame outside this module.  Walks the frames
+    with sys._getframe (2026-09-29: traceback.extract_stack read source lines
+    through linecache on every counted solve -- 6 % of a MIMO round)."""
     try:
-        stack = traceback.extract_stack()
+        f = sys._getframe(1)
         imm = None
-        for fr in reversed(stack[:-1]):
-            if fr.filename.endswith("lu_counter.py"):
-                continue
-            fn = fr.filename.rsplit("/", 1)[-1]
-            if imm is None:
-                imm = f"{fn}:{fr.lineno}"
-            # the COMPONENT: innermost frame in the driver or the inner solver
-            if fn in ("run_case_epi.py", "sqp_inner.py", "stabilise.py"):
-                return f"{fn}:{fr.lineno} <- {imm}"
+        while f is not None:
+            fn = f.f_code.co_filename
+            if not fn.endswith("lu_counter.py"):
+                fn = fn.rsplit("/", 1)[-1]
+                if imm is None:
+                    imm = f"{fn}:{f.f_lineno}"
+                # the COMPONENT: innermost frame in the driver or the inner solver
+                if fn in ("run_case_epi.py", "sqp_inner.py", "stabilise.py"):
+                    return f"{fn}:{f.f_lineno} <- {imm}"
+            f = f.f_back
         if imm is not None:
             return imm
     except Exception:
