@@ -665,6 +665,56 @@ unaffected (identical scales). The final K+B+C central run (6.20) is on 11c4073,
 from the c4cf908 decentralized record; the c4cf908 central run (SISO rule) is kept
 as `results_mimo_prod/kbc_cen_c4cf908_sisoscale` (5.070 after 20 rounds, stopped).
 
+## 6.24 Discussion (user, 2026-09-29 23:00): symmetry, the set of optima, a K S bound, run time
+
+- Symmetric designs early on: symmetry was never imposed (records: `sym` False).
+  The starts were self-dual (the Gaussian pairs at x_a = -x_s; decentralized, so
+  K = K^T), and gamma is invariant under the duality, so at a self-dual point the
+  gradient, the working set and the SQP step are self-dual too: the iteration stays
+  on the symmetric set up to rounding. It leaves only where the symmetric set is
+  unstable for the iteration (K+B+C centralized: 0.083 first pass, 0.158 final).
+  Symmetry gives no convexity. Restricting to the symmetric set halves the
+  parameters, and its critical points are critical for the full problem
+  (symmetric criticality). It gives no uniqueness: an asymmetric optimum always
+  comes with its dual as a twin of equal gamma, and a UNIQUE optimum would have to
+  be self-dual.
+- The set of optima at the two-pair floor is a continuum. Several different fields
+  reach it (at_dec vs at_dec_p). For given fields every gain beyond the knee gives
+  the same gamma (x10, x1e4 unchanged; 6.17). Nothing selects a bounded gain; the
+  gains found (5028, 42052) are where the iteration happened to stop.
+- A bound on || K S ||_inf (|| W K S ||):
+  - it removes that degeneracy directly: at w -> inf, G -> 0 and K S -> D_c, so
+    || K S ||_inf >= || D_c ||;
+  - it also bounds the high-gain branches that set the certificate's tail W and
+    the band (W = 49272, level set 378 s for at_dec_p against W = 590 for K+B+C
+    central) and the bad scaling of the stall of 6.10.
+- Its cost:
+  - rows: K S (i w) = Gam(i w) = K (I - G K)^-1 is already formed in the batched
+    MIMO rows (6.16); G = C^H R B comes from the same solves; it is an m x p
+    matrix: a sigma_1 of a 2 x 2 per frequency, with Clarke blocks like the
+    performance rows;
+  - no separate reduced model of G is needed: the reduced oracle's union-Galerkin
+    basis (resolvent solves against b and c at the working-set frequencies) is
+    rebuilt every round, so it follows B and C; G~(i w) = c~^H R~ b~;
+  - certification over all w: the same closed-loop pencil, the same sparse level
+    set, with m inputs and p outputs; one more call per accepted design;
+  - the new part: its peaks lie elsewhere (roll-off, high w), so more rows in the
+    working set.
+  - Cheaper proxy: || K ||_inf of the r-dimensional compensator (dense, trivial),
+    which does not see the closed-loop amplification near resonances.
+  - Not needed if the goal is the best achievable gamma (a performance limit): the
+    flat directions do not change gamma. Needed if the designs must be realisable,
+    or if the high-gain branches drive the certificate cost at scale.
+- Run time: the 5.3 h run is ne = 100, the hardest case (2 x 2, centralized
+  order-16 compensator, 98 free complex entries). The dimension is not the driver.
+  The driver is the working set (|Omega| up to 1085, ~340 sigma_2 rows, ~100
+  certificate calls a round) on an equalised optimum. Rounds grew from 2.5 to
+  15 min with |Omega|; the other cases took 5-186 min, SISO ne = 200 31 min. At
+  backward-facing-step sizes each certificate call carries a 2-D/3-D sparse LU, so
+  per-round cost is what to cut first: row pruning, frequency-parallel solves,
+  a hard wall. No ne >= 400 production runs in the sandbox (user); the ne = 400
+  runs of this pass were validation only (plant counts, the 107 s certificate).
+
 ## 6.23 Open items
 
 - the plant heights of the tail certificate: ~100 s at ne = 400 per process
