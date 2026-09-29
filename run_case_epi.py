@@ -1273,7 +1273,7 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
     g, w, ncall, ok = csp.hinf_certified_sparse(
         D.A, D.M, b, c, Ac, Bc, nvec, K, sig, gam_lb=max(gam_lb, 1e-8),
         wlo=wlo, whi=whi, rtol=float(getattr(certified_norm, 'rtol', 1e-4)))
-    # ALL FREQUENCIES (STAGE6 6.22, --cert-all-w): the band is a heuristic; the
+    # ALL FREQUENCIES (STAGE6 6.21, --cert-all-w): the band is a heuristic; the
     # tail bound W (numerical range, sparse_spectrum.closed_loop_tail) proves
     # sigma_1 < g beyond W, and one more level-set question on [-W, W] at g
     # proves nothing exceeds g inside -- g is then the norm over ALL w.  A peak
@@ -1827,7 +1827,7 @@ def main():
                          "6.399134 in 22.6 -- faster early, stopped 0.08 % higher; SISO adoption waits for the cluster)")
     ap.add_argument('--cert-all-w', dest='cert_all_w', choices=['on', 'off'], default='on',
                     help='every full certificate also proves the value over ALL w: tail bound + one level-set '
-                         'question on [-W, W] (STAGE6 6.22)')
+                         'question on [-W, W] (STAGE6 6.21)')
     ap.add_argument('--force-mimo', dest='force_mimo', action='store_true',
                     help='run m = p = 1 through the MIMO path (validation of the MIMO code on SISO, STAGE6 6.16)')
     ap.add_argument('--ctrl-struct', dest='ctrl_struct', choices=['central', 'decentral'], default='central',
@@ -3148,7 +3148,7 @@ def main():
         _aw = getattr(certified_norm, 'last_all_w', None)
         if _aw and _aw.get('ok') and np.isfinite(_aw.get('w', np.nan)) and abs(_aw['w']) > a.whi \
                 and _aw.get('g', 0.0) >= g * (1.0 - 1e-12):
-            # the all-w question found the norm OUTSIDE the band (STAGE6 6.22): the
+            # the all-w question found the norm OUTSIDE the band (STAGE6 6.21): the
             # band grows to cover it, the witness joins Omega as usual
             _hw_new = 1.2 * abs(_aw['w']) + a.wpad
             print(f"    all-w certificate: peak {_aw['g']:.6f} at w = {_aw['w']:+.3f} outside the band; band widened "

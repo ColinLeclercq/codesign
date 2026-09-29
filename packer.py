@@ -236,10 +236,12 @@ class PackerMIMO:
                     row of C_c on its block, D_c[k, k]; B_c FIXED to the SISO
                     gauge mc * ones on each block (as the SISO code fixes it);
       ctrl_mode 'sp': D_c fixed 0;  'gain' (static): only D_c free (masked as above).
-    Scales per complex entry: the SISO rule max(|theta0|, 1e-3 x max |theta0|);
-    entries that start at zero (a switched-off loop, the cross couplings) take
-    0.1 x the median nonzero magnitude of their group.  Central: one entry per
-    row of B_c fixed (the similarity gauge; the SISO gauge at m = p = 1)."""
+    Scales per complex entry: at m = p = 1 the SISO rule max(|theta0|, 1e-3 x
+    max |theta0|) (entries starting at zero: 0.1 x their group's median); for
+    m + p > 2 max(|theta0|, 0.1 x the median nonzero magnitude of its group, at
+    least 1e-3 x the group's max), so a weak loop and the cross couplings step
+    with their group.  Central: one entry per row of B_c fixed (the similarity
+    gauge; the SISO gauge at m = p = 1)."""
 
     def __init__(self, D, flags, arow0, nvec0, K0, xa0, xs0, va0, vs0):
         self.D, self.f = D, flags
@@ -302,8 +304,19 @@ class PackerMIMO:
             if g.size == 0:
                 continue
             nz = g[g > 0]
-            zfloor = max(gfloor, 0.1 * float(np.median(nz)) if nz.size else 1.0)
-            sc[a_:b_] = np.where(g > 0, np.maximum(g, gfloor), zfloor)
+            if m == 1 and p == 1:
+                # the SISO rule: identical trajectories at m = p = 1 (STAGE6 6.16)
+                zfloor = max(gfloor, 0.1 * float(np.median(nz)) if nz.size else 1.0)
+                sc[a_:b_] = np.where(g > 0, np.maximum(g, gfloor), zfloor)
+            else:
+                # MIMO: a floor per group for every entry, 0.1 x the group's median
+                # nonzero magnitude (at least 1e-3 x its max).  The SISO rule scales a
+                # small entry by its own size; with one loop orders of magnitude weaker
+                # than the other it slowed K+B+C central from the same start to
+                # 5.500 / 5.449 / 5.393 in three rounds against 5.493 / 5.261 / 5.042
+                # with this rule (STAGE6 6.23)
+                floor_ = max(1e-3 * max(g.max(), 1.0), 0.1 * float(np.median(nz)) if nz.size else 1.0)
+                sc[a_:b_] = np.maximum(g, floor_)
         self.sc = sc
         self.sx = 0.30
         self.nth = int(free.sum())
