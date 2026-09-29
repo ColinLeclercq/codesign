@@ -119,7 +119,8 @@ factorisations per round, ~70 with reduced-model certification every 4th round.
 | progress stop (with arming and exceptions) + KKT residual report | **done** | STAGE5 28-30 |
 | factorisation cuts (peak reference, gate skip, caches, end curve) | **done** | STAGE5 30.2-30.3 |
 | sparse certificate on partial ARPACK sets (`--cert-disk strict`) | **done** at GL; residual-based disk -> **next: cavity** (the far-band hole of STAGE5 30.5) | STAGE5 30.5 |
-| certification over all frequencies (tail bound + dense band) | **done** at GL | STAGE5 30.6 |
+| certification over all frequencies (tail bound + dense band) | **done** at GL; **sparse at any n** (numerical-range tail bound + sparse level set, at save) | STAGE5 30.6, STAGE6 6.19 |
+| no dense n x n operation in the loop (band, plant pole data, dumped spectrum) | **done**: sparse enclosures and located sets, validated against dense at ne = 100-400; dense left only as checks gated at low n | STAGE6 6.12-6.13 |
 | reduced-model certification every k-th round | **option** (halves factorisations; decide at the cavity) | STAGE5 14, 30.9 |
 | K+FB+FC in a Laplacian basis | **done**; unconstrained use **withdrawn** (cutoff-driven, not mesh-independent) | STAGE5 6, 29, 32 |
 | FB/FC field regularisation | **done**: 4 Gabor atoms (width >= 1, wavenumber <= 0.707; recommended) and a scale-invariant H^2 shape row (`--field-kmax 1 --field-order 2`); H^1 row too weak at k <= 1 | STAGE5 32 |
@@ -134,15 +135,18 @@ factorisations per round, ~70 with reduced-model certification every 4th round.
 | MIMO: gate INCONCLUSIVE on a very wide band -> winding count | **done** | STAGE6 6.5 |
 | MIMO: false best, band one candidate late (`--band-first` on for MIMO); dense all-w gamma check at save (all cases, n + r <= 1000) | **done** | STAGE6 6.6 |
 | run-to-run determinism of field runs (ARPACK start vectors) | **done** | STAGE6 6.8 |
-| relative stationarity test with one very sensitive active row | **open** (measured, not attributed) | STAGE6 6.10 |
+| SQP stationarity test fooled by one very sensitive row (atom amplitudes) | **done** for MIMO (`--sqp-stat pred`: predicted decrease too); SISO: faster early, 0.08 % higher at the stop on ne=100 -> decide on the cluster | STAGE6 6.14 |
+| MIMO code on SISO (`--force-mimo`) | **done**: same trajectory as the SISO path (2.5e-9 over 5 rounds), same cost; batched MIMO rows; packer gauge/scales = SISO | STAGE6 6.16 |
+| actuator/sensor duality (B' = P conj C, C' = P conj B, K' = K^T) | **done**: exact for MIMO (gamma equal to 1e-14); optima self-dual in SISO and decentralized K+B+C, not for atoms (non-unique optimum at the floor) | STAGE6 6.17 |
+| static gain in K+FB+FC; non-diagonal central gain | **answered**: high-gain regime, the closed loop tends to the controller-free T_inf = R - R B (C^H R B)^-1 C^H R | STAGE6 6.17 |
 | dead code after negative tests | **done** (removed, recorded) | CLEANUP 7 |
 | CLEANUP section 5 (reference tables, bounds file, archive) | **done** | CLEANUP 5 |
 
 ## Next
 
-0. MIMO: done at ne=100 (STAGE6); open: scale-safe stationarity (6.10), batched MIMO rows, multistart
-   (the decentralized problems are multimodal), control-cost weight W K S (later, user). The compensator's
+0. MIMO: done at ne=100 (STAGE6); open: multistart (the decentralized problems are multimodal),
+   `--sqp-stat pred` for SISO (cluster regression), control-cost weight W K S (later, user). The compensator's
    face S carries over (kbc_dec entered it at round 0: the SISO optimum's pair on the line). Runs at ne >= 400 go to the cluster (user, 2026-09-28).
 1. Parallelisation (stage 6): winding count, gate and certificate shifts, reduced rows over workers.
-2. Cavity (stage 7): operators from the user's solver, MUMPS/PETSc, subspace dimension, tail bound, P_plant, residual-based disks.
+2. Cavity (stage 7): operators from the user's solver, MUMPS/PETSc, subspace dimension, residual-based disks; the tail bound and P_plant are sparse now (STAGE6 6.13, 6.19) -- to be measured at 3-D sizes.
 3. Cluster: 27-case regression, multistart over controllers.

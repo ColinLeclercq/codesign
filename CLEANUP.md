@@ -259,3 +259,18 @@ prints of the diagnosis (line-search trace, pair residuals, candidate dumps) wer
 removed before the commit; none remain.
 Runs kept as evidence under `results_mimo_prod/*_try*` (each named after what it
 showed; STAGE6 6.3-6.8).
+
+## 11. 2026-09-29 (second pass): dense out of the loop (STAGE6 6.12-6.19)
+
+Added: `sparse_spectrum.py` (plant enclosure, closed-loop located set, tail bound),
+`tools/dual_design.py`, `run_case_epi.py --force-mimo --sqp-stat`, `tools/mimo_start.py --one`,
+`PackerMIMO.blocks`, `reduced._batch_setup_mimo/_Tt_mimo/_TtH_mimo`.
+Replaced: the dense `band_from_closedloop` (now sparse), the dense default of
+`winding_cert.plant_pole_data` (now `method='sparse'`, dense kept as the reference
+`method='dense'`), the dense dumped spectrum, the `D.n <= 4 x dense_nmax` gates of the
+winding plant data (removed: sparse at any n), the MIMO per-row fallback of
+`reduced.gain_batch` (removed: batched), the MIMO packer's per-group scale rule.
+Kept on purpose (validation at low dimension): `FECoDesign.alpha_dense` (anchor check,
+save veto), the dense all-w level set at save (n + r <= 1000), `dense_reference`.
+The temporary profiling and debug hooks of the diagnosis (py-spy runs, the
+line-search traces) lived in scratch files only.

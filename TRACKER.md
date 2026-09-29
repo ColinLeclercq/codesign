@@ -622,3 +622,19 @@ Start peaks on the reduced model: 9 within 5 % (-6.07 ... 8.41). Running
 | non-deterministic field runs | ARPACK start vectors fixed (laplace_basis, tail constants, svds fallback); replicas identical (6.8) |
 | results ne=100 | atoms: central 2.383533 and decentral (from the prototype's start) 2.383533 = the two-pair floor (1e-10 / 5e-9); decentral from SISO 2.964887 (stall, 6.10); K+B+C: decentral 5.565958 (prototype 5.594745), central 3.792962 (prototype 4.277652) (6.9) |
 | relative stationarity with one very sensitive row | measured (6.10), open |
+
+**2026-09-29 (second pass; user: everything sparse and validated; the atoms stall; why K+B+C centralized stopped; MIMO symmetry; static gain; MIMO code for SISO) -- STAGE6 6.12-6.21**
+
+| item | status |
+|---|---|
+| dense audit | band (closed-loop spectrum at every acceptance), plant pole data (winding), dumped spectrum -> sparse; dense left only as checks gated at low n (6.12) |
+| sparse plant enclosure (numerical-range rectangle + tiles proved empty / exhausted) | counts equal to dense at ne = 100/200/400, eigenvalues to 1e-11..1e-4 (6.13) |
+| sparse closed-loop set right of -band_recut (candidates + tiling + winding count) | identical to dense on 9 records incl. the far branch -0.54 - 700.5i; in the loop candidates only (tiling cost 30 % of a round), whole band + count at save (6.13) |
+| sparse all-w certificate (numerical-range tail bound + sparse level set) | equal to the dense all-w value on 6 records (SISO ne = 100-400, MIMO) (6.19) |
+| atoms stall | path-dependent; the stalled design improvable along the gain (x10: 2.95996); intermediate code reaches the floor from the same start; SQP exits caused by the relative stationarity test (atom amplitude rows) -> `--sqp-stat pred` (MIMO default) (6.14) |
+| SISO A/B `--sqp-stat pred` | ne=100: 6.404012 / 22.2 min vs 6.399134 / 22.6 min (ahead until the stop) -> SISO default unchanged (6.14) |
+| K+B+C central stop | progress rule (0.126 %/3 rounds); continued: 3.717885 after 24 more rounds; equalised optimum (28 peaks within 1 %); MIMO scripts stop on 8 rounds now (6.15) |
+| MIMO on SISO (`--force-mimo`) | same trajectory (2.5e-9) and cost as the SISO path; batched MIMO rows (5-6x); gauge + scale rule aligned (6.16) |
+| duality | GL: A^T = P A P; gamma invariant under the dual (1e-14); self-duality measured (6.17) |
+| static gain / non-diagonal central gain | high-gain limit T_inf controller-free; zeroing the off-diagonal gains leaves 2.3835333 (6.17) |
+| final MIMO runs on c4cf908 | see STAGE6 6.20 |

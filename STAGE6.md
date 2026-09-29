@@ -398,8 +398,7 @@ equalised optima (STAGE5 29-30); multistart / cluster budget are the levers.
 (`tools/mimo_start.py --siso REC --one` converts the record). Two differences
 found and removed:
 - the MIMO packer's scale rule (a floor per group) differed from the SISO rule;
-  now the SISO rule, with the group floor only for entries that START AT ZERO
-  (switched-off loops, cross couplings) -- identical at m = p = 1;
+  now the SISO rule at m = p = 1 (for m + p > 2 the per-group floor stays: 6.22);
 - the central structure left B_c entirely free: a diagonal similarity leaves K(s)
   unchanged and keeps A_c tridiagonal, an r-dimensional flat direction; now one
   entry per row of B_c is fixed (its largest at the start) -- the SISO gauge
@@ -524,7 +523,54 @@ has to be.
 
 (filled in below when the runs finish)
 
-## 6.21 Open items
+## 6.21 A false best in the final runs, and the all-w certificate in the loop
+
+The final at_dec_p run (code c4cf908) ended with the loop certifying 2.383534 over
+[-616.57, 616.57] while the dense all-w check at save found **41.640080 at
+w = +409.65 -- inside the final band** (the record stores the dense value). The
+design had been accepted when the band was narrower; the band grew later (from
+other candidates' high-gain branches) and the accepted design was never certified
+again over it -- the "one candidate late" defect of 6.6 in another form, and the
+resonance came from an eigenvalue left of -band_recut (a far branch with a large
+residue), which the band heuristic does not see at all.
+
+Fix (commit 528be56, `--cert-all-w on`, default): every full certificate of a
+candidate that would be ACCEPTED (value below the current best) also proves its
+value over ALL w -- the tail bound W of 6.19 (sigma_1 < g beyond W) and one more
+level-set question on [-W, W] at g. A norm found outside the band is returned
+(the candidate refused if it exceeds the best) and the band widened to cover it.
+The rerun of at_dec_p caught the same peak at round 2 ("all-w certificate: peak
+41.640080 at w = +409.650 outside the band"), refused that candidate and went on.
+Cost: one extra level-set call per accepted round (SISO K+B+C ne=100: +6 s a
+round, 5 rounds 79.6 s against 49.9); SISO results unchanged (identity 8.754365110002194).
+With it the band only steers the working set; the certified value is global at
+every accepted design, not only at save.
+
+## 6.22 The MIMO scale rule, measured
+
+6.16 made the MIMO packer use the SISO scale rule (max(|theta0|, 1e-3 x max |theta0|))
+so that m = p = 1 reproduces the SISO path. On K+B+C central that rule is
+harmful: a weak loop (kbc_dec: |D_c| 0.6 and 0.0055) has small nonzero entries
+that the rule scales by their own size. From the SAME start (the first-pass
+decentralized design, 5.566), three rounds:
+
+| code | round 0 | 1 | 2 |
+|---|---|---|---|
+| first pass (0e7f1c1, per-group floor, no gauge) | 5.507 | 5.236 | 4.941 |
+| SISO rule + gauge (c4cf908) | 5.500 | 5.449 | 5.393 |
+| SISO rule, no gauge | 5.525 | 5.443 | 5.418 |
+| per-group floor + gauge (11c4073) | 5.493 | 5.261 | 5.042 |
+| per-group floor, no gauge | 5.501 | 5.289 | 4.971 |
+
+The line-search steps told the same story (1/128-1/256 against 1/4-1/2). Fix
+(11c4073): the SISO rule at m = p = 1 only; for m + p > 2 every entry gets the
+floor 0.1 x its group's median nonzero magnitude (at least 1e-3 x the group's
+max). The gauge is neutral here and kept. The atoms cases (static gains) are
+unaffected (identical scales). The final K+B+C central run (6.20) is on 11c4073,
+from the c4cf908 decentralized record; the c4cf908 central run (SISO rule) is kept
+as `results_mimo_prod/kbc_cen_c4cf908_sisoscale` (5.09 after 14 rounds, stopped).
+
+## 6.23 Open items
 
 - the plant heights of the tail certificate: ~100 s at ne = 400 per process
   (17 depths); a per-mesh disk cache when the dimension grows;

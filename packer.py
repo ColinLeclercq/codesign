@@ -314,7 +314,7 @@ class PackerMIMO:
                 # small entry by its own size; with one loop orders of magnitude weaker
                 # than the other it slowed K+B+C central from the same start to
                 # 5.500 / 5.449 / 5.393 in three rounds against 5.493 / 5.261 / 5.042
-                # with this rule (STAGE6 6.23)
+                # with this rule (STAGE6 6.22)
                 floor_ = max(1e-3 * max(g.max(), 1.0), 0.1 * float(np.median(nz)) if nz.size else 1.0)
                 sc[a_:b_] = np.maximum(g, floor_)
         self.sc = sc
