@@ -26,7 +26,7 @@ relevant -- reason given); **left** (deliberately not touched, by decision).
 | K+FB+FC ne=400, 4 Gabor atoms per field | 3.903930 | 82 min, 11 rounds | stopped early by the progress stop; same design 3.903963 on ne=200, 3.904026 on ne=800 |
 | K+FB+FC ne=400, 160 modes + H^2 shape row (k <= 1) | 3.914071 | 281 min, 20 rounds | same design 3.915962 on ne=800; optimised at ne=200: 3.911740 |
 | K+FB+FC, unconstrained fields | **withdrawn** | | 3.898938 (ne=100, 80 modes) is 5.52 on ne=200: a discretisation artefact (STAGE5 32.7) |
-| **MIMO, 2 actuators + 2 sensors, ne=100** (branch `mimo`, STAGE6) | atoms (static gains): **2.383533 centralized and decentralized = the two-pair floor** (1e-10 / 5e-9 above sup_w sigma_3^ol); K+B+C: decentralized 5.565958, centralized **3.792962** | 8-44 min | SISO at ne=100: 3.877016 (atoms), 6.399134 (K+B+C); every record re-checked over all w by `tools/check_mimo.py` |
+| **MIMO, 2 actuators + 2 sensors, ne=100** (branch `mimo`, STAGE6 6.20) | atoms (static gains): **2.383533 decentralized (two starts) and centralized = the two-pair floor** (6e-11 / 2e-8 / <1e-12 above sup_w sigma_3^ol); K+B+C: decentralized **5.339317**, centralized **3.715450** (stopped by hand at -0.25 %/round) | 5 min - 5.3 h | SISO at ne=100: 3.877016 (atoms), 6.399134 (K+B+C); every record certified over all w (sparse, check 7) and re-checked densely by `tools/check_mimo.py` |
 | lower bounds | 3.509193 (any single actuator/sensor pair), 9.831865 / 9.660137 (sensor at 0.98 / actuator at -1.03) | | `results/bounds_ne200.json` |
 
 Figures: `figs/final_sigma.png` (uncontrolled sigma_1 vs controlled sigma_1, sigma_2),
@@ -138,13 +138,14 @@ factorisations per round, ~70 with reduced-model certification every 4th round.
 | SQP stationarity test fooled by one very sensitive row (atom amplitudes) | **done** for MIMO (`--sqp-stat pred`: predicted decrease too); SISO: faster early, 0.08 % higher at the stop on ne=100 -> decide on the cluster | STAGE6 6.14 |
 | MIMO code on SISO (`--force-mimo`) | **done**: same trajectory as the SISO path (2.5e-9 over 5 rounds), same cost; batched MIMO rows; packer gauge/scales = SISO | STAGE6 6.16 |
 | actuator/sensor duality (B' = P conj C, C' = P conj B, K' = K^T) | **done**: exact for MIMO (gamma equal to 1e-14); optima self-dual in SISO and decentralized K+B+C, not for atoms (non-unique optimum at the floor) | STAGE6 6.17 |
-| static gain in K+FB+FC; non-diagonal central gain | **answered**: high-gain regime, the closed loop tends to the controller-free T_inf = R - R B (C^H R B)^-1 C^H R | STAGE6 6.17 |
+| static gain in K+FB+FC; non-diagonal central gain | **answered**: high-gain regime, the closed loop tends to the controller-free T_inf = R - R B (C^H R B)^-1 C^H R; the final centralized atoms design from the floor stays diagonal (cross gains 2e-6) | STAGE6 6.17 |
 | dead code after negative tests | **done** (removed, recorded) | CLEANUP 7 |
 | CLEANUP section 5 (reference tables, bounds file, archive) | **done** | CLEANUP 5 |
 
 ## Next
 
-0. MIMO: done at ne=100 (STAGE6); open: multistart (the decentralized problems are multimodal),
+0. MIMO: done at ne=100 (STAGE6); open: the K+B+C centralized tail (-0.25 %/round when stopped) and a start from
+   the 5.339317 decentralized record (cluster), multistart (the decentralized problems are multimodal),
    `--sqp-stat pred` for SISO (cluster regression), control-cost weight W K S (later, user). The compensator's
    face S carries over (kbc_dec entered it at round 0: the SISO optimum's pair on the line). Runs at ne >= 400 go to the cluster (user, 2026-09-28).
 1. Parallelisation (stage 6): winding count, gate and certificate shifts, reduced rows over workers.

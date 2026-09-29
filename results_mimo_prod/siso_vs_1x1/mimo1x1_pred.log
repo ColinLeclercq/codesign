@@ -1,0 +1,75 @@
+MIMO: --band-first on (the candidate's band before its certificate)
+controller order 7 -> 8 (from the seed catalogue)
+  warm start: none usable -- cold start
+MIMO: 1 actuators, 1 sensors, central compensator of order 8; 31 free complex controller entries; start results_mimo_prod/start_kbc_frozen_1x1.npz (record gamma 10.990169)
+  parallel constraints unavailable (NotImplementedError); running them serially
+pool: 2 workers for the |Omega| constraints; stability certificate SERIAL
+band [-30.00, 30.00]; controller poles |Im| <= 20.00 (3/2 x max seed |Im|, band = 3/2 x wmax)
+controller poles NOT constrained in |Im| (--ctrl-imcap off); the band follows the closed-loop spectrum at each accepted design, from [-30.00, 30.00]
+stage-1 flags: select-cons=on ctrl-imcap=off ctrl-stab=on cont-anchor=defer opt-tol=1e-10
+start gamma=10.990169, |Omega|=155
+oracle: position-robust (union Galerkin, input basis b 12, c 12)
+continuation anchor verified: alpha=-0.0719, watching 8 near-line eigenvalue(s)
+    oracle: +2 anchor(s) (certified peaks) -> dim 41
+    start peaks re-derived on the reduced model: 1 within 5 % (0 new): [3.315]
+    sigma2 enrolled at 0 of 155 frequencies
+    sqp refine: working set +9 -> |Omega|=164
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 2 member(s) moved to their tops, 0 merged
+    tau governor: 3 homotopy split(s), gate passed -- no cap
+    oracle: reduced at the witness 8.100500 vs certified 8.100500 (rel 9.7e-14)
+  outer 0: |Omega|=164  t=8.100500  certified=8.100500  best=8.100500  (+3 freq, 33 calls)
+    inner budget -> 20 (certified/t = 1.000)
+    oracle: +6 anchor(s) (certified peaks) -> dim 91
+    sigma2 row at w=-0.5335: sigma1=7.9703 sigma2=7.8468 gap=0.0155
+    sigma2 enrolled at 1 of 167 frequencies
+    sqp refine: working set +16 -> |Omega|=183
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 4 member(s) moved to their tops, 0 merged
+    tau governor: 1 homotopy split(s), gate passed -- no cap
+    oracle: reduced at the witness 7.913340 vs certified 7.913340 (rel 5.3e-14)
+  outer 1: |Omega|=183  t=7.913340  certified=7.913340  best=7.913340  (+3 freq, 66 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +7 anchor(s) (certified peaks) -> dim 93
+    sigma2 row at w=-0.5064: sigma1=7.8958 sigma2=7.8555 gap=0.0051
+    sigma2 row at w=-0.5000: sigma1=7.8941 sigma2=7.8407 gap=0.0068
+    sigma2 enrolled at 2 of 186 frequencies
+    sqp refine: working set +36 -> |Omega|=222
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 8 member(s) moved to their tops, 0 merged
+    tau governor: 5 homotopy split(s), gate passed -- no cap
+    oracle: reduced at the witness 7.761781 vs certified 7.761781 (rel 1.8e-14)
+  outer 2: |Omega|=222  t=7.761781  certified=7.761781  best=7.761781  (+1 freq, 124 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +6 anchor(s) (certified peaks) -> dim 95
+    sigma2 row at w=-0.5314: sigma1=7.7544 sigma2=7.6957 gap=0.0076 (active)
+    sigma2 row at w=-0.5285: sigma1=7.7546 sigma2=7.7035 gap=0.0066 (active)
+    sigma2 row at w=-0.5079: sigma1=7.7546 sigma2=7.7136 gap=0.0053 (active)
+    sigma2 row at w=-0.5000: sigma1=7.7527 sigma2=7.6985 gap=0.0070
+    sigma2 enrolled at 4 of 223 frequencies
+    sqp refine: working set +12 -> |Omega|=235
+    sqp: stalled solve -- quasi-Newton matrix and radius reset for the next round
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 6 member(s) moved to their tops, 0 merged
+    tau governor: 2 homotopy split(s), gate passed -- no cap
+    oracle: reduced at the witness 7.624472 vs certified 7.624472 (rel 1.9e-15)
+  outer 3: |Omega|=235  t=7.624402  certified=7.624472  best=7.624472  (+3 freq, 87 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +7 anchor(s) (certified peaks) -> dim 99
+    sigma2 row at w=-0.5314: sigma1=7.6235 sigma2=7.5493 gap=0.0097 (active)
+    sigma2 row at w=-0.5166: sigma1=7.6244 sigma2=7.5736 gap=0.0067 (active)
+    sigma2 row at w=-0.5079: sigma1=7.6240 sigma2=7.5701 gap=0.0071 (active)
+    sigma2 row at w=-0.5000: sigma1=7.6215 sigma2=7.5577 gap=0.0084 (active)
+    sigma2 enrolled at 4 of 238 frequencies
+    sqp refine: working set +10 -> |Omega|=248
+    sqp: stalled solve -- quasi-Newton matrix and radius reset for the next round
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 8 member(s) moved to their tops, 0 merged
+    tau governor: 1 homotopy split(s), gate passed -- no cap
+    oracle: reduced at the witness 7.499712 vs certified 7.499712 (rel 9.4e-15)
+  outer 4: |Omega|=248  t=7.499712  certified=7.499712  best=7.499712  (+2 freq, 86 calls)
+    inner budget -> 40 (certified/t = 1.000)
+winding certificate: 0 eigenvalues right of Re=-0.0250 (909 pts) -- UNCONDITIONALLY stable with eps/2 margin
+final band check: 12 eigenvalues right of Re=-1 located, winding count 12 -- COMPLETE
+dense all-frequency check: gamma 7.499712 (certified 7.499712)
+{"case": "K+B+C", "gamma": 7.499711739620764, "alpha": -0.07162632141099975, "n_active": 1, "outer": 5, "nOmega": 250, "calls": 396, "seconds": 213.0}

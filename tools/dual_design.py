@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """dual_design.py -- the actuator/sensor DUAL of a MIMO design and its gamma
-(STAGE6 6.15).
+(STAGE6 6.17).
 
 The Ginzburg-Landau operator satisfies A^T = P A P and M = P M P, P the
 reflection x -> -x of the nodes (checked to 5e-15).  Then R(s)^T = P R(s) P for

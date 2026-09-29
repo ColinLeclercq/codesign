@@ -1,0 +1,53 @@
+controller order 7 -> 8 (from the seed catalogue)
+warm start from results_ne100/K_B_C_s0_ne100.npz
+pool: 2 workers for the |Omega| constraints; stability certificate SERIAL
+band [-30.00, 30.00]; controller poles |Im| <= 20.00 (3/2 x max seed |Im|, band = 3/2 x wmax)
+controller poles NOT constrained in |Im| (--ctrl-imcap off); the band follows the closed-loop spectrum at each accepted design, from [-30.00, 30.00]
+stage-1 flags: select-cons=on ctrl-imcap=off ctrl-stab=on cont-anchor=defer opt-tol=1e-10
+start gamma=10.990169, |Omega|=155
+warm start -> trust radius 0
+oracle: position-robust (union Galerkin, input basis b 12, c 12)
+continuation anchor verified: alpha=-0.0719, watching 8 near-line eigenvalue(s)
+    oracle: +2 anchor(s) (certified peaks) -> dim 41
+    start peaks re-derived on the reduced model: 1 within 5 % (0 new): [3.315]
+    sigma2 enrolled at 0 of 155 frequencies
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    oracle: reduced at the witness 9.805464 vs certified 9.805464 (rel 1.3e-14)
+  outer 0: |Omega|=155  t=9.805464  certified=9.805464  best=9.805464  (+2 freq, 4 calls)
+    inner budget -> 20 (certified/t = 1.000)
+    oracle: +4 anchor(s) (certified peaks) -> dim 81
+    sigma2 enrolled at 0 of 157 frequencies
+    sqp refine: working set +1 -> |Omega|=158
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 2 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 9.465461 vs certified 9.465461 (rel 2.1e-14)
+  outer 1: |Omega|=158  t=9.465461  certified=9.465461  best=9.465461  (+1 freq, 8 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +4 anchor(s) (certified peaks) -> dim 91
+    sigma2 enrolled at 0 of 159 frequencies
+    sqp refine: working set +1 -> |Omega|=160
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 4 member(s) moved to their tops, 0 merged
+    tau governor: 1 homotopy split(s), gate passed -- no cap
+    oracle: reduced at the witness 8.969086 vs certified 8.969086 (rel 6.3e-14)
+  outer 2: |Omega|=160  t=8.969086  certified=8.969086  best=8.969086  (+0 freq, 7 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +5 anchor(s) (certified peaks) -> dim 93
+    sigma2 enrolled at 0 of 160 frequencies
+    sqp refine: working set +1 -> |Omega|=161
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    oracle: reduced at the witness 8.969086 vs certified 8.969086 (rel 5.2e-14)
+  outer 3: |Omega|=161  t=8.969086  certified=8.969086  best=8.969086  (+0 freq, 7 calls)
+    inner budget -> 40 (certified/t = 1.000)
+  no new frequency (1/3) -- continuing with the current Omega
+    sigma2 enrolled at 0 of 161 frequencies
+    sqp refine: working set +1 -> |Omega|=162
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 3 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 8.754365 vs certified 8.754365 (rel 4.1e-16)
+  outer 4: |Omega|=162  t=8.754365  certified=8.754365  best=8.754365  (+1 freq, 8 calls)
+    inner budget -> 40 (certified/t = 1.000)
+winding certificate: 0 eigenvalues right of Re=-0.0250 (931 pts) -- UNCONDITIONALLY stable with eps/2 margin
+final band check: 12 eigenvalues right of Re=-1 located, winding count 12 -- COMPLETE
+dense all-frequency check: gamma 8.754365 (certified 8.754365)
+{"case": "K+B+C", "gamma": 8.754365110002194, "alpha": -0.05906551352916522, "n_active": 1, "outer": 5, "nOmega": 163, "calls": 34, "seconds": 51.3}

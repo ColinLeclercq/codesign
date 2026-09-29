@@ -274,3 +274,7 @@ Kept on purpose (validation at low dimension): `FECoDesign.alpha_dense` (anchor 
 save veto), the dense all-w level set at save (n + r <= 1000), `dense_reference`.
 The temporary profiling and debug hooks of the diagnosis (py-spy runs, the
 line-search traces) lived in scratch files only.
+Later in the pass: the MIMO packer's per-group scale floor restored for m + p > 2
+(11c4073, 6.22); `tools/check_mimo.py` check 3 per-entry FD step (replaces the
+per-block step); the run directories superseded by the final records kept as
+named diagnostics (`*_c4cf908_*`, `*_diag*`, `prev_0e7f1c1`), no unnamed leftovers.

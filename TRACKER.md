@@ -623,7 +623,7 @@ Start peaks on the reduced model: 9 within 5 % (-6.07 ... 8.41). Running
 | results ne=100 | atoms: central 2.383533 and decentral (from the prototype's start) 2.383533 = the two-pair floor (1e-10 / 5e-9); decentral from SISO 2.964887 (stall, 6.10); K+B+C: decentral 5.565958 (prototype 5.594745), central 3.792962 (prototype 4.277652) (6.9) |
 | relative stationarity with one very sensitive row | measured (6.10), open |
 
-**2026-09-29 (second pass; user: everything sparse and validated; the atoms stall; why K+B+C centralized stopped; MIMO symmetry; static gain; MIMO code for SISO) -- STAGE6 6.12-6.21**
+**2026-09-29 (second pass; user: everything sparse and validated; the atoms stall; why K+B+C centralized stopped; MIMO symmetry; static gain; MIMO code for SISO) -- STAGE6 6.12-6.23**
 
 | item | status |
 |---|---|
@@ -637,4 +637,7 @@ Start peaks on the reduced model: 9 within 5 % (-6.07 ... 8.41). Running
 | MIMO on SISO (`--force-mimo`) | same trajectory (2.5e-9) and cost as the SISO path; batched MIMO rows (5-6x); gauge + scale rule aligned (6.16) |
 | duality | GL: A^T = P A P; gamma invariant under the dual (1e-14); self-duality measured (6.17) |
 | static gain / non-diagonal central gain | high-gain limit T_inf controller-free; zeroing the off-diagonal gains leaves 2.3835333 (6.17) |
-| final MIMO runs on c4cf908 | see STAGE6 6.20 |
+| MIMO packer scale rule (SISO rule slowed K+B+C central) | per-group floor for m + p > 2, SISO rule at 1x1 (11c4073) (6.22) |
+| false best 41.64 at w = 409.65 inside the final band (at_dec_p, c4cf908) | all-w certificate of every accepted design (tail bound + level set on [-W, W]), band widened to the peak (528be56); fired again in kbc_cen (6.21) |
+| final MIMO runs | atoms 2.3835333 x3 (the floor); K+B+C dec 5.339317 (11c4073), cen 3.715450 (11c4073, stopped by hand); all checks pass (6.20) |
+| `check_mimo` FD step too coarse for one huge entry | per-entry step; all final records re-checked (6.20) |

@@ -200,7 +200,7 @@ both). Scope: field cases run after STAGE5 34.2 (2026-09-29); none of the SISO
 results reported in STATUS (the atoms and H^2 records predate 34.2), and the SISO
 K+B+C identity test was never affected (no fields).
 
-## 6.9 Results at ne=100 (2 actuators, 2 sensors) -- first pass (superseded by 6.19)
+## 6.9 Results at ne=100 (2 actuators, 2 sensors) -- first pass (superseded by 6.20)
 
 All on commit 0e7f1c1 (the code of 6.3-6.8), `tools/mimo_n100.sh <case>`, one
 process each, two at a time on the 2 cores; records now under
@@ -429,18 +429,24 @@ What remains SISO-only is code, not results: the symmetric-subspace mode
     B' = P conj(C),  C' = P conj(B),  K'(s) = K(s)^T
 has the transposed closed-loop map up to P: the same singular values at every w,
 the same gamma (`tools/dual_design.py`: equal to 1e-14..1e-16 on all five MIMO
-records). A design equal to its dual (up to port order and a phase per port) is
+records of the first pass and to 4e-15..7e-15 on the final ones of 6.20). A
+design equal to its dual (up to port order and a phase per port) is
 self-dual: SISO x_a = -x_s, psi_a = conj(P psi_s). Measured distance to
 self-duality ||C - P conj(B) Pi|| / ||C||:
 
 | design | SISO K+B+C | SISO atoms | MIMO K+B+C dec | MIMO K+B+C cen | atoms dec | atoms cen | atoms dec (proto start) |
 |---|---|---|---|---|---|---|---|
-| distance | 0 | 0.022 | 0 (x_a = -x_s to 1e-8) | 0.083 | 0.31 | 0.84 | 0.64 |
+| first pass (0e7f1c1) | 0 | 0.022 | 0 (x_a = -x_s to 1e-8) | 0.083 | 0.31 | 0.84 | 0.64 |
+| final records (6.20) | | | 1.2e-7 | 0.158 | 0.89 | 0.89 | 0.64 |
+
+(All the final atoms designs are on the floor with different distances: the
+self-dual member of the family is not selected. ||D_c - D_c^T|| / ||D_c||: 0 for
+the decentralized designs, 1.3e-9 for the final centralized atoms design.)
 
 So the symmetry of the PROBLEM holds exactly in MIMO; the optima need not be
 symmetric. Expected where the optimum is not unique: the atoms designs sit on the
 two-pair floor, reached by a whole family (next point), so nothing selects the
-self-dual member; the centralized K+B+C optimum is 8 % from its dual -- a
+self-dual member; the centralized K+B+C optimum is 8 % from its dual (final record: 16 %) -- a
 symmetry-breaking local optimum or an unconverged one (its dual has the same
 gamma; a symmetric design is a stationary point candidate but need not be the
 minimum). Decentralized K+B+C, like SISO, lands exactly on the self-dual set.
@@ -464,13 +470,24 @@ unchanged; the controller-free limit T_inf: 2.3835327 = the floor. The
 off-diagonal entries (40, 33 against 5060, 130) are leftovers in a flat direction,
 not a feature -- the observation "centralizing buys nothing" DOES generalise;
 what it predicts is not "diagonal" but "irrelevant". (D_c x 0.5 gives 4.377: the
-design sits near the knee of the high-gain regime.) The decentralized design from
-the prototype's start reaches the floor differently: one loop at very high gain
-(|D_c,11| = 42044) and one at a finite gain (|D_c,22| = 32) -- its T_inf is 7.94,
-so it is NOT in the both-loops high-gain regime; the floor is reached by more
-than one mechanism. With fixed Gaussian actuators (K+B+C) the high-gain limit is
-poor and the controller must mix: there centralizing buys 31.9 % (5.566 -> 3.793)
-and K_12(iw), K_21(iw) are of the order of the diagonal (6.9).
+design sits near the knee of the high-gain regime.) That first-pass centralized
+design started from the stalled decentralized one (2.965), off the floor, and the
+off-diagonals grew on the way. The final centralized run (6.20) starts from a
+decentralized design already ON the floor and keeps it diagonal: |D_c| =
+[[5028, 2.0e-6], [2.7e-6, 171]] after 3 rounds, gamma unchanged -- with nothing
+to gain, the SQP does not move the cross gains. The final decentralized design
+(|D_c| = 5028, 171): gamma on a grid |w| <= 20 is unchanged by D_c x 10, by D_c x
+1e4 and by either loop alone x 1e4; D_c x 0.5 gives 5.050 -- both loops in the
+high-gain regime, T_inf = the floor.
+The decentralized design from the prototype's start reaches the floor differently:
+one loop at very high gain (|D_c,11| = 42052) and one at a finite gain (|D_c,22| =
+17.5); on the same grid D_c x 10 gives 5.980, D_c x 1e4 gives 8.640, and loop 2
+alone x 1e4 gives 8.645 while loop 1 alone x 1e4 leaves the floor unchanged. So
+it is NOT in the both-loops high-gain regime: loop 2 needs its finite gain. The
+floor is reached by more than one mechanism (first-pass record: T_inf 7.94). With fixed Gaussian actuators (K+B+C) the high-gain limit is
+poor and the controller must mix: there centralizing buys 31.9 % (5.566 -> 3.793;
+final records 30.4 %, 5.339 -> 3.715, 6.20) and K_12(iw), K_21(iw) are of the order
+of the diagonal (6.9, 6.20).
 
 ## 6.18 Cost after this pass
 
@@ -521,7 +538,83 @@ has to be.
 
 ## 6.20 Results at ne=100 on the final code
 
-(filled in below when the runs finish)
+`tools/mimo_n100.sh <case>` (8-round progress stop for every case, `--sqp-stat
+auto` = pred for MIMO), one process each, at most two at a time; records in
+`results_mimo_prod/<case>/`, each with `tools/check_mimo.py` next to it
+(REC_check.log / .json): the certified gamma equal to the dense level set over ALL
+w, winding counts equal to the dense counts, abscissa certificate equal to the dense
+one, FD gradient at the witness, and check 7 (sparse all-w certificate, 6.19).
+Every final band check located = counted (no incomplete band in any round).
+
+| family | design | gamma (certified, all w) | code | rounds / wall | stop | dense all-w (rel) | check 7: tail W, level set |
+|---|---|---|---|---|---|---|---|
+| K+B+C | SISO optimum (loop 2 off) | 6.399134 | | | | | |
+| | decentralized (from pair 2 at -+4) | **5.339317** (-16.6 %; first pass 5.565958) | 11c4073 | 41 / 186 min | progress (0.124 % / 8) | 3e-14 | 423.3, 1 call, 6.6 s |
+| | decentralized, same start, SISO scale rule | 5.473942 | c4cf908 | 35 / 139 min | progress (0.133 % / 8) | 6e-14 | 285.9, 1 call, 5.9 s |
+| | centralized, from the c4cf908 decentralized (5.473942) | **3.715450** (-41.9 %; first pass 3.792962) | 11c4073 | 36 / 5.3 h | stopped by hand (still -0.25 %/round), + 1 finalising round | 7e-14 | 590.0, 1 call, 5.4 s |
+| atoms | SISO optimum at ne=100 | 3.877016 | | | | | |
+| | decentralized, from the SISO optimum | **2.3835333278** (first pass 2.964887, stalled) | c4cf908 | 17 / 48 min | fixed point | 7e-15 | 6742.0, 1 call, 8.8 s |
+| | centralized, from that decentralized | **2.3835333277** | c4cf908 | 3 / 5 min | fixed point | 1e-15 | 6742.0, 1 call, 9.0 s |
+| | decentralized, from the prototype's optimum | **2.3835333438** | 528be56 | 14 / 33 min | fixed point | 1e-14 | 49272, 1 call, 378 s |
+
+- **All three atoms designs are on the two-pair floor** sup_w sigma_3^ol =
+  2.3835333277 (6.9): the decentralized one from the SISO optimum, which stalled at
+  2.965 in the first pass, reaches it to 6e-11; the centralized one from it to
+  <1e-12 in 3 rounds WITHOUT creating cross gains (|D_c,12|, |D_c,21| ~ 2e-6 against
+  5028, 171; 6.17); the one from the prototype's start to 1.6e-8 with a different
+  mechanism (one loop at finite gain, 6.17). The atoms problem is solved on this
+  mesh: centralization buys nothing, decentralization loses nothing.
+- **K+B+C decentralized**: 5.339317 on 11c4073, 4.1 % below the first pass and
+  2.5 % below the c4cf908 run from the same start (the packer scale rule of 6.22:
+  close to the first pass's trajectory for 9 rounds, then further), mirror symmetric
+  (self-dual to 1.2e-7; |D_c| = 0.611, 0.0064), stopped on the 8-round progress rule.
+  It became the record (`kbc_dec`); the c4cf908 one is kept as
+  `kbc_dec_c4cf908_sisoscale` -- it is the start of the centralized run below.
+- **K+B+C centralized**: 3.715450, -32.1 % from its start and -41.9 % against SISO,
+  below the first pass (3.792962 after 21 rounds) and below the first pass continued
+  for 24 more rounds (3.717885, 6.15). Timeline: rounds 0-5 (5.474 -> 4.549, 15 min),
+  container restart, resumed from the checkpoint, rounds 6-34 (-> 3.717430, 4.8 h;
+  rounds grow from 2.5 to 15 min as |Omega| grows to 1085 with 340 sigma_2 rows), then
+  stopped by hand (killed after a checkpoint) and finalised by one more round from it
+  (`EXTRA="--outer 1"`: 3.715450, 15 min, then the save sequence). It was still
+  descending ~0.25 %/round: the equalised tail of 6.15; `--wall` is a per-round
+  budget, not a hard stop, so the 8-round progress rule is the only automatic stop
+  and at this rate it needs many hours -- a cluster matter. The in-loop all-w
+  certificate (6.21) fired once here: round 18 found a peak 4.055491 at w = +42.455
+  outside the band, the candidate was refused and the band widened to +-53.95.
+  Cross couplings: |K_12(iw)|, |K_21(iw)| of the order of the diagonal in the band
+  (figs/mimo_prod_controller.png); self-dual distance 0.158, ||D_c - D_c^T||/||D_c||
+  = 0.028 (6.17).
+- `tools/check_mimo.py` check 3 (FD) had a step 1e-7 max|theta| per block: on
+  kbc_cen (max |C_c| = 95834, h = 9.6e-3) the n entry differed by 0.8 %
+  (-1.5138/-1.5016; with h = 1e-3 .. 1e-8 the FD converges to the analytic
+  -1.51384992: truncation of the check, not a gradient error), and on the c4cf908
+  kbc_dec record the error was 2.5e-2 of the largest derivative. Now a per-entry
+  step 1e-7 max(1, |theta_i|); all six final records re-checked: K+B+C 1e-9 .. 2.6e-6
+  of the largest derivative at the witness, <= 2e-8 at w = 2; atoms: at w = 2
+  <= 4e-8, at the witness the derivatives are 3e-6 .. 5e-5 (sigma_1 pinned to the
+  open-loop sigma_3, which no design moves), so the relative FD error there (1e-3 ..
+  4e-2) is an absolute 1e-7 -- the FD noise floor. All other checks unchanged
+  (gamma, winding counts, abscissa, all-w certificate).
+- Centralization: K+B+C 5.339317 -> 3.715450 (-30.4 % from the best decentralized);
+  atoms 0 (both on the floor).
+- Provenance. at_dec and at_cen ran on c4cf908 (sparse band; the SISO scale rule
+  in the packer, which 6.22 replaced for m + p > 2 -- identical scales for static
+  gains; the all-w certificate only at save as a check, dense -- the in-loop
+  certificate came with 528be56): their dense all-w values equal the loop's, so no
+  false best, and check 7 certifies them sparsely. kbc_dec and kbc_cen ran on
+  11c4073 (tree snapshots of the commit, launched with `tools/mimo_n100.sh`).
+  at_dec_p is the 528be56 rerun of the c4cf908 false best (6.21). A container restart (exit 137) killed the 528be56 rerun of at_dec (not
+  needed: the c4cf908 record passes every check) and the K+B+C centralized run of
+  11c4073 at round 5 (4.548733); the latter was resumed from its checkpoint (same
+  snapshot, same flags; `=== container restart` in its run.log).
+- Diagnostic runs kept: `at_dec_diag_newcode` (6.14), `kbc_cen_cont_diag` (6.15),
+  `kbc_dec_c4cf908_sisoscale` (above),
+  `siso_vs_1x1` (6.16), `at_dec_p_c4cf908_falsebest` (6.21),
+  `kbc_cen_c4cf908_sisoscale` (6.22); first pass in `prev_0e7f1c1`.
+- Figures regenerated on these records (`tools/mimo_prod_plots.py`):
+  `figs/mimo_prod_sigma.png`, `figs/mimo_prod_fields.png`,
+  `figs/mimo_prod_controller.png`.
 
 ## 6.21 A false best in the final runs, and the all-w certificate in the loop
 
@@ -545,6 +638,8 @@ Cost: one extra level-set call per accepted round (SISO K+B+C ne=100: +6 s a
 round, 5 rounds 79.6 s against 49.9); SISO results unchanged (identity 8.754365110002194).
 With it the band only steers the working set; the certified value is global at
 every accepted design, not only at save.
+It fired again in the final K+B+C centralized run (round 18: 4.055491 at
+w = +42.455 outside the band; 6.20).
 
 ## 6.22 The MIMO scale rule, measured
 
@@ -568,7 +663,7 @@ floor 0.1 x its group's median nonzero magnitude (at least 1e-3 x the group's
 max). The gauge is neutral here and kept. The atoms cases (static gains) are
 unaffected (identical scales). The final K+B+C central run (6.20) is on 11c4073,
 from the c4cf908 decentralized record; the c4cf908 central run (SISO rule) is kept
-as `results_mimo_prod/kbc_cen_c4cf908_sisoscale` (5.09 after 14 rounds, stopped).
+as `results_mimo_prod/kbc_cen_c4cf908_sisoscale` (5.070 after 20 rounds, stopped).
 
 ## 6.23 Open items
 
@@ -584,3 +679,7 @@ as `results_mimo_prod/kbc_cen_c4cf908_sisoscale` (5.09 after 14 rounds, stopped)
 - winding count at cavity scale: P_plant from the sparse enclosure now (6.13);
   its cost at 3-D sizes still to measure;
 - ne >= 400 MIMO runs: on the cluster (user, 2026-09-28).
+- K+B+C centralized: still -0.25 %/round when stopped (6.20); its start was the
+  c4cf908 decentralized record (5.474), not the better 11c4073 one (5.339) -- both
+  (the tail and the start) on the cluster; `--wall` as a hard stop would bound such
+  runs.

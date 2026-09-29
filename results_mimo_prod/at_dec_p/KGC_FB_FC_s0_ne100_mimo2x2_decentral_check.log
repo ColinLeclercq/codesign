@@ -1,0 +1,10 @@
+1. sigma_1 sparse/Woodbury vs dense Cholesky reference at 212 frequencies: max rel 1.4e-12
+2. MIMO class at m = p = 1 vs the SISO class (results_n100_kbc/K_B_C_s0_ne100.npz): sigma max rel 1.1e-14, gradients 3.8e-14
+3. finite differences at w = -0.6825 (sigma_1 2.383533, sigma_2 2.366411), analytic/FD: K -2.4451e-09/+6.2172e-08, n -3.9190e-13/+3.7748e-08, Bc +0.0000e+00/+0.0000e+00, d +0.0000e+00/+0.0000e+00, B1 -2.5210e-06/-2.5151e-06, B2 -1.6265e-06/-1.6214e-06, C1 -4.5753e-05/-4.5752e-05, C2 +1.7113e-06/+1.7160e-06  -> max error 1.4e-03 of the largest derivative 4.58e-05
+3. finite differences at w = +2.0000 (sigma_1 2.343541, sigma_2 1.607059), analytic/FD: K -9.4123e-01/-9.4123e-01, n +8.6989e-08/+8.4377e-08, Bc +0.0000e+00/+0.0000e+00, d +0.0000e+00/+0.0000e+00, B1 +2.2728e-02/+2.2728e-02, B2 -5.7801e-01/-5.7801e-01, C1 +3.1009e-01/+3.1009e-01, C2 -6.0055e-01/-6.0055e-01  -> max error 2.8e-09 of the largest derivative 9.41e-01
+4. gamma: record 2.383533, dense level set 2.383533 at w = -0.6824 over all w (5 levels, certified True); rel 1.3e-14
+5. eigenvalues right of Re = -0.050: winding count 0 (ok True, 697 pts), dense 0
+5. eigenvalues right of Re = +0.000: winding count 0 (ok True, 649 pts), dense 0
+6. abscissa: certificate -0.218842 (clear True), dense -0.218842 at -0.2188-0.5797j
+7. sparse all-w certificate: tail bound W = 49272.03; level set on [-W, W] certified True at 2.383533 (1 calls, 8.4 s); dense (4.) 2.383533
+-> results_mimo_prod/at_dec_p/KGC_FB_FC_s0_ne100_mimo2x2_decentral_check.json

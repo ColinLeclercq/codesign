@@ -122,8 +122,8 @@ def main():
         fd = []
         base = dict(K=Dc, n=Cc, Bc=arow[3], d=arow[0])
         for kind in ('K', 'n', 'Bc', 'd'):
-            h = 1e-7 * max(1.0, float(np.max(np.abs(base[kind]))))
-            dth = rnd(np.shape(base[kind]))
+            h = 1e-7      # per-entry step 1e-7 max(1, |theta_i|): one huge entry must not coarsen the rest
+            dth = rnd(np.shape(base[kind])) * np.maximum(1.0, np.abs(base[kind]))
             pred = float(np.real(np.sum(np.reshape(g[kind], np.shape(dth)) * dth)))
             vals = []
             for sgn in (1, -1):
