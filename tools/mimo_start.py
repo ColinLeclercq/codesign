@@ -6,6 +6,8 @@
     python tools/mimo_start.py --siso results_n100_kbc/K_B_C_s0_ne100.npz --pair2=-4,4 --out results_mimo_prod/start_kbc.npz
     # from a SISO atoms optimum (static gain + passive compensator): loop 2 = shifted copies of the fields
     python tools/mimo_start.py --siso results_fb_atoms_n200_long/K_FB_FC_s0_ne200.npz --atoms --ne 100 --out ...
+    # the SISO record itself as m = p = 1 (for run_case_epi.py --force-mimo)
+    python tools/mimo_start.py --siso results_n100_kbc/K_B_C_s0_ne100.npz --one --out results_mimo_prod/start_siso_1x1.npz
     # from a prototype record (tools/mimo_proto.py)
     python tools/mimo_start.py --proto results_mimo/cen3.npz --out ...
 
@@ -21,7 +23,22 @@ from fe_codesign import FECoDesign
 import fieldbasis as FB
 
 
+def siso_as_1x1(a):
+    """The SISO record itself as an m = p = 1 MIMO record (--force-mimo runs,
+    STAGE6 6.16): B_c = mc ones, C_c = nvec, D_c = [[K]]."""
+    z = np.load(a.siso, allow_pickle=True)
+    r = len(z['d']); D = FECoDesign(ne=a.ne, r=r)
+    fld = lambda k_: (np.asarray(z[k_])[None, :] if k_ in z.files and np.asarray(z[k_]).size else np.zeros(0))
+    return dict(d=np.asarray(z['d'], complex), e=np.asarray(z['e'], complex), f=np.asarray(z['f'], complex),
+                Bc=np.full((r, 1), D.mc, complex), nvec=np.asarray(z['nvec'], complex)[None, :],
+                K=np.array([[complex(z['K'])]]), xa=np.atleast_1d(float(z['xa'])), xs=np.atleast_1d(float(z['xs'])),
+                va=fld('va'), vs=fld('vs'), atoms_a_p=fld('atoms_a_p'), atoms_s_p=fld('atoms_s_p'),
+                loop_orders=np.array([r]), gamma=float(z['gamma']))
+
+
 def from_siso(a):
+    if a.one:
+        return siso_as_1x1(a)
     z = np.load(a.siso, allow_pickle=True)
     r1 = len(z['d']); m = p = 2; D = FECoDesign(ne=a.ne, r=r1)
     if a.atoms:
@@ -88,6 +105,7 @@ def main():
     ap.add_argument('--ne', type=int, default=100)
     ap.add_argument('--pair2', type=lambda t: [float(v) for v in t.split(',')], default=[-4.0, 4.0])
     ap.add_argument('--atoms', action='store_true'); ap.add_argument('--shift', type=float, default=4.0)
+    ap.add_argument('--one', action='store_true', help='the SISO record as an m = p = 1 record (--force-mimo)')
     ap.add_argument('--passive', default='results_fb_atoms_n200_long/K_FB_FC_s0_ne200.npz',
                     help='atoms prototype records: the SISO record whose (decoupled) compensator states are kept')
     a = ap.parse_args()

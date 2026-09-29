@@ -109,7 +109,7 @@ def _plant_tail_constants(A, M):
     return nu, lam_min
 
 
-def plant_pole_data(A, M, line, keep=0.6, nmax=3000):
+def plant_pole_data(A, M, line, keep=0.6, method='sparse', nmax=3000):
     """(count right of line, hot list) where hot = [(Im p, |Re p - line|)] for
     plant eigenvalues within `keep` of the line.  Design-independent: computed
     once.  The hot list matters because the poles of f are exactly the plant
@@ -117,13 +117,19 @@ def plant_pole_data(A, M, line, keep=0.6, nmax=3000):
     swings through ~2 pi over a width ~ |Re p - line| in omega -- a feature an
     adaptive tracker can step clean over, since |f| is LARGE there and both
     endpoints look benign (measured: a stabilised design read winding 0
-    instead of -1).  Known poles get mandatory resolution instead."""
+    instead of -1).  Known poles get mandatory resolution instead.
+
+    method 'sparse' (default since 2026-09-29, STAGE6 6.13): the eigenvalues
+    right of line - keep from a certified sparse enclosure
+    (sparse_spectrum.plant_eigs_right: numerical-range rectangle + tiles proved
+    empty or exhausted by shift-invert); 'dense': the full generalised
+    eigenproblem, a validation reference for n <= nmax only."""
+    if method == 'sparse':
+        from sparse_spectrum import plant_pole_data_sparse
+        return plant_pole_data_sparse(A, M, line, keep)
     n = A.shape[0]
     if n > nmax:
-        raise RuntimeError(
-            f"plant_pole_data: n={n} too large for the dense count; supply "
-            f"--p_plant and the near-line plant modes explicitly (they are "
-            f"the physically known ones and design-independent).")
+        raise RuntimeError(f"plant_pole_data(method='dense'): n={n} > {nmax}")
     from scipy.linalg import eig as deig
     lam = deig(np.asarray(A.todense()), np.asarray(M.todense()), right=False)
     lam = lam[np.isfinite(lam)]
@@ -133,9 +139,9 @@ def plant_pole_data(A, M, line, keep=0.6, nmax=3000):
     return cnt, hot
 
 
-def plant_poles_right(A, M, line, nmax=3000):
+def plant_poles_right(A, M, line):
     """Back-compatible wrapper: count only."""
-    return plant_pole_data(A, M, line, nmax=nmax)[0]
+    return plant_pole_data(A, M, line)[0]
 
 
 # ---------------------------------------------------------------- the tracker

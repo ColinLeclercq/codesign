@@ -886,7 +886,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                        sel_margin=1e-3, verbose=False, H0=None, ctrl_lmi=False,
                        oracle=None, reach=1.0, res_tol=1e-4,
                        refine_tol=None, refine_grid=None, refine_max=3,
-                       alpha_ref=None, alpha_ref_tol=1e-3, stat_rel=1e-4, ctrl_block=False,
+                       alpha_ref=None, alpha_ref_tol=1e-3, stat_rel=1e-4, pred_rel=1e-7, ctrl_block=False,
                        follow=None, follow_radius=0.1, row_screen=0.0, validate_full=True,
                        cl_block=False, max_disp=None):
     if clarabel is None:
@@ -1185,7 +1185,15 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         # of 7 and the SQP declared stationarity after one iteration)
         _act = [i for i in range(len(e['s'])) if e['s'][i] >= e['smax'] - 1e-3 * abs(e['smax'])]
         _gscale = max(float(np.mean([np.linalg.norm(e['Gs'][i]) for i in _act])) if _act else 1.0, 1e-12)
-        if (stat < tol or stat < stat_rel * _gscale) and _v < tol:
+        # ... AND the QP at this iterate predicts no decrease worth a step
+        # (STAGE6 6.14): the gradient scale is the MEAN norm of the active rows'
+        # gradients, and one very sensitive row (the atom amplitudes, norms
+        # 1e2-1e3; a far resonance, 1e6) made 1e-4 x that scale a loose test --
+        # MIMO atoms runs left the SQP after 1-3 iterations with the model still
+        # predicting a decrease.  The predicted decrease is in the objective's
+        # own units, independent of the parametrisation.
+        _pred_small = pred_rel is None or pred <= pred_rel * max(abs(t), 1.0)
+        if (stat < tol or (stat < stat_rel * _gscale and _pred_small)) and _v < tol:
             if (ev_fn.pair_mode and _last_pair_mu is not None and e.get('pair') is not None
                     and e['pair']['c'][0] < -10 * PAIR_KAPPA and abs(_last_pair_mu[2]) > PAIR_EXIT_TOL):
                 # ACTIVE-SET RULE (2026-09-25): S is stationary, the pair is strictly
@@ -1200,7 +1208,16 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                 ev_fn.pair_mode = False
                 e = ev_fn(z); t = max(t, e['smax'])
                 continue
-            code = 0; exit_info = dict(stat=stat, gscale=_gscale, viol=_v, n_active=len(_act)); break
+            code = 0; exit_info = dict(stat=stat, gscale=_gscale, viol=_v, n_active=len(_act), pred=float(pred), t=float(t))
+            if hasattr(pk, 'blocks') and _act:
+                # where the active rows' gradient lives (STAGE6 6.14): the row of
+                # largest gradient norm, by block of the design vector
+                _i = max(_act, key=lambda i_: np.linalg.norm(e['Gs'][i_]))
+                _g = np.asarray(e['Gs'][_i]); _gl = np.asarray(gL)
+                exit_info.update(row_w=float(ev_fn.W[_i]) if _i < len(ev_fn.W) else None,
+                                 row_blocks={nm_: round(float(np.linalg.norm(_g[ix])), 6) for nm_, ix in pk.blocks()},
+                                 stat_blocks={nm_: round(float(np.linalg.norm(_gl[ix])), 6) for nm_, ix in pk.blocks()})
+            break
     if oracle is not None and added and cands:
         # the working set grew during the solve: a candidate's recorded smax is
         # on the set of its time; re-evaluate all on the FINAL set (cheap on

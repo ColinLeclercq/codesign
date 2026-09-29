@@ -1130,24 +1130,23 @@ def dump_outer(path, it, D, pk, flags, z, Omega, t, gamma_cert, gamma_best,
                 rec['multiplier_error'] = f"{type(e).__name__}: {str(e)[:60]}"
 
     # ---- closed-loop eigenvalues ----
-    # The whole spectrum, not just the rightmost: the point of dumping it per
-    # outer round is to watch eigenvalues MOVE (which pair approaches the line,
-    # whether the stalled case is pinned by one mode or several), and the
-    # rightmost alone cannot show that.  Dense, so GL only -- this is a
-    # diagnostic, never a gate.
+    # To watch eigenvalues MOVE from round to round (which pair approaches the
+    # line, whether a stall is pinned by one mode or several).  SPARSE since
+    # 2026-09-29 (STAGE6 6.13; was the dense spectrum up to n + r = 4000): the
+    # eigenvalues the last band computation located (the far ones and the band's
+    # edge strips) and the ones the abscissa certificate harvested near the line
+    # -- a diagnostic, never a gate.
     eig = _np.zeros(0, complex)
     try:
-        if (D.n + D.r) <= 4000:
-            _out = D.alpha_dense(arow, nvec, K, b, c, return_spectrum=True)
-            _sp = _out[-1]
-            eig = _np.atleast_1d(_np.asarray(_sp, complex)).ravel()
-    except Exception:
-        try:
-            _seen = []
-            D.alpha_certified(arow, nvec, K, b, c, eps=eps, eigs_seen=_seen)
-            eig = _np.asarray(_seen, complex)
-        except Exception as e:
-            rec['eig_error'] = f"{type(e).__name__}: {str(e)[:60]}"
+        _lam = list(getattr(D, '_band_last_lam', []) or [])
+        _seen = []
+        D.alpha_certified(arow, nvec, K, b, c, eps=eps, eigs_seen=_seen)
+        for _z in _seen:
+            if all(abs(complex(_z) - _q) > 1e-8 * max(1.0, abs(_z)) for _q in _lam):
+                _lam.append(complex(_z))
+        eig = _np.asarray(_lam, complex)
+    except Exception as e:
+        rec['eig_error'] = f"{type(e).__name__}: {str(e)[:60]}"
 
     # Whether the pool was active decides how the LU counts must be read: the
     # workers factorise in their OWN processes, which this counter cannot see,
@@ -1795,6 +1794,13 @@ def main():
     ap.add_argument('--n-act', dest='n_act', type=int, default=1,
                     help='MIMO (STAGE6): number of actuators (with --n-sens > 1 or > 1 itself: the MIMO path)')
     ap.add_argument('--n-sens', dest='n_sens', type=int, default=1, help='MIMO: number of sensors')
+    ap.add_argument('--sqp-stat', dest='sqp_stat', choices=['auto', 'pred', 'rel'], default='auto',
+                    help="SQP stationarity: 'rel' stat < 1e-4 x the active rows' gradient scale (to 2026-09-29); "
+                         "'pred' also requires the QP's predicted decrease <= 1e-7 t (STAGE6 6.14); "
+                         "'auto': pred for MIMO, rel for SISO (the ne=100 K+B+C A/B: 6.404012 in 22.2 min vs "
+                         "6.399134 in 22.6 -- faster early, stopped 0.08 % higher; SISO adoption waits for the cluster)")
+    ap.add_argument('--force-mimo', dest='force_mimo', action='store_true',
+                    help='run m = p = 1 through the MIMO path (validation of the MIMO code on SISO, STAGE6 6.16)')
     ap.add_argument('--ctrl-struct', dest='ctrl_struct', choices=['central', 'decentral'], default='central',
                     help='MIMO: one m x p compensator (central) or m = p SISO loops, sensor k -> actuator k (decentral)')
     ap.add_argument('--loop-orders', dest='loop_orders', type=lambda t: [int(v) for v in t.split(',')], default=None,
@@ -1964,7 +1970,7 @@ def main():
         # Re <= -eps everywhere: the gate's allowance and every consumer of ctrl_max
         a.ctrl_max = min(float(a.ctrl_max), -float(a.eps))
     os.makedirs(a.outdir, exist_ok=True)
-    MIMO = (a.n_act > 1 or a.n_sens > 1)
+    MIMO = (a.n_act > 1 or a.n_sens > 1 or a.force_mimo)
     if MIMO:
         if a.resume:
             raise SystemExit("MIMO: start from --mimo-start (a MIMO record), not --resume")
@@ -1987,8 +1993,8 @@ def main():
         0 <=> alpha <= -eps, unconditionally."""
         import winding_cert as _wc
         _line = -a.eps
-        if getattr(D, '_wind_plant_eps', None) is None and D.n <= a.dense_nmax * 4:
-            D._wind_plant_eps = _wc.plant_pole_data(D.A, D.M, _line)
+        if getattr(D, '_wind_plant_eps', None) is None:
+            D._wind_plant_eps = _wc.plant_pole_data(D.A, D.M, _line)      # sparse enclosure (STAGE6 6.13)
         _pp, _hot = (D._wind_plant_eps if getattr(D, '_wind_plant_eps', None) else (None, None))
         if _pp is None:
             return None
@@ -2401,14 +2407,39 @@ def main():
                  if D.cert_nseg <= 1 else
                  f"certificate in {D.cert_nseg} segments"), flush=True)
 
-    def band_from_closedloop(arow_, nvec_, K_, b_, c_):
+    _band_last = dict(lam=[], info={})          # the last located set (dumps, records)
+    n_band_incomplete = [0]
+
+    def band_from_closedloop(arow_, nvec_, K_, b_, c_, count=False, extra=()):
         """Half-width covering every closed-loop eigenvalue that can raise a
         peak: those with Re >= -a.band_recut.  1.5x their max |Im|, plus the
-        pad, floored at the current band."""
-        _al, _lj, _lam = D.alpha_dense(arow_, nvec_, K_, b_, c_, return_spectrum=True)
-        lam = np.asarray(_lam)
-        near = lam[lam.real >= -a.band_recut] if lam.size else lam
-        need = 1.5 * float(np.max(np.abs(near.imag))) + a.wpad if near.size else 0.0
+        pad, floored at the current band.
+
+        SPARSE since 2026-09-29 (STAGE6 6.13; was the dense spectrum of the
+        closed loop at every acceptance).  Only eigenvalues that can WIDEN the
+        band matter: those right of -band_recut with 1.5 |Im| + pad > the band.
+        They are LOCATED from candidates -- plant eigenvalues, compensator poles,
+        the high-gain estimates eig(D_c C^H M^-1 B) (the branches that go far),
+        the near-line eigenvalues the abscissa certificate harvested (`extra`) --
+        refined by shift-invert (a few shifts per acceptance).
+        count=True (at save): the whole band tiled and the located set compared
+        with the winding number right of -band_recut -- equal means none is
+        missing at any |Im|.  Same sets as the dense spectrum on every record
+        tested (STAGE6 6.13)."""
+        import sparse_spectrum as _ss
+        half = max(a.whi, -a.wlo)
+        lam, info = _ss.closed_loop_set(D.A, D.M, D.cl(b_, c_), arow_, nvec_, K_, -a.band_recut,
+                                        band=half, mc=D.mc, count=count, inner=max(0.0, (half - a.wpad) / 1.5 - 0.5),
+                                        extra=[complex(z_) for z_ in extra],
+                                        ctrl_exact=(a.wind_ctrl == 'exact'))
+        _band_last.update(lam=list(lam), info=info)
+        D._band_last_lam = list(lam)
+        if count and not info.get('complete'):
+            n_band_incomplete[0] += 1
+            print(f"    WARNING band: {info.get('located')} closed-loop eigenvalues located right of "
+                  f"Re={-a.band_recut:g} but the winding count says {info.get('count')}: the band may miss "
+                  f"a resonance", flush=True)
+        need = 1.5 * max(abs(z.imag) for z in lam) + a.wpad if lam else 0.0
         return max(need, a.whi)
 
     def band_from_controller(arow_):
@@ -2943,7 +2974,8 @@ def main():
                 oracle=_ro, reach=a.sqp_reach, res_tol=a.sqp_row_res_tol,
                 refine_tol=(a.sqp_refine if a.sqp_refine > 0 else None),
                 refine_grid=np.linspace(a.wlo, a.whi, 1201), refine_max=a.sqp_refine_max,
-                alpha_ref=(float(_al_accepted) if _al_accepted is not None else None))
+                alpha_ref=(float(_al_accepted) if _al_accepted is not None else None),
+                pred_rel=(1e-7 if (a.sqp_stat == 'pred' or (a.sqp_stat == 'auto' and MIMO)) else None))
             _sqp_trust_prev = inner_stats.get('trust_final')
             # STALL RECOVERY (2026-09-25): a solve that ended on a collapsed radius
             # (code 6) or with failed subproblems hands its quasi-Newton matrix and
@@ -3251,7 +3283,7 @@ def main():
         # makes this scale-free belongs to stage 5.  The band only grows.
         if feasible and a.ctrl_imcap == 'off':
             try:
-                _hw = band_from_closedloop(aa, nn, KK, bb, cc)
+                _hw = band_from_closedloop(aa, nn, KK, bb, cc, extra=_seen_c or [])
                 if _hw > a.whi * (1.0 + 1e-9):
                     print(f"    band widened to [{-_hw:.2f}, {_hw:.2f}] from "
                           f"the closed-loop spectrum", flush=True)
@@ -3871,43 +3903,58 @@ def main():
             _line = -0.5 * a.eps
             if a.wind_pplant >= 0:
                 _pp, _hot = a.wind_pplant, []
-            elif D.n <= a.dense_nmax:
+            else:
                 if not hasattr(D, '_wind_plant'):
-                    D._wind_plant = _wc.plant_pole_data(D.A, D.M, _line)
+                    D._wind_plant = _wc.plant_pole_data(D.A, D.M, _line)   # sparse enclosure (STAGE6 6.13)
                 _pp, _hot = D._wind_plant
+            _out = _wc.winding_count(
+                D.A, D.M, b, c, arow, nvec, K, line=_line, mc=D.mc,
+                p_plant=_pp, hot=_hot,
+                zeros_hint=[z for z in (watch_cur or [])
+                            if z is not None],
+                ctrl_exact=(a.wind_ctrl == 'exact'))
+            wind_n = int(_out['count']) if _out['ok'] else None
+            if _out['ok'] and _out['count'] == 0:
+                print(f"winding certificate: 0 eigenvalues right of "
+                      f"Re={_line:+.4f} ({_out['npts']} pts) -- "
+                      f"UNCONDITIONALLY stable with eps/2 margin",
+                      flush=True)
+            elif _out['ok']:
+                print(f"winding certificate: *** {_out['count']} "
+                      f"eigenvalue(s) right of Re={_line:+.4f} ***",
+                      flush=True)
+                if a.wind_veto:
+                    print("NOT SAVING (winding veto).", flush=True)
+                    return
             else:
-                _pp = None
-            if _pp is None:
-                print("winding certificate SKIPPED: n too large for the "
-                      "dense plant-pole count; supply --wind_pplant "
-                      "(design-independent)", flush=True)
-            else:
-                _out = _wc.winding_count(
-                    D.A, D.M, b, c, arow, nvec, K, line=_line, mc=D.mc,
-                    p_plant=_pp, hot=_hot,
-                    zeros_hint=[z for z in (watch_cur or [])
-                                if z is not None],
-                    ctrl_exact=(a.wind_ctrl == 'exact'))
-                wind_n = int(_out['count']) if _out['ok'] else None
-                if _out['ok'] and _out['count'] == 0:
-                    print(f"winding certificate: 0 eigenvalues right of "
-                          f"Re={_line:+.4f} ({_out['npts']} pts) -- "
-                          f"UNCONDITIONALLY stable with eps/2 margin",
-                          flush=True)
-                elif _out['ok']:
-                    print(f"winding certificate: *** {_out['count']} "
-                          f"eigenvalue(s) right of Re={_line:+.4f} ***",
-                          flush=True)
-                    if a.wind_veto:
-                        print("NOT SAVING (winding veto).", flush=True)
-                        return
-                else:
-                    print("winding certificate INCONCLUSIVE (f ~ 0 on the "
-                          "line: an eigenvalue sits at the eps/2 margin)",
-                          flush=True)
+                print("winding certificate INCONCLUSIVE (f ~ 0 on the "
+                      "line: an eigenvalue sits at the eps/2 margin)",
+                      flush=True)
         except Exception as _e:
             print(f"winding certificate failed non-fatally: {_e!r}",
                   flush=True)
+    # FINAL BAND CHECK (STAGE6 6.13, sparse): the whole band tiled, the far
+    # candidates refined, the located set compared with the winding count right
+    # of -band_recut.  A resonance the loop's (edge-strip) band updates missed
+    # widens the band, and the design is certified again over it.
+    band_check = {}
+    if a.ctrl_imcap == 'off':
+        try:
+            _hwf = band_from_closedloop(arow, nvec, K, b, c, count=True)
+            band_check = {k_: v_ for k_, v_ in _band_last['info'].items() if k_ in ('located', 'count', 'complete')}
+            if _hwf > a.whi * (1.0 + 1e-9):
+                a.wlo, a.whi = -_hwf, _hwf
+                _gw, _ww, _okw, _ = certified_norm(D, pk, zbest, a.wlo, a.whi, gam_lb=gbest)
+                print(f"final band check: band widened to [{-_hwf:.2f}, {_hwf:.2f}]; certified {_gw:.6f} "
+                      f"(loop {gbest:.6f})", flush=True)
+                if np.isfinite(_gw) and _gw > gbest:
+                    gbest = float(_gw)
+                band_check['widened'] = float(_hwf)
+            print(f"final band check: {band_check.get('located')} eigenvalues right of Re={-a.band_recut:g} "
+                  f"located, winding count {band_check.get('count')} -- "
+                  f"{'COMPLETE' if band_check.get('complete') else 'NOT PROVEN COMPLETE'}", flush=True)
+        except Exception as _e:
+            print(f"final band check failed non-fatally: {_e!r}", flush=True)
     gam, wst, res, clh, mem, nact = D.hinf(arow, nvec, K, b, c)
     # store the gain curve over the RUN'S OWN certification band, at the same
     # ~0.01 resolution the old [-4, 4] x 801 grid had (capped at 4001 points).
@@ -4020,6 +4067,7 @@ def main():
                 gamma=float(gam), alpha=float(al),
                 alpha_dense=(float(al_d) if al_d is not None else None),
                 gamma_dense_all_w=gam_dense_all,
+                band_incomplete=int(n_band_incomplete[0]), band_check=band_check,
                 eps=float(a.eps),
                 wind_count=wind_n,
                 sym=bool(a.sym),

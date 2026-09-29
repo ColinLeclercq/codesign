@@ -236,10 +236,10 @@ class PackerMIMO:
                     row of C_c on its block, D_c[k, k]; B_c FIXED to the SISO
                     gauge mc * ones on each block (as the SISO code fixes it);
       ctrl_mode 'sp': D_c fixed 0;  'gain' (static): only D_c free (masked as above).
-    Scales per complex entry: max(|theta0|, a floor per group -- 0.1 x the median
-    nonzero magnitude of the group, at least 1e-3 x its max (the SISO rule) --)
-    so entries that start at zero (a switched-off loop, the cross couplings)
-    take steps of the size of their group."""
+    Scales per complex entry: the SISO rule max(|theta0|, 1e-3 x max |theta0|);
+    entries that start at zero (a switched-off loop, the cross couplings) take
+    0.1 x the median nonzero magnitude of their group.  Central: one entry per
+    row of B_c fixed (the similarity gauge; the SISO gauge at m = p = 1)."""
 
     def __init__(self, D, flags, arow0, nvec0, K0, xa0, xs0, va0, vs0):
         self.D, self.f = D, flags
@@ -262,6 +262,14 @@ class PackerMIMO:
         if flags['K']:
             if mode in ('full', 'sp'):
                 free[:] = True
+                # GAUGE (STAGE6 6.16): a diagonal similarity S (A_c -> S A_c S^-1 stays
+                # tridiagonal, B_c -> S B_c, C_c -> C_c S^-1) leaves K(s) unchanged, so
+                # one entry per row of B_c is fixed -- its largest at the start -- as the
+                # SISO code fixes B_c = mc * ones.  At m = p = 1 this IS the SISO gauge.
+                Bc0m = np.abs(Bc0)
+                for k_ in range(r):
+                    if Bc0m[k_].max() > 0:
+                        free[self.off['Bc'][0] + k_ * p + int(np.argmax(Bc0m[k_]))] = False
                 if flags.get('struct', 'central') == 'decentral':
                     orders = list(flags.get('loop_orders') or [r // m] * m)
                     assert sum(orders) == r and m == p == len(orders), 'decentral: m = p loops whose orders sum to r'
@@ -281,16 +289,21 @@ class PackerMIMO:
             else:
                 raise NotImplementedError(f"MIMO ctrl_mode {mode}")
         self.free = free
-        # scales
+        # scales: the SISO rule, max(|theta0|, 1e-3 x the largest free |theta0|)
+        # (identical at m = p = 1), except for entries that START AT ZERO (a
+        # switched-off loop, the cross couplings of a centralised start): those
+        # step with 0.1 x the median nonzero magnitude of their group (d, e, f,
+        # B_c, C_c, D_c), not with the global floor
         sc = np.ones(len(self.th0))
         mag = np.abs(self.th0)
+        gfloor = 1e-3 * max(float(mag[free].max()) if free.any() else 1.0, 1.0)
         for nm_, (a_, b_) in self.off.items():
             g = mag[a_:b_]
             if g.size == 0:
                 continue
             nz = g[g > 0]
-            floor = max(1e-3 * max(g.max(), 1.0), 0.1 * float(np.median(nz)) if nz.size else 1.0)
-            sc[a_:b_] = np.maximum(g, floor)
+            zfloor = max(gfloor, 0.1 * float(np.median(nz)) if nz.size else 1.0)
+            sc[a_:b_] = np.where(g > 0, np.maximum(g, gfloor), zfloor)
         self.sc = sc
         self.sx = 0.30
         self.nth = int(free.sum())
@@ -397,6 +410,39 @@ class PackerMIMO:
                     gx = (P_.T @ gv) if P_ is not None else self.D.smooth_map_adj(gv)
                     out += [gx.real, gx.imag]; i += 2 * len(gx)
         return np.concatenate(out) if out else np.zeros(0)
+
+    def blocks(self):
+        """[(name, slice)] of the design vector: controller entries by kind
+        (real and imaginary parts), positions, the fields per port -- for
+        diagnostics (sqp_inner exit_info)."""
+        out = []; i = 0
+        if self.nth:
+            fr = np.flatnonzero(self.free); k = self.nth
+            for part in ('re', 'im'):
+                for nm_, (a_, b_) in self.off.items():
+                    idx = [j for j, q in enumerate(fr) if a_ <= q < b_]
+                    if idx:
+                        out.append((f'{nm_}.{part}', np.array(idx) + i))
+                i += k
+        if self.f['B']:
+            out.append(('xa', np.arange(i, i + self.m))); i += self.m
+        if self.f['C']:
+            out.append(('xs', np.arange(i, i + self.p))); i += self.p
+        Pa, Ps, Aa, As = self._fields_cfg()
+        import fieldbasis as _fb
+        for key, flag, P_, A_, cnt in (('va', 'FB', Pa, Aa, self.m), ('vs', 'FC', Ps, As, self.p)):
+            if not self.f[flag]:
+                continue
+            for j in range(cnt):
+                if A_ is not None:
+                    na_ = A_['n']; mm_ = _fb.NATOM_PAR * na_
+                    for q, pn in enumerate(('amp.re', 'amp.im', 'centre', 'width', 'wavenumber')):   # split_atoms order
+                        out.append((f'{key}{j + 1}.{pn}', np.arange(i + q * na_, i + (q + 1) * na_)))
+                    i += mm_
+                else:
+                    nb = 2 * (P_.shape[1] if P_ is not None else self.D.n)
+                    out.append((f'{key}{j + 1}', np.arange(i, i + nb))); i += nb
+        return out
 
     def atom_params(self, z):
         """Lists of the atom parameter vectors (m actuator, p sensor fields) inside z."""

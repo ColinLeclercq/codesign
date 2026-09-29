@@ -479,6 +479,38 @@ class _ReducedCL:
         bRX = np.einsum('k,mkp->mp', np.conj(bs['bt']), RX)
         return RX - bs['RHc'][idx][:, :, None] * (np.conj(bs['g'][idx])[:, None] * bRX)[:, None, :]
 
+    def _batch_setup_mimo(self, om, arow, nvec, K):
+        """MIMO (STAGE6 6.16): the plant block of the closed loop is
+            T~ = R + R B~ Gam C~^H R,   Gam = K(iw) (I - G K(iw))^-1,  G = C~^H R B~,
+        K(iw) = D_c + C_c (iw - A_c)^-1 B_c (m x p) -- Woodbury on
+        (iw M - A - B K(iw) C^H)^-1; the compensator parts of the singular pairs
+        x_c = (iw - A_c)^-1 B_c C^H x_p,  z_c = (iw - A_c)^-H C_c^H B^H z_p."""
+        rcl = self.rcl; nf = len(om); kd = self.P['qzAA'].shape[0]
+        bt = np.asarray(rcl.b, complex); ct = np.asarray(rcl.c, complex)      # kd x m, kd x p
+        m, p = bt.shape[1], ct.shape[1]
+        Ts = self._Tstack(om)
+        Rb = self._R(om, np.broadcast_to(bt[None], (nf, kd, m)).copy(), Ts)          # nf x kd x m
+        RHc = self._RH(om, np.broadcast_to(ct[None], (nf, kd, p)).copy(), Ts)        # nf x kd x p
+        G = np.einsum('kp,fkm->fpm', np.conj(ct), Rb)                                  # nf x p x m
+        L = rcl.L_of_a(arow); r = L.shape[0]
+        Bc = rcl.Bc_of(arow); Cc = np.asarray(nvec, complex).reshape(m, r); Dc = np.asarray(K, complex).reshape(m, p)
+        SK = 1j * om[:, None, None] * np.eye(r)[None] - L[None]
+        SKiBc = np.linalg.solve(SK, np.broadcast_to(Bc[None], (nf, r, p)))
+        SKHiCcH = np.linalg.solve(np.conj(np.transpose(SK, (0, 2, 1))), np.broadcast_to(Cc.conj().T[None], (nf, r, m)))
+        Kw = Dc[None] + np.matmul(Cc[None], SKiBc)                                     # nf x m x p
+        Gam = np.matmul(Kw, np.linalg.inv(np.eye(p)[None] - np.matmul(G, Kw)))        # nf x m x p
+        return dict(om=om, bt=bt, ct=ct, Rb=Rb, RHc=RHc, Gam=Gam, SKiBc=SKiBc, SKHiCcH=SKHiCcH, Ts=Ts)
+
+    def _Tt_mimo(self, bs, X, idx):
+        RX = self._R(bs['om'], X, bs['Ts'], idx)
+        cRX = np.einsum('kp,fkq->fpq', np.conj(bs['ct']), RX)
+        return RX + np.matmul(bs['Rb'][idx], np.matmul(bs['Gam'][idx], cRX))
+
+    def _TtH_mimo(self, bs, X, idx):
+        RX = self._RH(bs['om'], X, bs['Ts'], idx)
+        bRX = np.einsum('km,fkq->fmq', np.conj(bs['bt']), RX)
+        return RX + np.matmul(bs['RHc'][idx], np.matmul(np.conj(np.transpose(bs['Gam'][idx], (0, 2, 1))), bRX))
+
     def gain_batch(self, omegas, arow, nvec, K, want_vectors, maxit=40):
         """sigma_1 at every frequency of `omegas` in one batched subspace
         iteration (warm-started from the same per-frequency cache as
@@ -489,11 +521,12 @@ class _ReducedCL:
         om = np.asarray(omegas, float); m = len(om); wv = np.asarray(want_vectors, bool)
         if m == 0:
             return []
-        if self.mimo:                    # MIMO (STAGE6): the per-row path (batched rank-(m+p) coupling not built)
-            return [self.gain(float(om[i]), arow, nvec, K, want_vectors=bool(wv[i])) for i in range(m)]
         P = self.P; GVh, GWh = P['GV_h'], P['GW_h']; kd = GVh.shape[0]
         GVhH, GWhH = np.conj(GVh.T), np.conj(GWh.T)
-        bs = self._batch_setup(om, arow, nvec, K)
+        if self.mimo:
+            bs = self._batch_setup_mimo(om, arow, nvec, K); Tt, TtH = self._Tt_mimo, self._TtH_mimo
+        else:
+            bs = self._batch_setup(om, arow, nvec, K); Tt, TtH = self._Tt, self._TtH
         p = min(kd, 5)
         cache = getattr(self.ro, '_svcache', None)
         if cache is None or getattr(self.ro, '_svcache_dim', None) != kd:
@@ -513,9 +546,9 @@ class _ReducedCL:
         act = np.arange(m)
         for it in range(maxit):
             Va = V[act]
-            B = np.matmul(GVh, self._Tt(bs, np.matmul(GWh, Va), act))
+            B = np.matmul(GVh, Tt(bs, np.matmul(GWh, Va), act))
             Ub, sb, Whb = np.linalg.svd(B, full_matrices=False)
-            C = np.matmul(GWhH, self._TtH(bs, np.matmul(GVhH, B), act))
+            C = np.matmul(GWhH, TtH(bs, np.matmul(GVhH, B), act))
             WhH = np.conj(np.transpose(Whb, (0, 2, 1)))
             Vr = np.matmul(Va, WhH)
             SHU = np.matmul(C, WhH) / np.maximum(sb, 1e-300)[:, None, :]
@@ -541,17 +574,25 @@ class _ReducedCL:
             bsv = {k_: (v_[iv] if (isinstance(v_, np.ndarray) and v_.shape[:1] == (m,) and k_ != 'Ts') else v_) for k_, v_ in bs.items()}
             s_ = sig[iv]; shat = v1[iv]
             rhs = (GWh @ shat.T).T[:, :, None]
-            RX = self._R(bs['om'], rhs, bs['Ts'], iv); cHq = np.einsum('k,mkp->mp', np.conj(bsv['ct']), RX)[:, 0]
-            xtp = RX[:, :, 0] - bsv['Rb'] * (bsv['g'] * cHq)[:, None]
-            xtc = -bsv['SKe'] * (bsv['g2'] * cHq)[:, None]
+            if self.mimo:
+                xtp = Tt(bs, rhs, iv)[:, :, 0]
+                xtc = np.matmul(bs['SKiBc'][iv], np.einsum('kp,fk->fp', np.conj(bs['ct']), xtp)[:, :, None])[:, :, 0]
+            else:
+                RX = self._R(bs['om'], rhs, bs['Ts'], iv); cHq = np.einsum('k,mkp->mp', np.conj(bsv['ct']), RX)[:, 0]
+                xtp = RX[:, :, 0] - bsv['Rb'] * (bsv['g'] * cHq)[:, None]
+                xtc = -bsv['SKe'] * (bsv['g2'] * cHq)[:, None]
             GV = P['GV']
             qMq = np.real(np.einsum('mk,kl,ml->m', np.conj(xtp), GV, xtp))
             sc = np.where(qMq > 0, s_ / np.sqrt(np.maximum(qMq, 1e-300)), 1.0)
             xtp = xtp * sc[:, None]; xtc = xtc * sc[:, None]
             w = (GV @ xtp.T).T[:, :, None]
-            RHw = self._RH(bs['om'], w, bs['Ts'], iv); bRH = np.einsum('k,mkp->mp', np.conj(bsv['bt']), RHw)[:, 0]
-            ztp = (RHw[:, :, 0] - bsv['RHc'] * (np.conj(bsv['g']) * bRH)[:, None]) / s_[:, None]
-            ztc = (bsv['SKHn'] * (bsv['Gi00'] * bRH)[:, None]) / s_[:, None]
+            if self.mimo:
+                ztp = TtH(bs, w, iv)[:, :, 0] / s_[:, None]
+                ztc = np.matmul(bs['SKHiCcH'][iv], np.einsum('km,fk->fm', np.conj(bs['bt']), ztp)[:, :, None])[:, :, 0]
+            else:
+                RHw = self._RH(bs['om'], w, bs['Ts'], iv); bRH = np.einsum('k,mkp->mp', np.conj(bsv['bt']), RHw)[:, 0]
+                ztp = (RHw[:, :, 0] - bsv['RHc'] * (np.conj(bsv['g']) * bRH)[:, None]) / s_[:, None]
+                ztc = (bsv['SKHn'] * (bsv['Gi00'] * bRH)[:, None]) / s_[:, None]
             Vb, Wb, M, n = self.V, self.W, self.M, self.n
             XP = Vb @ xtp.T; ZP = Wb @ ztp.T; MXP = M @ XP
             for jj, i in enumerate(iv):
