@@ -70,8 +70,21 @@ def plant_rectangle(A, M, s0, taus=(0.0, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0))
     if s_far < s0:
         return s_far, 0.0, 0.0
     G = (H - s0 * M).tocsc()
-    Whi = min(_lmax((S + t * G).tocsc(), M, Mlu) for t in taus)
-    Wlo = min(_lmax((-S + t * G).tocsc(), M, Mlu) for t in taus)
+
+    def best(sgn):
+        # every tau >= 0 gives a valid bound; the minimum over tau is unimodal in
+        # practice: stop after two consecutive increases (fewer Lanczos runs)
+        b_, up = np.inf, 0
+        for t in sorted(taus):
+            v = _lmax((sgn * S + t * G).tocsc(), M, Mlu)
+            if v < b_:
+                b_, up = v, 0
+            else:
+                up += 1
+                if up >= 2:
+                    break
+        return b_
+    Whi = best(1.0); Wlo = best(-1.0)
     return s_far, max(Wlo, 0.0), max(Whi, 0.0)
 
 
@@ -347,3 +360,99 @@ def closed_loop_set(A, M, cl, arow, nvec, K, s0, band, mc=1.0, count=True, extra
         info.update(count=(int(o['count']) if o['ok'] else None), count_pts=int(o['npts']),
                     complete=bool(o['ok'] and int(o['count']) == len(loc)))
     return loc, info
+
+
+# ------------------------------------------------------------------ tail bound
+_HEIGHT_CACHE = {}
+
+
+def plant_heights(A, M, depths=(0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1e3, 2e3, 5e3, 1e4, 2e4, 5e4, 1e5),
+                  taus=(0.0, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0, 300.0, 1e3, 1e4, 1e5)):
+    """H(d) = the S-lemma bound on |Im z| over the numerical range W(A, M) right of
+    Re z = -d (plant_rectangle), at a few depths; with s_far.  Once per mesh."""
+    key = (id(A), id(M), A.shape, tuple(depths))
+    if key in _HEIGHT_CACHE:
+        return _HEIGHT_CACHE[key]
+    Hd = []
+    for d in depths:
+        sf, wl, wh = plant_rectangle(A, M, -float(d), taus=taus)
+        Hd.append((float(d), max(wl, wh) + 1e-7 * max(1.0, wl, wh) + 1e-6))
+    out = (sf + 1e-7 * max(1.0, abs(sf)) + 1e-6, Hd)
+    _HEIGHT_CACHE[key] = out
+    return out
+
+
+def numrange_distance(w, s_far, Hd):
+    """A lower bound on dist(i w, W(A, M)): the part of W right of -d lies within
+    |Im| <= H(d) (distance >= |w| - H(d)), the part left of -d is >= d away."""
+    best = 0.0
+    for d, h in Hd:
+        best = max(best, min(d, abs(w) - h))
+    return best
+
+
+def tail_frequency(gamma, s_far, Hd, beta_gamma, kbound, wmin=1.0, wmax=1e9):
+    """Smallest W such that sigma_1(w) < gamma for every |w| >= W, from
+        sigma_1 <= 1 / (dist(i w, W(A, M)) - rho_K(w)),   rho_K(w) = ||M^-1/2 B|| ||M^-1/2 C|| kbound(|w|)
+    (the numerical range of the closed-loop plant block A + B K(iw) C^H lies in
+    W(A) + the disk of radius rho_K); kbound(|w|) bounds ||K(i w')|| for all
+    |w'| >= |w| (non-increasing).  inf if no W up to wmax works."""
+    def ok(w):
+        rho = beta_gamma * kbound(w)
+        dist = numrange_distance(w, s_far, Hd) - rho
+        return np.isfinite(rho) and dist > 0 and 1.0 / dist < gamma
+    hi = wmin
+    while not ok(hi):
+        hi *= 2.0
+        if hi > wmax:
+            return np.inf
+    lo = hi / 2.0
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        if ok(mid):
+            hi = mid
+        else:
+            lo = mid
+    return hi
+
+
+def compensator_bound(Ac, Bc, Cc, Dc):
+    """kbound(w): a bound on ||K(i w')|| = ||D_c + C_c (i w' - A_c)^-1 B_c|| valid for
+    every |w'| >= w, non-increasing: ||D_c|| + min(Neumann ||C_c|| ||B_c|| / (w - ||A_c||),
+    modal ||C_c V|| ||V^-1 B_c|| / min_k dist(i w', lambda_k)) -- the modal distance
+    bounded below over |w'| >= w by the poles' |Re| and (w - |Im lambda_k|)."""
+    Ac = np.asarray(Ac, complex); r = Ac.shape[0]
+    Bc = np.asarray(Bc, complex).reshape(r, -1); Cc = np.atleast_2d(np.asarray(Cc, complex))
+    Cc = Cc.reshape(-1, r)
+    Dn = float(np.linalg.norm(np.atleast_2d(Dc), 2))
+    An = float(np.linalg.norm(Ac, 2)); CBn = float(np.linalg.norm(Cc, 2) * np.linalg.norm(Bc, 2))
+    lam, V = np.linalg.eig(Ac)
+    try:
+        CBm = float(np.linalg.norm(Cc @ V, 2) * np.linalg.norm(np.linalg.solve(V, Bc), 2))
+    except np.linalg.LinAlgError:
+        CBm = np.inf
+
+    def kb(w):
+        neu = CBn / (w - An) if w > An else np.inf
+        # min over |w'| >= w and over k of |i w' - lambda_k|: at least |Re lambda_k|,
+        # and at least w - |Im lambda_k| when w > |Im lambda_k|
+        dk = [max(abs(l.real), w - abs(l.imag)) for l in lam]
+        mod = CBm / min(dk) if min(dk) > 0 else np.inf
+        return Dn + min(neu, mod)
+    return kb, dict(D=Dn, Ac=An, CcBc=CBn, CcBc_modal=CBm)
+
+
+def closed_loop_tail(A, M, b, c, Ac, Bc, Cc, Dc, gamma, Mlu=None):
+    """The tail frequency of a design (tail_frequency) with its constants, all
+    sparse: ||M^-1/2 B||^2 = lambda_max(B^H M^-1 B) (one LU of M), the
+    compensator r x r (compensator_bound)."""
+    B = np.asarray(b, complex); C = np.asarray(c, complex)
+    B = B[:, None] if B.ndim == 1 else B; C = C[:, None] if C.ndim == 1 else C
+    if Mlu is None:
+        Mlu = spla.splu(sp.csc_matrix(M, dtype=complex))
+    bn = float(np.sqrt(np.linalg.eigvalsh(B.conj().T @ Mlu.solve(B)).max()))
+    cn = float(np.sqrt(np.linalg.eigvalsh(C.conj().T @ Mlu.solve(C)).max()))
+    s_far, Hd = plant_heights(A, M)
+    kb, kinfo = compensator_bound(Ac, Bc, Cc, Dc)
+    W = tail_frequency(gamma, s_far, Hd, bn * cn, kb)
+    return W, dict(beta=bn, gamma_c=cn, s_far=s_far, heights=Hd, **kinfo)

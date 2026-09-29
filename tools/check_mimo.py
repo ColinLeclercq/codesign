@@ -19,7 +19,9 @@ never forms):
      imaginary axis (every crossing, all frequencies);
   5. the winding count right of Re = -eps and of Re = 0 vs the dense spectrum;
   6. the abscissa certificate (FECoDesign.alpha_certified, MIMO region) vs the
-     dense spectrum.
+     dense spectrum;
+  7. the SPARSE all-frequency certificate (tail bound from the numerical range +
+     sparse level set, sparse_spectrum.closed_loop_tail) vs 4.
 """
 import os as _o, sys as _s
 _s.path.insert(0, _o.path.dirname(_o.path.dirname(_o.path.abspath(__file__))))
@@ -177,6 +179,19 @@ def main():
     i = int(np.argmax(lam.real))
     out['alpha_cert'] = float(al[0]); out['alpha_dense'] = float(lam[i].real)
     print(f"6. abscissa: certificate {al[0]:+.6f} (clear {al[5]}), dense {lam[i].real:+.6f} at {lam[i]:.4f}")
+    # 7. the sparse all-frequency certificate (the driver's, at save since STAGE6 6.19):
+    #    tail bound W from the numerical range, then the sparse level set on [-W, W]
+    import sparse_spectrum as ss
+    t0 = __import__('time').time()
+    Wt, ti = ss.closed_loop_tail(D.A, D.M, b, c, ctl.A_of(*arow[:3]), np.asarray(arow[3]), Cc, Dc, float(z['gamma']))
+    if np.isfinite(Wt):
+        gs, ws_, nc, oks = csp.hinf_certified_sparse(D.A, D.M, b, c, ctl.A_of(*arow[:3]), np.asarray(arow[3]), Cc, Dc,
+                                                     sof, float(z['gamma']), wlo=-Wt, whi=Wt, rtol=1e-6)
+    else:
+        gs, ws_, nc, oks = np.nan, np.nan, 0, False
+    out['all_w_sparse'] = dict(tail_W=Wt, gamma=gs, certified=oks, calls=nc)
+    print(f"7. sparse all-w certificate: tail bound W = {Wt:.2f}; level set on [-W, W] certified {oks} at {gs:.6f} "
+          f"({nc} calls, {__import__('time').time() - t0:.1f} s); dense (4.) {gd:.6f}")
     json.dump(out, open(rec[:-4] + '_check.json', 'w'), indent=1, default=str)
     print(f"-> {rec[:-4]}_check.json")
 

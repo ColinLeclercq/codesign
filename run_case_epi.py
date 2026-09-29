@@ -3987,6 +3987,36 @@ def main():
     # level, so no crossing of the imaginary axis at any frequency is missed.  A
     # higher value means the band missed a peak: reported loudly, and the record
     # stores the true value.
+    # SPARSE ALL-FREQUENCY CERTIFICATE (STAGE6 6.19): a tail frequency W beyond
+    # which sigma_1 < gamma is PROVED (numerical range of the plant from sparse
+    # Lanczos -- the S-lemma heights of sparse_spectrum -- plus the loop's gain
+    # bound), then the sparse level set proves nothing exceeds gamma on [-W, W].
+    # Together: gamma over ALL w, at any n.
+    all_w = {}
+    try:
+        import sparse_spectrum as _ss
+        _Wt, _ti = _ss.closed_loop_tail(D.A, D.M, b, c, ctl.A_of(*arow[:3]), ctl.Bc_of(arow, D.r, D.mc),
+                                        nvec, K, gam)
+        all_w = dict(tail_W=float(_Wt))
+        if np.isfinite(_Wt):
+            _sof = lambda w_: clh.gain(float(w_), arow, nvec, K, want_vectors=False)['sigma']
+            _ga, _wa, _nc, _oka = csp.hinf_certified_sparse(
+                D.A, D.M, b, c, ctl.A_of(*arow[:3]), ctl.Bc_of(arow, D.r, D.mc), nvec, K, _sof, gam,
+                wlo=-_Wt, whi=_Wt, rtol=1e-6)
+            all_w.update(gamma=float(_ga), certified=bool(_oka), calls=int(_nc))
+            if _oka and _ga > gam * (1.0 + 1e-6):
+                print(f"WARNING: sparse all-frequency certificate: gamma {_ga:.6f} at w = {_wa:+.4f} above the loop's "
+                      f"{gam:.6f}; the record stores it", flush=True)
+                gam = float(_ga)
+            print(f"sparse all-frequency certificate: tail bound W = {_Wt:.2f}, level set on [-W, W] "
+                  f"{'CERTIFIED' if _oka else 'NOT CERTIFIED'} at {_ga:.6f} ({_nc} calls) -- "
+                  f"{'gamma holds over ALL w' if _oka else 'all-w claim not proven'}", flush=True)
+        else:
+            print("sparse all-frequency certificate: no finite tail bound (gain too high for the "
+                  "numerical-range bound up to w = 1e9)", flush=True)
+    except Exception as _e:
+        all_w['error'] = f"{type(_e).__name__}: {str(_e)[:80]}"
+        print(f"sparse all-frequency certificate failed non-fatally: {_e!r}", flush=True)
     gam_dense_all = None
     if a.dense_check and (D.n + D.r) <= min(a.dense_nmax, 1000):
         try:
@@ -4067,7 +4097,7 @@ def main():
                 gamma=float(gam), alpha=float(al),
                 alpha_dense=(float(al_d) if al_d is not None else None),
                 gamma_dense_all_w=gam_dense_all,
-                band_incomplete=int(n_band_incomplete[0]), band_check=band_check,
+                band_incomplete=int(n_band_incomplete[0]), band_check=band_check, all_w=all_w,
                 eps=float(a.eps),
                 wind_count=wind_n,
                 sym=bool(a.sym),
