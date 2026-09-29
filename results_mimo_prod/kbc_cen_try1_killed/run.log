@@ -1,0 +1,17 @@
+=== launch kbc_cen 1790643796
+controller order 7 -> 8 (from the seed catalogue)
+  warm start: none usable -- cold start
+MIMO: 2 actuators, 2 sensors, central compensator of order 16; 114 free complex controller entries; start results_mimo_prod/kbc_dec/K_B_C_s0_ne100_mimo2x2_decentral.npz (record gamma 5.565958)
+  parallel constraints unavailable (NotImplementedError); running them serially
+pool: 2 workers for the |Omega| constraints; stability certificate SERIAL
+band [-30.00, 30.00]; controller poles |Im| <= 20.00 (3/2 x max seed |Im|, band = 3/2 x wmax)
+controller poles NOT constrained in |Im| (--ctrl-imcap off); the band follows the closed-loop spectrum at each accepted design, from [-30.00, 30.00]
+stage-1 flags: select-cons=on ctrl-imcap=off ctrl-stab=on cont-anchor=defer opt-tol=1e-10
+start gamma=5.565956, |Omega|=159
+lu_counter: factorisations and solves are being counted
+oracle: position-robust (union Galerkin, input basis b 12, c 12)
+continuation anchor verified: alpha=-0.1202, watching 8 near-line eigenvalue(s)
+    oracle: +15 anchor(s) (certified peaks) -> dim 108
+    start peaks re-derived on the reduced model: 16 within 5 % (16 new): [-7.323, -3.955, -2.419, -1.544, -1.087, -0.819, -0.606, -0.487, -0.355, 0.016, 0.52, 1.139, 1.863, 2.767, 5.206, 14.437]
+    sigma2 row at w=-0.5000: sigma1=5.5578 sigma2=5.3321 gap=0.0406
+    sigma2 enrolled at 1 of 175 frequencies

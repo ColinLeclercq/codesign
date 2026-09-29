@@ -241,3 +241,21 @@ with a sparse LU of M instead of dense Cholesky/SVD; the power-iteration x 1.3
 branch removed). Added: `tools/mimo_proto.py`, `tools/mimo_plots.py` (prototype,
 standalone; the production loop is untouched). Remaining dense uses are GL
 reference tools, listed in STAGE5 34.2. Nothing else removed.
+
+## 10. 2026-09-29: MIMO in the production loop (STAGE6, branch `mimo`)
+
+Added: `closedloop_mimo.py`, `PackerMIMO`, `tools/mimo_start.py`, `tools/mimo_n100.sh`,
+`tools/check_mimo.py`, `tools/check_siso_identity.sh`, `tools/mimo_prod_plots.py`,
+`FECoDesign.cert_region_mimo`. Changed (SISO paths untouched, identity checked):
+`certify_sparse` (`_cl_arow` dispatch, rank-2(m+p) pencil), `winding_cert` (`_FM`, MIMO
+tail, deterministic Lanczos start), `reduced` (MIMO proxy and pencil, no eigenvalue
+tracking for MIMO, deterministic `svds` fallback start), `fieldbasis.laplace_basis`
+(deterministic start and sign), `tools/tail_certificate.py` (deterministic start),
+`sqp_inner` (`exit_info`), `run_case_epi` (MIMO flags and records, `--wind-accept`,
+gate winding fallback, `--band-first` for MIMO, dense all-w save check).
+Removed: the two inline copies of the winding-count call in the driver (continuation
+refusal, acceptance), now one helper `_wind_right_of_margin`. All temporary debug
+prints of the diagnosis (line-search trace, pair residuals, candidate dumps) were
+removed before the commit; none remain.
+Runs kept as evidence under `results_mimo_prod/*_try*` (each named after what it
+showed; STAGE6 6.3-6.8).

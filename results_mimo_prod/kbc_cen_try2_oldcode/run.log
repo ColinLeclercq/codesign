@@ -1,0 +1,79 @@
+=== launch kbc_cen 1790645728
+controller order 7 -> 8 (from the seed catalogue)
+  warm start: none usable -- cold start
+MIMO: 2 actuators, 2 sensors, central compensator of order 16; 114 free complex controller entries; start results_mimo_prod/kbc_dec/K_B_C_s0_ne100_mimo2x2_decentral.npz (record gamma 5.565958)
+  parallel constraints unavailable (NotImplementedError); running them serially
+pool: 2 workers for the |Omega| constraints; stability certificate SERIAL
+band [-30.00, 30.00]; controller poles |Im| <= 20.00 (3/2 x max seed |Im|, band = 3/2 x wmax)
+controller poles NOT constrained in |Im| (--ctrl-imcap off); the band follows the closed-loop spectrum at each accepted design, from [-30.00, 30.00]
+stage-1 flags: select-cons=on ctrl-imcap=off ctrl-stab=on cont-anchor=defer opt-tol=1e-10
+start gamma=5.565956, |Omega|=159
+lu_counter: factorisations and solves are being counted
+oracle: position-robust (union Galerkin, input basis b 12, c 12)
+continuation anchor verified: alpha=-0.1202, watching 8 near-line eigenvalue(s)
+    oracle: +15 anchor(s) (certified peaks) -> dim 108
+    start peaks re-derived on the reduced model: 16 within 5 % (16 new): [-7.323, -3.955, -2.419, -1.544, -1.087, -0.819, -0.606, -0.487, -0.355, 0.016, 0.52, 1.139, 1.863, 2.767, 5.206, 14.437]
+    sigma2 row at w=-0.5000: sigma1=5.5578 sigma2=5.3321 gap=0.0406
+    sigma2 enrolled at 1 of 175 frequencies
+    sqp refine: working set +7 -> |Omega|=182
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 18 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 5.506962 vs certified 5.506962 (rel 4.6e-14)
+    dump: results_mimo_prod/kbc_cen/dump_1790645728/outer_000.npz  (|Omega|=182, 41 active, balance residual 1.452e+01)
+  outer 0: |Omega|=182  t=5.506962  certified=5.506962  best=5.506962  (+2 freq, 38 calls)
+    inner budget -> 20 (certified/t = 1.000)
+    oracle: +15 anchor(s) (certified peaks) -> dim 114
+    sigma2 row at w=-0.5000: sigma1=5.4710 sigma2=5.4238 gap=0.0086
+    sigma2 row at w=-0.4866: sigma1=5.4745 sigma2=5.4015 gap=0.0133
+    sigma2 row at w=-0.4552: sigma1=5.4701 sigma2=5.2781 gap=0.0351
+    sigma2 enrolled at 3 of 184 frequencies
+    sqp refine: working set +19 -> |Omega|=203
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 24 member(s) moved to their tops, 0 merged
+    tau governor: 6 homotopy split(s), gate passed -- no cap
+    oracle: reduced at the witness 5.235947 vs certified 5.235947 (rel 5.1e-16)
+    dump: results_mimo_prod/kbc_cen/dump_1790645728/outer_001.npz  (|Omega|=203, 15 active, balance residual 5.214e+03)
+  outer 1: |Omega|=203  t=5.235947  certified=5.235947  best=5.235947  (+7 freq, 70 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: +15 anchor(s) (certified peaks) -> dim 122
+    sigma2 row at w=-0.4866: sigma1=5.1601 sigma2=4.7287 gap=0.0836
+    sigma2 enrolled at 1 of 210 frequencies
+    sqp refine: working set +29 -> |Omega|=239
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 29 member(s) moved to their tops, 0 merged
+    continuation REJECTS: homotopy midpoint is infeasible (alpha=-0.0052)
+    continuation refused, but the winding count right of Re=-eps is 0 (1561 pts): UNCONDITIONALLY stable at the margin, accepted, chain restarted
+    tau governor: 1 homotopy split(s), gate passed -- no cap
+    oracle: reduced at the witness 4.941129 vs certified 4.941129 (rel 2.0e-15)
+    dump: results_mimo_prod/kbc_cen/dump_1790645728/outer_002.npz  (|Omega|=239, 62 active, balance residual 6.499e+02)
+  outer 2: |Omega|=239  t=4.941129  certified=4.941129  best=4.941129  (+6 freq, 119 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 122 -> 123
+    sigma2 row at w=-0.4866: sigma1=4.8867 sigma2=4.3402 gap=0.1118
+    sigma2 enrolled at 1 of 245 frequencies
+    sqp refine: working set +23 -> |Omega|=268
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 43 member(s) moved to their tops, 0 merged
+    continuation REJECTS: homotopy midpoint is infeasible (alpha=+0.1799)
+    continuation refused, but the winding count right of Re=-eps is 0 (1609 pts): UNCONDITIONALLY stable at the margin, accepted, chain restarted
+    tau governor: 1 homotopy split(s), gate passed -- no cap
+    oracle: reduced at the witness 4.650119 vs certified 4.650119 (rel 2.5e-13)
+    dump: results_mimo_prod/kbc_cen/dump_1790645728/outer_003.npz  (|Omega|=268, 69 active, balance residual 3.494e+03)
+  outer 3: |Omega|=268  t=4.650119  certified=4.650119  best=4.650119  (+10 freq, 113 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 123 -> 124
+    sigma2 row at w=-0.4866: sigma1=4.5902 sigma2=4.2302 gap=0.0784
+    sigma2 enrolled at 1 of 278 frequencies
+    sqp refine: working set +23 -> |Omega|=301
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 50 member(s) moved to their tops, 0 merged
+    tau governor: 2 homotopy split(s), gate passed -- no cap
+    oracle: reduced at the witness 4.521391 vs certified 4.521391 (rel 1.2e-14)
+    dump: results_mimo_prod/kbc_cen/dump_1790645728/outer_004.npz  (|Omega|=301, 160 active, balance residual 1.763e+00)
+  outer 4: |Omega|=301  t=4.521391  certified=4.521391  best=4.521391  (+9 freq, 114 calls)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 124 -> 127
+    sigma2 row at w=-0.6298: sigma1=4.4913 sigma2=4.2914 gap=0.0445
+    sigma2 row at w=-0.6193: sigma1=4.4913 sigma2=4.2900 gap=0.0448
+    sigma2 row at w=-0.6023: sigma1=4.4913 sigma2=4.2866 gap=0.0456
+    sigma2 enrolled at 3 of 310 frequencies

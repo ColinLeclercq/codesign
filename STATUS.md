@@ -1,7 +1,7 @@
-# STATUS -- where every planned and added item stands (2026-09-28)
+# STATUS -- where every planned and added item stands (2026-09-29)
 
 Short by design: one line per item, current state only. The history -- what was
-tried, measured, reverted and why -- is in STAGE0-5.md (by date and section), the
+tried, measured, reverted and why -- is in STAGE0-6.md (by date and section), the
 row-by-row log in TRACKER.md, the code removals in CLEANUP.md.
 
 **Where the plan comes from.** The stages 0-7 are in `HANDOFF_implementation.md`
@@ -26,6 +26,7 @@ relevant -- reason given); **left** (deliberately not touched, by decision).
 | K+FB+FC ne=400, 4 Gabor atoms per field | 3.903930 | 82 min, 11 rounds | stopped early by the progress stop; same design 3.903963 on ne=200, 3.904026 on ne=800 |
 | K+FB+FC ne=400, 160 modes + H^2 shape row (k <= 1) | 3.914071 | 281 min, 20 rounds | same design 3.915962 on ne=800; optimised at ne=200: 3.911740 |
 | K+FB+FC, unconstrained fields | **withdrawn** | | 3.898938 (ne=100, 80 modes) is 5.52 on ne=200: a discretisation artefact (STAGE5 32.7) |
+| **MIMO, 2 actuators + 2 sensors, ne=100** (branch `mimo`, STAGE6) | atoms (static gains): **2.383533 centralized and decentralized = the two-pair floor** (1e-10 / 5e-9 above sup_w sigma_3^ol); K+B+C: decentralized 5.565958, centralized **3.792962** | 8-44 min | SISO at ne=100: 3.877016 (atoms), 6.399134 (K+B+C); every record re-checked over all w by `tools/check_mimo.py` |
 | lower bounds | 3.509193 (any single actuator/sensor pair), 9.831865 / 9.660137 (sensor at 0.98 / actuator at -1.03) | | `results/bounds_ne200.json` |
 
 Figures: `figs/final_sigma.png` (uncontrolled sigma_1 vs controlled sigma_1, sigma_2),
@@ -92,7 +93,7 @@ factorisations per round, ~70 with reduced-model certification every 4th round.
 | 4 parallel winding certificate | **next: parallel** | now the largest single cost: 400-960 factorisations per refused continuation |
 | 5 `--rigor` Neumann segment bound | **next: parallel** (inside item 4) | |
 | 6 cost table, parallel column | **next: parallel** | |
-| 7 MIMO | **prototype done** at ne=100 (tools/mimo_proto.py): decentralized and centralized, K+B+C and atoms; production loop **next** | K+B+C 6.399 -> 5.595 (2 SISO loops) / 4.278 (2x2, still falling); atoms 3.877 -> 2.387 / 2.386, 0.1 % above the 2-pair floor 2.3835 (STAGE5 34) |
+| 7 MIMO | **done** in the production loop (branch `mimo`, STAGE6): rank-(m+p) resolvent, certificates, det(I - K G) winding count, reduced oracle, packer (central / decentral / static), driver; SISO bit-identical | ne=100: atoms 3.877 -> 2.383533 (the two-pair floor, central and decentral); K+B+C 6.399 -> 5.566 (decentral) / 3.793 (central); prototype STAGE5 34.3 |
 | 8 projection oracle, GL prototype | **done** | 27-case validation -> cluster |
 | 9 subspace dimension in 2-D | **next: cavity** | GL: dim 95-142 with the cap at 120 |
 | 10 anchor-preconditioned winding tail | **next: parallel** | |
@@ -128,13 +129,20 @@ factorisations per round, ~70 with reduced-model certification every 4th round.
 | mesh-independence test by cross-evaluation (tools/cross_eval.py) | **done** | STAGE5 32.7 |
 | closed-loop pair on the line (face-S analogue) | detector only; never hit | STAGE5 30.7 |
 | debugging at ne=100 (transfer tool) | **done** | STAGE5 21 |
+| MIMO: unstable acceptance far outside the band (`--wind-accept`, winding count at every acceptance) | **done** (MIMO default) | STAGE6 6.3 |
+| MIMO: high-gain branches (no eigenvalue tracking in the reduced pencil; certificate region from eig(D_c C^H M^-1 B)) | **done** | STAGE6 6.4 |
+| MIMO: gate INCONCLUSIVE on a very wide band -> winding count | **done** | STAGE6 6.5 |
+| MIMO: false best, band one candidate late (`--band-first` on for MIMO); dense all-w gamma check at save (all cases, n + r <= 1000) | **done** | STAGE6 6.6 |
+| run-to-run determinism of field runs (ARPACK start vectors) | **done** | STAGE6 6.8 |
+| relative stationarity test with one very sensitive active row | **open** (measured, not attributed) | STAGE6 6.10 |
 | dead code after negative tests | **done** (removed, recorded) | CLEANUP 7 |
 | CLEANUP section 5 (reference tables, bounds file, archive) | **done** | CLEANUP 5 |
 
 ## Next
 
-0. MIMO in the production loop (algebra item 7): the prototype works (STAGE5 34); the winding count (det(I - K G)), face S for MIMO pairs, the packer and the driver's SISO bookkeeping remain.
-   Runs at ne >= 400 go to the cluster (user, 2026-09-28).
+0. MIMO: done at ne=100 (STAGE6); open: scale-safe stationarity (6.10), batched MIMO rows, multistart
+   (the decentralized problems are multimodal), control-cost weight W K S (later, user). The compensator's
+   face S carries over (kbc_dec entered it at round 0: the SISO optimum's pair on the line). Runs at ne >= 400 go to the cluster (user, 2026-09-28).
 1. Parallelisation (stage 6): winding count, gate and certificate shifts, reduced rows over workers.
 2. Cavity (stage 7): operators from the user's solver, MUMPS/PETSc, subspace dimension, tail bound, P_plant, residual-based disks.
 3. Cluster: 27-case regression, multistart over controllers.

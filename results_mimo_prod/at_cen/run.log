@@ -1,0 +1,389 @@
+=== launch at_cen 1790649718
+MIMO: --band-first on (the candidate's band before its certificate)
+controller order 7 -> 8 (from the seed catalogue)
+  warm start: none usable -- cold start
+field basis (laplace): actuator 80 modes on [-38.90, 39.20]
+field basis (laplace): sensor 80 modes on [-38.90, 39.20]
+field atoms (actuator): 4 Gabor atoms, width >= 1.0, |wavenumber| <= 0.7071; fitted to the start field (M-norm error 0.019)
+field atoms (sensor): 4 Gabor atoms, width >= 1.0, |wavenumber| <= 0.7071; fitted to the start field (M-norm error 0.018)
+field atoms (actuators): 2 x 4 Gabor atoms; from the record
+field atoms (sensors): 2 x 4 Gabor atoms; from the record
+MIMO: 2 actuators, 2 sensors, central compensator of order 8; 4 free complex controller entries; start results_mimo_prod/at_dec/KGC_FB_FC_s0_ne100_mimo2x2_decentral.npz (record gamma 2.964887)
+  parallel constraints unavailable (NotImplementedError); running them serially
+pool: 2 workers for the |Omega| constraints; stability certificate SERIAL
+band [-30.00, 30.00]; controller poles |Im| <= 20.00 (3/2 x max seed |Im|, band = 3/2 x wmax)
+controller poles NOT constrained in |Im| (--ctrl-imcap off); the band follows the closed-loop spectrum at each accepted design, from [-30.00, 30.00]
+stage-1 flags: select-cons=on ctrl-imcap=off ctrl-stab=on cont-anchor=defer opt-tol=1e-10
+start gamma=2.964887, |Omega|=159
+lu_counter: factorisations and solves are being counted
+oracle: position-robust (union Galerkin, input basis b 80, c 80)
+continuation anchor verified: alpha=-0.2188, watching 5 near-line eigenvalue(s)
+    oracle: +4 anchor(s) (certified peaks) -> dim 156
+    start peaks re-derived on the reduced model: 4 within 5 % (4 new): [-1.081, -0.486, 0.538, 4.236]
+    sigma2 enrolled at 0 of 163 frequencies
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 4 member(s) moved to their tops, 0 merged
+    band widened to [-239.12, 239.12] from the candidate's closed-loop spectrum (before its certificate)
+    refusal: witness w=-157.4111 (certified 290.061828 vs t 2.915021); nearest member -30.0000 (distance 127.4111), NOT a peak member
+    oracle: reduced at the witness 290.061828 vs certified 290.061828 (rel 1.0e-11)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_000.npz  (|Omega|=163, 14 active, balance residual 7.178e+00)
+  outer 0: |Omega|=163  t=2.915021  certified=290.061828  best=2.964887  (+2 freq, 25 calls)
+    fields (best): RMS wavenumber 0.4500, 0.5418, 0.4154, 0.5315 (bound 1, order 1)
+    inner budget -> 5 (certified/t = 99.506)
+    oracle: basis compacted 158 -> 149
+    sigma2 enrolled at 0 of 164 frequencies
+    sqp refine: working set +1 -> |Omega|=165
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 3 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.964887 vs certified 2.964887 (rel 1.9e-15)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_001.npz  (|Omega|=165, 13 active, balance residual 1.371e+01)
+  outer 1: |Omega|=165  t=2.964887  certified=2.964887  best=2.964887  (+1 freq, 9 calls)
+    fields (best): RMS wavenumber 0.4500, 0.5418, 0.4154, 0.5315 (bound 1, order 1)
+    inner budget -> 10 (certified/t = 1.000)
+    oracle: basis compacted 149 -> 163
+    sigma2 enrolled at 0 of 166 frequencies
+    sqp refine: working set +2 -> |Omega|=168
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 5 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.950191 vs certified 2.950191 (rel 6.6e-15)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_002.npz  (|Omega|=168, 12 active, balance residual 1.527e+01)
+  outer 2: |Omega|=168  t=2.950191  certified=2.950191  best=2.950191  (+2 freq, 12 calls)
+    fields (best): RMS wavenumber 0.4505, 0.5409, 0.4141, 0.5315 (bound 1, order 1)
+    inner budget -> 20 (certified/t = 1.000)
+    oracle: basis compacted 163 -> 167
+    sigma2 row at w=+0.5213: sigma1=2.9487 sigma2=2.6784 gap=0.0917 (active)
+    sigma2 row at w=+0.5381: sigma1=2.9486 sigma2=2.6842 gap=0.0897 (active)
+    sigma2 enrolled at 2 of 170 frequencies
+    sqp refine: working set +2 -> |Omega|=172
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 2 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.950191 vs certified 2.950191 (rel 5.7e-15)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_003.npz  (|Omega|=172, 13 active, balance residual 9.815e+00)
+  outer 3: |Omega|=172  t=2.950191  certified=2.950191  best=2.950191  (+0 freq, 13 calls)
+    fields (best): RMS wavenumber 0.4505, 0.5409, 0.4141, 0.5315 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+  no new frequency (1/3) -- continuing with the current Omega
+    oracle: basis compacted 167 -> 167
+    sigma2 row at w=+0.5213: sigma1=2.9487 sigma2=2.6784 gap=0.0917 (active)
+    sigma2 row at w=+0.5381: sigma1=2.9486 sigma2=2.6842 gap=0.0897 (active)
+    sigma2 enrolled at 2 of 172 frequencies
+    sqp refine: working set +6 -> |Omega|=178
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 8 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.857966 vs certified 2.857966 (rel 4.7e-16)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_004.npz  (|Omega|=178, 17 active, balance residual 8.224e+00)
+  outer 4: |Omega|=178  t=2.857966  certified=2.857966  best=2.857966  (+2 freq, 35 calls)
+    fields (best): RMS wavenumber 0.4502, 0.5329, 0.4074, 0.4918 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 167 -> 159
+    sigma2 enrolled at 0 of 180 frequencies
+    sqp refine: working set +4 -> |Omega|=184
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 10 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.825633 vs certified 2.825633 (rel 2.2e-15)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_005.npz  (|Omega|=184, 18 active, balance residual 8.770e+00)
+  outer 5: |Omega|=184  t=2.825633  certified=2.825633  best=2.825633  (+2 freq, 32 calls)
+    fields (best): RMS wavenumber 0.4520, 0.5323, 0.4047, 0.4866 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 159 -> 159
+    sigma2 enrolled at 0 of 186 frequencies
+    sqp refine: working set +1 -> |Omega|=187
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 6 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.825633 vs certified 2.825633 (rel 0.0e+00)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_006.npz  (|Omega|=187, 18 active, balance residual 8.770e+00)
+  outer 6: |Omega|=187  t=2.825633  certified=2.825633  best=2.825633  (+0 freq, 11 calls)
+    fields (best): RMS wavenumber 0.4520, 0.5323, 0.4047, 0.4866 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+  no new frequency (1/3) -- continuing with the current Omega
+    oracle: basis compacted 159 -> 159
+    sigma2 enrolled at 0 of 187 frequencies
+    sqp refine: working set +2 -> |Omega|=189
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 5 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.825633 vs certified 2.825633 (rel 0.0e+00)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_007.npz  (|Omega|=189, 18 active, balance residual 8.770e+00)
+  outer 7: |Omega|=189  t=2.825633  certified=2.825633  best=2.825633  (+0 freq, 16 calls)
+    fields (best): RMS wavenumber 0.4520, 0.5323, 0.4047, 0.4866 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+  no new frequency (2/3) -- continuing with the current Omega
+    oracle: basis compacted 159 -> 159
+    sigma2 enrolled at 0 of 189 frequencies
+    sqp refine: working set +15 -> |Omega|=204
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 14 member(s) moved to their tops, 0 merged
+    band widened to [-484.10, 484.10] from the candidate's closed-loop spectrum (before its certificate)
+    refusal: witness w=-320.7306 (certified 285.876614 vs t 2.640532); nearest member -219.8770 (distance 100.8536), NOT a peak member
+    oracle: reduced at the witness 285.876614 vs certified 285.876614 (rel 5.4e-12)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_008.npz  (|Omega|=204, 17 active, balance residual 2.618e+03)
+  outer 8: |Omega|=204  t=2.640532  certified=285.876614  best=2.825633  (+2 freq, 116 calls)
+    fields (best): RMS wavenumber 0.4520, 0.5323, 0.4047, 0.4866 (bound 1, order 1)
+    inner budget -> 20 (certified/t = 108.265)
+    oracle: basis compacted 159 -> 147
+    sigma2 enrolled at 0 of 206 frequencies
+    sqp refine: working set +14 -> |Omega|=220
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 13 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.643600 vs certified 2.643600 (rel 1.7e-15)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_009.npz  (|Omega|=220, 35 active, balance residual 2.675e+03)
+  outer 9: |Omega|=220  t=2.643600  certified=2.643600  best=2.643600  (+3 freq, 64 calls)
+    fields (best): RMS wavenumber 0.4511, 0.5481, 0.3893, 0.4743 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 147 -> 163
+    sigma2 row at w=-0.9211: sigma1=2.5987 sigma2=2.5416 gap=0.0220
+    sigma2 row at w=-0.9004: sigma1=2.5980 sigma2=2.5472 gap=0.0196
+    sigma2 enrolled at 2 of 223 frequencies
+    sqp refine: working set +1 -> |Omega|=224
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 11 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.643600 vs certified 2.643600 (rel 7.7e-15)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_010.npz  (|Omega|=224, 35 active, balance residual 2.675e+03)
+  outer 10: |Omega|=224  t=2.643600  certified=2.643600  best=2.643600  (+0 freq, 11 calls)
+    fields (best): RMS wavenumber 0.4511, 0.5481, 0.3893, 0.4743 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+  no new frequency (1/3) -- continuing with the current Omega
+    oracle: basis compacted 163 -> 163
+    sigma2 row at w=-0.9211: sigma1=2.5987 sigma2=2.5416 gap=0.0220
+    sigma2 row at w=-0.9004: sigma1=2.5980 sigma2=2.5472 gap=0.0196
+    sigma2 enrolled at 2 of 224 frequencies
+    sqp refine: working set +2 -> |Omega|=226
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 16 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.639531 vs certified 2.639531 (rel 6.7e-16)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_011.npz  (|Omega|=226, 36 active, balance residual 2.671e+03)
+  outer 11: |Omega|=226  t=2.639601  certified=2.639531  best=2.639531  (+0 freq, 19 calls)
+    fields (best): RMS wavenumber 0.4514, 0.5490, 0.3892, 0.4750 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 163 -> 163
+    sigma2 row at w=-0.9168: sigma1=2.5960 sigma2=2.5400 gap=0.0216
+    sigma2 row at w=-0.9004: sigma1=2.5956 sigma2=2.5445 gap=0.0197
+    sigma2 enrolled at 2 of 226 frequencies
+    sqp refine: working set +1 -> |Omega|=227
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 17 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.574490 vs certified 2.574490 (rel 5.0e-15)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_012.npz  (|Omega|=227, 48 active, balance residual 5.011e+00)
+  outer 12: |Omega|=227  t=2.587000  certified=2.574490  best=2.574490  (+2 freq, 33 calls)
+    fields (best): RMS wavenumber 0.4547, 0.5623, 0.3945, 0.4867 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 0.995)
+    oracle: basis compacted 163 -> 162
+    sigma2 row at w=-0.9004: sigma1=2.5616 sigma2=2.5152 gap=0.0181
+    sigma2 row at w=-0.8551: sigma1=2.5645 sigma2=2.5267 gap=0.0147
+    sigma2 row at w=-0.7500: sigma1=2.5537 sigma2=2.5300 gap=0.0093
+    sigma2 enrolled at 3 of 229 frequencies
+    sqp refine: working set +1 -> |Omega|=230
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 11 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.574490 vs certified 2.574490 (rel 2.0e-13)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_013.npz  (|Omega|=230, 48 active, balance residual 5.011e+00)
+  outer 13: |Omega|=230  t=2.574490  certified=2.574490  best=2.574490  (+0 freq, 13 calls)
+    fields (best): RMS wavenumber 0.4547, 0.5623, 0.3945, 0.4867 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+  no new frequency (1/3) -- continuing with the current Omega
+    oracle: basis compacted 162 -> 162
+    sigma2 row at w=-0.9004: sigma1=2.5616 sigma2=2.5152 gap=0.0181
+    sigma2 row at w=-0.8551: sigma1=2.5645 sigma2=2.5267 gap=0.0147
+    sigma2 row at w=-0.7500: sigma1=2.5537 sigma2=2.5300 gap=0.0093
+    sigma2 enrolled at 3 of 230 frequencies
+    sqp refine: working set +1 -> |Omega|=231
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 20 member(s) moved to their tops, 0 merged
+    certificate INCONCLUSIVE at 2.550676 (a higher level set exists, not located; witness +13.8020): round not accepted
+    oracle: reduced at the witness 2.550676 vs certified 2.550676 (rel 1.8e-14)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_014.npz  (|Omega|=231, 51 active, balance residual 4.404e+00)
+  outer 14: |Omega|=231  t=2.551567  certified=2.550676  best=2.574490  (+5 freq, 43 calls)
+    fields (best): RMS wavenumber 0.4547, 0.5623, 0.3945, 0.4867 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 162 -> 167
+    sigma2 row at w=-0.8551: sigma1=2.5645 sigma2=2.5267 gap=0.0147
+    sigma2 row at w=-0.8270: sigma1=2.5633 sigma2=2.5310 gap=0.0126
+    sigma2 row at w=-0.7500: sigma1=2.5537 sigma2=2.5300 gap=0.0093
+    sigma2 enrolled at 3 of 236 frequencies
+    sqp refine: working set +2 -> |Omega|=238
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 24 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.538889 vs certified 2.538889 (rel 5.2e-16)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_015.npz  (|Omega|=238, 79 active, balance residual 3.858e+00)
+  outer 15: |Omega|=238  t=2.538889  certified=2.538889  best=2.538889  (+3 freq, 47 calls)
+    fields (best): RMS wavenumber 0.4665, 0.5770, 0.4001, 0.4804 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 167 -> 163
+    sigma2 row at w=-0.8270: sigma1=2.5364 sigma2=2.5149 gap=0.0085 (active)
+    sigma2 row at w=-0.7995: sigma1=2.5368 sigma2=2.5180 gap=0.0074 (active)
+    sigma2 row at w=-0.7500: sigma1=2.5362 sigma2=2.5167 gap=0.0077
+    sigma2 row at w=-0.5767: sigma1=2.5370 sigma2=2.4563 gap=0.0318 (active)
+    sigma2 row at w=-0.5651: sigma1=2.5370 sigma2=2.4507 gap=0.0340 (active)
+    sigma2 enrolled at 5 of 241 frequencies
+    sqp refine: working set +17 -> |Omega|=258
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 30 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.383910 vs certified 2.383910 (rel 5.6e-15)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_016.npz  (|Omega|=258, 34 active, balance residual 8.576e-01)
+  outer 16: |Omega|=258  t=2.383910  certified=2.383910  best=2.383910  (+3 freq, 108 calls)
+    fields (best): RMS wavenumber 0.5548, 0.6014, 0.5005, 0.4860 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 163 -> 160
+    sigma2 row at w=-0.7500: sigma1=2.3825 sigma2=2.3460 gap=0.0153 (active)
+    sigma2 row at w=-0.7270: sigma1=2.3829 sigma2=2.3495 gap=0.0140 (active)
+    sigma2 row at w=-0.6995: sigma1=2.3834 sigma2=2.3533 gap=0.0126 (active)
+    sigma2 row at w=-0.6397: sigma1=2.3839 sigma2=2.3603 gap=0.0099 (active)
+    sigma2 row at w=-0.6334: sigma1=2.3839 sigma2=2.3609 gap=0.0096 (active)
+    sigma2 row at w=-0.6267: sigma1=2.3839 sigma2=2.3615 gap=0.0094 (active)
+    sigma2 row at w=-0.6073: sigma1=2.3837 sigma2=2.3632 gap=0.0086 (active)
+    sigma2 row at w=-0.6062: sigma1=2.3837 sigma2=2.3633 gap=0.0085 (active)
+    sigma2 row at w=-0.5997: sigma1=2.3836 sigma2=2.3638 gap=0.0083 (active)
+    sigma2 row at w=-0.5935: sigma1=2.3835 sigma2=2.3643 gap=0.0080 (active)
+    sigma2 row at w=-0.5923: sigma1=2.3834 sigma2=2.3644 gap=0.0080 (active)
+    sigma2 row at w=-0.5651: sigma1=2.3827 sigma2=2.3661 gap=0.0070 (active)
+    sigma2 row at w=+0.0000: sigma1=2.3512 sigma2=2.2750 gap=0.0324
+    sigma2 row at w=+0.2500: sigma1=2.3505 sigma2=2.2743 gap=0.0324
+    sigma2 row at w=+0.6726: sigma1=2.3699 sigma2=2.3345 gap=0.0150
+    sigma2 row at w=+0.6801: sigma1=2.3706 sigma2=2.3348 gap=0.0151
+    sigma2 row at w=+0.6878: sigma1=2.3713 sigma2=2.3351 gap=0.0153
+    sigma2 row at w=+0.7500: sigma1=2.3768 sigma2=2.3361 gap=0.0171
+    sigma2 row at w=+0.8502: sigma1=2.3810 sigma2=2.3324 gap=0.0204
+    sigma2 row at w=+0.9644: sigma1=2.3748 sigma2=2.3200 gap=0.0231
+    sigma2 row at w=+1.0000: sigma1=2.3707 sigma2=2.3136 gap=0.0241
+    sigma2 enrolled at 21 of 261 frequencies
+    sqp refine: working set +1 -> |Omega|=262
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 32 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.383542 vs certified 2.383542 (rel 8.0e-15)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_017.npz  (|Omega|=262, 23 active, balance residual 2.380e-01)
+  outer 17: |Omega|=262  t=2.383542  certified=2.383542  best=2.383542  (+1 freq, 94 calls)
+    fields (best): RMS wavenumber 0.5561, 0.5999, 0.5001, 0.4862 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 160 -> 155
+    sigma2 row at w=-1.0594: sigma1=2.3801 sigma2=2.2766 gap=0.0435
+    sigma2 row at w=-0.7500: sigma1=2.3831 sigma2=2.3559 gap=0.0114 (active)
+    sigma2 row at w=-0.6995: sigma1=2.3835 sigma2=2.3617 gap=0.0092 (active)
+    sigma2 row at w=-0.6835: sigma1=2.3835 sigma2=2.3632 gap=0.0085 (active)
+    sigma2 row at w=-0.6750: sigma1=2.3835 sigma2=2.3640 gap=0.0082 (active)
+    sigma2 row at w=-0.6651: sigma1=2.3835 sigma2=2.3648 gap=0.0078 (active)
+    sigma2 row at w=-0.6397: sigma1=2.3833 sigma2=2.3668 gap=0.0069 (active)
+    sigma2 row at w=-0.6334: sigma1=2.3832 sigma2=2.3673 gap=0.0067 (active)
+    sigma2 row at w=-0.6267: sigma1=2.3830 sigma2=2.3677 gap=0.0064 (active)
+    sigma2 row at w=-0.6073: sigma1=2.3826 sigma2=2.3689 gap=0.0057 (active)
+    sigma2 row at w=-0.6062: sigma1=2.3825 sigma2=2.3689 gap=0.0057 (active)
+    sigma2 row at w=-0.5997: sigma1=2.3823 sigma2=2.3693 gap=0.0055 (active)
+    sigma2 row at w=-0.5935: sigma1=2.3821 sigma2=2.3696 gap=0.0053 (active)
+    sigma2 row at w=-0.5923: sigma1=2.3821 sigma2=2.3697 gap=0.0052 (active)
+    sigma2 row at w=+0.0000: sigma1=2.3479 sigma2=2.2827 gap=0.0277
+    sigma2 row at w=+0.2500: sigma1=2.3459 sigma2=2.2783 gap=0.0288
+    sigma2 row at w=+0.7500: sigma1=2.3676 sigma2=2.3267 gap=0.0173
+    sigma2 row at w=+0.7726: sigma1=2.3691 sigma2=2.3261 gap=0.0181
+    sigma2 row at w=+0.7801: sigma1=2.3695 sigma2=2.3259 gap=0.0184
+    sigma2 row at w=+0.7878: sigma1=2.3699 sigma2=2.3256 gap=0.0187
+    sigma2 row at w=+0.8551: sigma1=2.3716 sigma2=2.3213 gap=0.0212
+    sigma2 row at w=+0.9644: sigma1=2.3670 sigma2=2.3074 gap=0.0252
+    sigma2 row at w=+1.0000: sigma1=2.3639 sigma2=2.3002 gap=0.0269
+    sigma2 enrolled at 23 of 263 frequencies
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 29 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.383535 vs certified 2.383535 (rel 3.2e-14)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_018.npz  (|Omega|=263, 23 active, balance residual 4.394e-02)
+  outer 18: |Omega|=263  t=2.383521  certified=2.383535  best=2.383535  (+0 freq, 107 calls)
+    fields (best): RMS wavenumber 0.5567, 0.6003, 0.4992, 0.4862 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+    oracle: basis compacted 155 -> 155
+    sigma2 row at w=-1.0594: sigma1=2.3805 sigma2=2.2795 gap=0.0424
+    sigma2 row at w=-0.7500: sigma1=2.3832 sigma2=2.3567 gap=0.0111 (active)
+    sigma2 row at w=-0.6995: sigma1=2.3835 sigma2=2.3622 gap=0.0089 (active)
+    sigma2 row at w=-0.6829: sigma1=2.3835 sigma2=2.3638 gap=0.0083 (active)
+    sigma2 row at w=-0.6750: sigma1=2.3835 sigma2=2.3645 gap=0.0080 (active)
+    sigma2 row at w=-0.6651: sigma1=2.3835 sigma2=2.3653 gap=0.0076 (active)
+    sigma2 row at w=-0.6397: sigma1=2.3833 sigma2=2.3672 gap=0.0068 (active)
+    sigma2 row at w=-0.6334: sigma1=2.3832 sigma2=2.3676 gap=0.0065 (active)
+    sigma2 row at w=-0.6267: sigma1=2.3831 sigma2=2.3680 gap=0.0063 (active)
+    sigma2 row at w=-0.6073: sigma1=2.3827 sigma2=2.3692 gap=0.0057 (active)
+    sigma2 row at w=-0.6062: sigma1=2.3826 sigma2=2.3692 gap=0.0056 (active)
+    sigma2 row at w=-0.5997: sigma1=2.3824 sigma2=2.3696 gap=0.0054 (active)
+    sigma2 row at w=-0.5935: sigma1=2.3823 sigma2=2.3699 gap=0.0052 (active)
+    sigma2 row at w=-0.5923: sigma1=2.3822 sigma2=2.3699 gap=0.0052 (active)
+    sigma2 row at w=+0.0000: sigma1=2.3485 sigma2=2.2881 gap=0.0257
+    sigma2 row at w=+0.2500: sigma1=2.3478 sigma2=2.2822 gap=0.0279
+    sigma2 row at w=+0.7500: sigma1=2.3690 sigma2=2.3259 gap=0.0182
+    sigma2 row at w=+0.7801: sigma1=2.3702 sigma2=2.3252 gap=0.0190
+    sigma2 row at w=+0.7878: sigma1=2.3705 sigma2=2.3250 gap=0.0192
+    sigma2 row at w=+0.8313: sigma1=2.3711 sigma2=2.3229 gap=0.0203
+    sigma2 row at w=+0.8551: sigma1=2.3709 sigma2=2.3213 gap=0.0209
+    sigma2 row at w=+0.9644: sigma1=2.3648 sigma2=2.3078 gap=0.0241
+    sigma2 row at w=+1.0000: sigma1=2.3614 sigma2=2.3005 gap=0.0258
+    sigma2 enrolled at 23 of 263 frequencies
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 29 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.383533 vs certified 2.383533 (rel 1.6e-13)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_019.npz  (|Omega|=263, 23 active, balance residual 4.736e-03)
+  outer 19: |Omega|=263  t=2.383533  certified=2.383533  best=2.383533  (+0 freq, 55 calls)
+    fields (best): RMS wavenumber 0.5569, 0.6004, 0.4988, 0.4863 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+  no new frequency (1/3) -- continuing with the current Omega
+    oracle: basis compacted 155 -> 155
+    sigma2 row at w=-1.0594: sigma1=2.3812 sigma2=2.2807 gap=0.0422 (active)
+    sigma2 row at w=-0.7500: sigma1=2.3832 sigma2=2.3574 gap=0.0109 (active)
+    sigma2 row at w=-0.6995: sigma1=2.3835 sigma2=2.3628 gap=0.0087 (active)
+    sigma2 row at w=-0.6825: sigma1=2.3835 sigma2=2.3644 gap=0.0080 (active)
+    sigma2 row at w=-0.6750: sigma1=2.3835 sigma2=2.3650 gap=0.0078 (active)
+    sigma2 row at w=-0.6651: sigma1=2.3835 sigma2=2.3658 gap=0.0074 (active)
+    sigma2 row at w=-0.6397: sigma1=2.3833 sigma2=2.3677 gap=0.0065 (active)
+    sigma2 row at w=-0.6334: sigma1=2.3832 sigma2=2.3681 gap=0.0063 (active)
+    sigma2 row at w=-0.6267: sigma1=2.3831 sigma2=2.3685 gap=0.0061 (active)
+    sigma2 row at w=-0.6073: sigma1=2.3827 sigma2=2.3696 gap=0.0055 (active)
+    sigma2 row at w=-0.6062: sigma1=2.3827 sigma2=2.3697 gap=0.0054 (active)
+    sigma2 row at w=-0.5997: sigma1=2.3825 sigma2=2.3700 gap=0.0052 (active)
+    sigma2 row at w=-0.5935: sigma1=2.3823 sigma2=2.3703 gap=0.0050 (active)
+    sigma2 row at w=-0.5923: sigma1=2.3823 sigma2=2.3704 gap=0.0050 (active)
+    sigma2 row at w=+0.0000: sigma1=2.3486 sigma2=2.2901 gap=0.0249
+    sigma2 row at w=+0.2500: sigma1=2.3481 sigma2=2.2833 gap=0.0276
+    sigma2 row at w=+0.7500: sigma1=2.3687 sigma2=2.3249 gap=0.0185
+    sigma2 row at w=+0.7878: sigma1=2.3700 sigma2=2.3241 gap=0.0194
+    sigma2 row at w=+0.8211: sigma1=2.3703 sigma2=2.3227 gap=0.0201
+    sigma2 row at w=+0.8313: sigma1=2.3703 sigma2=2.3221 gap=0.0203
+    sigma2 row at w=+0.8551: sigma1=2.3699 sigma2=2.3205 gap=0.0209
+    sigma2 row at w=+0.9644: sigma1=2.3632 sigma2=2.3071 gap=0.0237
+    sigma2 row at w=+1.0000: sigma1=2.3597 sigma2=2.2998 gap=0.0254
+    sigma2 enrolled at 23 of 263 frequencies
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 24 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.383533 vs certified 2.383533 (rel 1.5e-13)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_020.npz  (|Omega|=263, 23 active, balance residual 3.256e-03)
+  outer 20: |Omega|=263  t=2.383533  certified=2.383533  best=2.383533  (+0 freq, 15 calls)
+    fields (best): RMS wavenumber 0.5569, 0.6004, 0.4988, 0.4863 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+  no new frequency (2/3) -- continuing with the current Omega
+    oracle: basis compacted 155 -> 155
+    sigma2 row at w=-1.0594: sigma1=2.3811 sigma2=2.2807 gap=0.0422
+    sigma2 row at w=-0.7500: sigma1=2.3832 sigma2=2.3573 gap=0.0109 (active)
+    sigma2 row at w=-0.6995: sigma1=2.3835 sigma2=2.3628 gap=0.0087 (active)
+    sigma2 row at w=-0.6825: sigma1=2.3835 sigma2=2.3644 gap=0.0080 (active)
+    sigma2 row at w=-0.6750: sigma1=2.3835 sigma2=2.3650 gap=0.0078 (active)
+    sigma2 row at w=-0.6651: sigma1=2.3835 sigma2=2.3658 gap=0.0074 (active)
+    sigma2 row at w=-0.6397: sigma1=2.3833 sigma2=2.3677 gap=0.0065 (active)
+    sigma2 row at w=-0.6334: sigma1=2.3832 sigma2=2.3681 gap=0.0063 (active)
+    sigma2 row at w=-0.6267: sigma1=2.3831 sigma2=2.3685 gap=0.0061 (active)
+    sigma2 row at w=-0.6073: sigma1=2.3827 sigma2=2.3696 gap=0.0055 (active)
+    sigma2 row at w=-0.6062: sigma1=2.3827 sigma2=2.3697 gap=0.0055 (active)
+    sigma2 row at w=-0.5997: sigma1=2.3825 sigma2=2.3700 gap=0.0052 (active)
+    sigma2 row at w=-0.5935: sigma1=2.3823 sigma2=2.3703 gap=0.0050 (active)
+    sigma2 row at w=-0.5923: sigma1=2.3823 sigma2=2.3704 gap=0.0050 (active)
+    sigma2 row at w=+0.0000: sigma1=2.3486 sigma2=2.2901 gap=0.0249
+    sigma2 row at w=+0.2500: sigma1=2.3481 sigma2=2.2833 gap=0.0276
+    sigma2 row at w=+0.7500: sigma1=2.3687 sigma2=2.3249 gap=0.0185
+    sigma2 row at w=+0.7878: sigma1=2.3700 sigma2=2.3241 gap=0.0194
+    sigma2 row at w=+0.8211: sigma1=2.3703 sigma2=2.3227 gap=0.0201
+    sigma2 row at w=+0.8313: sigma1=2.3703 sigma2=2.3221 gap=0.0203
+    sigma2 row at w=+0.8551: sigma1=2.3699 sigma2=2.3205 gap=0.0208
+    sigma2 row at w=+0.9644: sigma1=2.3632 sigma2=2.3071 gap=0.0237
+    sigma2 row at w=+1.0000: sigma1=2.3597 sigma2=2.2998 gap=0.0254
+    sigma2 enrolled at 23 of 263 frequencies
+    oracle: abscissa from the reduced pencil in 0 evaluations, full certificate in 0
+    peak-following: 23 member(s) moved to their tops, 0 merged
+    oracle: reduced at the witness 2.383533 vs certified 2.383533 (rel 1.5e-13)
+    dump: results_mimo_prod/at_cen/dump_1790649718/outer_021.npz  (|Omega|=263, 23 active, balance residual 2.689e-03)
+  outer 21: |Omega|=263  t=2.383533  certified=2.383533  best=2.383533  (+0 freq, 103 calls)
+    fields (best): RMS wavenumber 0.5569, 0.6004, 0.4988, 0.4863 (bound 1, order 1)
+    inner budget -> 40 (certified/t = 1.000)
+  FIXED POINT under --converge: certificate agrees with t, no new frequency, no admissible improvement for 3 rounds, inner solve NOT stationary by its own measure -- stalled, not converged (measure Clarke stationarity of the endpoint)
+winding certificate: 0 eigenvalues right of Re=-0.0250 (579 pts) -- UNCONDITIONALLY stable with eps/2 margin
+dense all-frequency check: gamma 2.383533 (certified 2.383533)
+{"case": "KGC+FB+FC", "gamma": 2.3835333279700675, "alpha": -0.21884189371314217, "n_active": 1, "outer": 22, "nOmega": 263, "calls": 981, "seconds": 2626.5}

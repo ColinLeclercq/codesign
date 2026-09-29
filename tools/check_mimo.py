@@ -11,7 +11,7 @@ never forms):
      active frequencies and a grid;
   2. the same class at m = p = 1 vs the SISO class (ClosedLoopResolvent) on a
      SISO record (the first loop of this design);
-  3. finite differences of sigma_1 w.r.t. every free controller entry kind
+  3. central finite differences of sigma_1 w.r.t. every controller entry kind
      (D_c, C_c, B_c, A_c diagonal) and the port-side vectors (d sigma = Re(z_p^H dB_i
      act_i + sen_j dC_j^H x_p)) along random load/sensor perturbations;
   4. the record's certified gamma vs the dense level set on the full even pencil
@@ -97,47 +97,61 @@ def main():
                          for k in ('d', 'e', 'f', 'n')))
     out['siso_vs_mimo_m1'] = dict(sigma=e2, grad=eg)
     print(f"2. MIMO class at m = p = 1 vs the SISO class ({SISO_REC}): sigma max rel {e2:.1e}, gradients {eg:.1e}")
-    # 3. finite differences at the active frequency of largest sigma
+    # 3. central finite differences, at the active frequency of largest sigma and
+    #    at a generic frequency (w = +2); error relative to the largest derivative
+    #    tested (at a design on the rank floor the derivatives at the witness are ~0)
     _af = np.asarray(z['active_freqs'], float) if np.size(z['active_freqs']) else np.array([-0.7])
-    w0 = float(_af[np.argmax([cl.gain(float(w), arow, Cc, Dc, want_vectors=False)['sigma'] for w in _af])])
-    res = cl.gain(w0, arow, Cc, Dc)
-    g = cl.design_grad_tri(res); act, sen = cl.port_sides(res, arow, Cc, Dc)
-    rng = np.random.default_rng(1); fd = []
-    s0 = res['sigma']
-
-    def sig(ar, nv, K_, bb=b, cc=c):
-        return D.cl(bb, cc).gain(w0, ar, nv, K_, want_vectors=False)['sigma']
+    w_top = float(_af[np.argmax([cl.gain(float(w), arow, Cc, Dc, want_vectors=False)['sigma'] for w in _af])])
+    rng = np.random.default_rng(1)
 
     def rnd(shape):
         return rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
-    base = dict(K=Dc, n=Cc, Bc=arow[3], d=arow[0])
-    for kind in ('K', 'n', 'Bc', 'd'):
-        h = 1e-7 * max(1.0, float(np.max(np.abs(base[kind]))))
-        dth = rnd(np.shape(base[kind]))
-        pred = float(np.real(np.sum(np.reshape(g[kind], np.shape(dth)) * dth)))
-        ar, nv, K_ = list(arow), Cc, Dc
-        if kind == 'K':
-            K_ = Dc + h * dth
-        elif kind == 'n':
-            nv = Cc + h * dth
-        elif kind == 'Bc':
-            ar[3] = arow[3] + h * dth
-        else:
-            ar[0] = arow[0] + h * dth
-        fd.append((kind, pred, (sig(tuple(ar), nv, K_) - s0) / h))
-    h = 1e-7
-    for j in range(b.shape[1]):
-        db = np.zeros_like(b); db[:, j] = D.M @ rnd(n) * np.linalg.norm(b[:, j]) / np.sqrt(n)
-        pred = float(np.real(np.vdot(res['z'][:n], db[:, j]) * act[j]))
-        fd.append((f'B{j + 1}', pred, (sig(arow, Cc, Dc, b + h * db, c) - s0) / h))
-    for j in range(c.shape[1]):
-        dc = np.zeros_like(c); dc[:, j] = D.M @ rnd(n) * np.linalg.norm(c[:, j]) / np.sqrt(n)
-        pred = float(np.real(sen[j] * np.vdot(dc[:, j], res['x'][:n])))
-        fd.append((f'C{j + 1}', pred, (sig(arow, Cc, Dc, b, c + h * dc) - s0) / h))
-    efd = max(abs(p - f) / max(abs(f), abs(p)) for _, p, f in fd if max(abs(f), abs(p)) > 1e-9)
-    out['fd'] = [(k, p, f) for k, p, f in fd]; out['fd_maxrel'] = efd
-    print(f"3. finite differences at w = {w0:+.4f} (sigma {s0:.6f}), analytic/FD: " +
-          ", ".join(f"{k} {p:+.4e}/{f:+.4e}" for k, p, f in fd) + f"  -> max rel {efd:.1e}")
+
+    def fd_at(w0):
+        res = cl.gain(w0, arow, Cc, Dc)
+        g = cl.design_grad_tri(res); act, sen = cl.port_sides(res, arow, Cc, Dc)
+        s12 = [q['sigma'] for q in cl.gain_k(w0, arow, Cc, Dc, k=2)]
+
+        def sig(ar, nv, K_, bb=b, cc=c):
+            return D.cl(bb, cc).gain(w0, ar, nv, K_, want_vectors=False)['sigma']
+
+        def cd(fp, fm, h):
+            return (fp - fm) / (2 * h)
+        fd = []
+        base = dict(K=Dc, n=Cc, Bc=arow[3], d=arow[0])
+        for kind in ('K', 'n', 'Bc', 'd'):
+            h = 1e-7 * max(1.0, float(np.max(np.abs(base[kind]))))
+            dth = rnd(np.shape(base[kind]))
+            pred = float(np.real(np.sum(np.reshape(g[kind], np.shape(dth)) * dth)))
+            vals = []
+            for sgn in (1, -1):
+                ar, nv, K_ = list(arow), Cc, Dc
+                if kind == 'K':
+                    K_ = Dc + sgn * h * dth
+                elif kind == 'n':
+                    nv = Cc + sgn * h * dth
+                elif kind == 'Bc':
+                    ar[3] = arow[3] + sgn * h * dth
+                else:
+                    ar[0] = arow[0] + sgn * h * dth
+                vals.append(sig(tuple(ar), nv, K_))
+            fd.append((kind, pred, cd(*vals, h)))
+        h = 1e-6
+        for j in range(b.shape[1]):
+            db = np.zeros_like(b); db[:, j] = D.M @ rnd(n) * np.linalg.norm(b[:, j]) / np.sqrt(n)
+            pred = float(np.real(np.vdot(res['z'][:n], db[:, j]) * act[j]))
+            fd.append((f'B{j + 1}', pred, cd(sig(arow, Cc, Dc, b + h * db, c), sig(arow, Cc, Dc, b - h * db, c), h)))
+        for j in range(c.shape[1]):
+            dc = np.zeros_like(c); dc[:, j] = D.M @ rnd(n) * np.linalg.norm(c[:, j]) / np.sqrt(n)
+            pred = float(np.real(sen[j] * np.vdot(dc[:, j], res['x'][:n])))
+            fd.append((f'C{j + 1}', pred, cd(sig(arow, Cc, Dc, b, c + h * dc), sig(arow, Cc, Dc, b, c - h * dc), h)))
+        scale = max(max(abs(f), abs(p)) for _, p, f in fd)
+        e = max(abs(p - f) for _, p, f in fd) / max(scale, 1e-300)
+        print(f"3. finite differences at w = {w0:+.4f} (sigma_1 {s12[0]:.6f}, sigma_2 {s12[1]:.6f}), analytic/FD: " +
+              ", ".join(f"{k} {p:+.4e}/{f:+.4e}" for k, p, f in fd) +
+              f"  -> max error {e:.1e} of the largest derivative {scale:.2e}")
+        return dict(w=w0, sigma12=s12, fd=[(k, p, f) for k, p, f in fd], err=e, scale=scale)
+    out['fd'] = [fd_at(w_top), fd_at(2.0)]
     # 4. dense level set on the full even pencil
     wb = np.inf                                        # every crossing of the imaginary axis
     Ac = ctl.A_of(*arow[:3]); Bc = np.asarray(arow[3])

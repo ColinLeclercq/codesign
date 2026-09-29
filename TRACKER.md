@@ -605,3 +605,20 @@ Start peaks on the reduced model: 9 within 5 % (-6.07 ... 8.41). Running
 | M^(1/2) / Cholesky audit | loop's gain, gradients, certificates: M products only (unchanged); fixed: _m_orth (dense M), laplace_basis (dense eigh -> sparse shift-invert), fit_atoms (dense Cholesky -> r^H M r), tail_certificate nu (dense Cholesky + SVD -> Lanczos with sparse LU of M, equal to 1e-15), winding tail nu (dense SVD / power x 1.3 -> Lanczos, equal to 1e-15) |
 | MIMO prototype (tools/mimo_proto.py, mimo_plots.py) | rank-4 Woodbury resolvent, gradients FD-checked, dense global certificate; ne=100: K+B+C SISO 6.399134 -> decentralized 5.594745 -> centralized 4.277652 (160 rounds, still falling); atoms SISO 3.877016 -> decentralized 2.387150 -> centralized 2.386009 (floor 2.383533) |
 | invariants after the changes | frozen 10.23128516441147 PASS; witness invariant 0 PASS; Hurwitz 0/200 PASS |
+
+**2026-09-29 (user: how much did sparse buy on the SISO production case; back the SISO code up; then MIMO in the production loop) -- STAGE6**
+
+| item | status |
+|---|---|
+| sparse vs dense, SISO production | answered in the conversation: the per-round path was already sparse (resolvent, certificates); the STAGE5 34.2 changes were one-off costs (basis, atom fit, tail constants); the dense band spectrum per round remains to replace before the cavity |
+| SISO backup | tag `siso-v1` (fdae0e7), `codesign_siso_v1.bundle`, `codesign_siso_v1_20260929.tar.gz`; MIMO on branch `mimo` (worktree) |
+| MIMO production code | resolvent (rank m+p), gradients, pencil (rank 2(m+p)), winding det(I - K G), reduced oracle, PackerMIMO, driver, starts, scripts (6.1) |
+| validation | SISO identity 8.754365110002194 in both trees and invariants PASS (after 6.4, 6.6, final commit 0e7f1c1); `tools/check_mimo.py` on every record (dense sigma 1e-12..1e-14, m=p=1 vs SISO 1e-14, FD, dense level set over all w, winding vs dense, abscissa vs dense); prototype designs 1e-13..1e-15 (6.2) |
+| unstable acceptance (+17.13 - 111.77i, outside the band) | `--wind-accept` (MIMO default) (6.3) |
+| stall 2.918: high-gain branch unseen by tracked rows, accepted unstable iterate (+38.19 - 164.05i) | no tracking for MIMO; certificate region from eig(D_c C^H M^-1 B) (6.4) |
+| gate INCONCLUSIVE on band +-1269 | winding-count fallback (MIMO); the three winding calls share one helper (6.5) |
+| false best 2.587706 (true 12.251419 at w = -700.5) | `--band-first` on for MIMO; dense all-w gamma check at save (all cases, n + r <= 1000) (6.6) |
+| progress stop on atoms | `--stop-progress 8:0.0015` for the MIMO atoms cases (6.7) |
+| non-deterministic field runs | ARPACK start vectors fixed (laplace_basis, tail constants, svds fallback); replicas identical (6.8) |
+| results ne=100 | atoms: central 2.383533 and decentral (from the prototype's start) 2.383533 = the two-pair floor (1e-10 / 5e-9); decentral from SISO 2.964887 (stall, 6.10); K+B+C: decentral 5.565958 (prototype 5.594745), central 3.792962 (prototype 4.277652) (6.9) |
+| relative stationarity with one very sensitive row | measured (6.10), open |

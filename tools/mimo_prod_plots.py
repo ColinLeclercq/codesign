@@ -29,9 +29,10 @@ FAM = {'gauss': ('K+B+C: Gaussian actuators/sensors, dynamic compensator',
                   ('cen', 'centralized 2x2', P + 'kbc_cen/K_B_C_s0_ne100_mimo2x2_central.npz')]),
        'atoms': ('K+FB+FC: Gabor-atom fields, static gains',
                  [('siso', 'SISO optimum', P + 'start_atoms.npz'),
-                  ('dec', 'decentralized 2 x SISO', P + 'at_dec/KGC_FB_FC_s0_ne100_mimo2x2_decentral.npz'),
-                  ('cen', 'centralized 2x2', P + 'at_cen/KGC_FB_FC_s0_ne100_mimo2x2_central.npz')])}
-COL = dict(siso='#1baf7a', dec='#eb6834', cen='#2a78d6')
+                  ('dec', 'decentralized 2 x SISO, from the SISO optimum', P + 'at_dec/KGC_FB_FC_s0_ne100_mimo2x2_decentral.npz'),
+                  ('cen', 'centralized 2x2, from that', P + 'at_cen/KGC_FB_FC_s0_ne100_mimo2x2_central.npz'),
+                  ('decp', "decentralized, from the prototype's optimum", P + 'at_dec_p/KGC_FB_FC_s0_ne100_mimo2x2_decentral.npz')])}
+COL = dict(siso='#1baf7a', dec='#eb6834', cen='#2a78d6', decp='#8b5cf6')
 GRAY, INK, INK2 = '#8a8983', '#0b0b0b', '#52514e'
 OUT = 'figs/mimo_prod_curves.npz'
 FLOOR2, FLOOR3 = 3.509145, 2.383533     # sup_w sigma_2, sigma_3 of the open loop at ne=100 (STAGE5 34.3)
@@ -115,16 +116,19 @@ def plot():
             for j, ls in enumerate(('-', '--', '-.')):
                 a1.plot(z[best + '_w'], z[best + '_s'][:, j], color=COL[best.split('_')[1]], ls=ls, lw=1.8 - 0.3 * j,
                         label=f'sigma_{j + 1} ({best.split("_")[1]})')
-            if proto is not None and f"{fam}_{best.split('_')[1]}_s" in proto.files:
-                pk_ = f"{fam}_{best.split('_')[1]}"
+            _pkey = {'decp': 'dec'}.get(best.split('_')[1], best.split('_')[1])
+            if proto is not None and f"{fam}_{_pkey}_s" in proto.files:
+                pk_ = f"{fam}_{_pkey}"
                 a1.plot(proto['omega'], proto[pk_ + '_s'][:, 0], color=INK, ls=':', lw=1.2,
                         label=f"prototype sigma_1 (gamma {float(proto[pk_ + '_g']):.4f})")
             a1.plot(z['ol_w'], z['ol'][:, 0], color=GRAY, ls='--', lw=1.2)
+            a1.plot(z['ol_w'], z['ol'][:, 2], color=GRAY, ls=':', lw=1.6, label='no control, sigma_3 (its sup is the 2-pair floor)')
             a1.set_xlim(-3, 3); a1.set_ylim(0, 1.35 * float(z[best + '_g']))
             a1.set_title(f"best MIMO design: sigma_1..3 near the plant's band (zoom)", loc='left', fontsize=10, color=INK)
             a1.legend(frameon=False, fontsize=8, loc='lower left')
             for fl, nm in ((FLOOR2, 'floor, 1 pair'), (FLOOR3, 'floor, 2 pairs')):
-                a1.text(2.95, fl, nm, va='bottom', ha='right', fontsize=8, color=INK2)
+                if fl < a1.get_ylim()[1]:
+                    a1.text(2.95, fl, nm, va='bottom', ha='right', fontsize=8, color=INK2)
         if i == 1:
             a0.set_xlabel('w (symlog)'); a1.set_xlabel('w')
     fig.tight_layout(); fig.savefig('figs/mimo_prod_sigma.png', dpi=140)
