@@ -4189,6 +4189,7 @@ def main():
                 # _input_fingerprint for why guessing this afterwards is costly
                 inputs=_input_fingerprint(a.ne, a.init),
                 seconds=round(time.time() - t_start, 1),
+                lu_full_by_site=(_luc.snapshot().get('by_site_full') if _luc is not None else None),   # whole run incl. save (--lucount / --dump)
                 method='epigraph', outer=len(hist), nOmega=len(Omega),
                 wlo=float(a.wlo), whi=float(a.whi),
                 ctrl_wmax=float(wmax),
