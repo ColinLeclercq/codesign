@@ -45,43 +45,163 @@ from closedloop_sparse import ClosedLoopResolvent as ClosedLoop
 
 
 class _ProxyCL:
-    """What D.grads needs: full-length b, c for its plant/field terms, and the
-    reduced loop's controller gradient for the rest.  design_grad_tri splits
-    its vectors at ITS n (= k), so it must see the REDUCED vectors: with V, W
-    orthonormal and x_p = V x~_p, the reduced plant part is exactly V^H x_p
-    (W^H z_p for the adjoint), and the controller parts pass through.  (Handing
-    it the lifted n-vectors sliced them at k: gradient cosine 0.27 against the
-    finite difference, inner solve stuck at its start.)"""
+    """Stands in for the full ClosedLoop in D.grads for a REDUCED row.  The
+    closed-loop class computes the controller gradient from the singular pair
+    at ITS n (= kd), so it must see the reduced vectors.  (Handing it the lifted
+    n-vectors sliced them at kd: gradient cosine 0.27 against the finite
+    difference, inner solve stuck at its start.)
+    Since STAGE6 6.29 the rows carry the REDUCED pair x~ = [x~_p; x_c],
+    z~ = [z~_p; z_c] (x_p = V x~_p, z_p = W z~_p) and grads_reduced forms every
+    gradient without a length-n vector: port sides with W^H B, V^H C, placement
+    terms with W^H M dpsi(x_a), V^H M dpsi(x_s) (once per design).  A full-length
+    pair (legacy callers) is still accepted and projected (_reduce)."""
+    is_reduced = True
+
     def __init__(self, b, c, rcl, V, W, n):
         self.b, self.c, self._r, self._V, self._W, self._n = b, c, rcl, V, W, n
+        self.kd = V.shape[1]
+        self._pl = {}
+        self._fimg = None                  # field-gradient images, once per design (None: not built)
+
     def _reduce(self, res):
-        n = self._n
         x, z = res['x'], res['z']
+        if len(x) == self.kd + self._r.r:
+            return res
+        n = self._n
         xr = np.concatenate([self._V.conj().T @ x[:n], x[n:]])
         zr = np.concatenate([self._W.conj().T @ z[:n], z[n:]])
         return dict(res, x=xr, z=zr)
+
     def design_grad_tri(self, res):
         return self._r.design_grad_tri(self._reduce(res))
+
     def design_grad(self, res):
         return self._r.design_grad(self._reduce(res))
 
+    def lift(self, x, z):
+        """The full-length pair (field gradients until they are reduced too)."""
+        kd = self.kd
+        return (np.concatenate([self._V @ x[:kd], x[kd:]]), np.concatenate([self._W @ z[:kd], z[kd:]]))
+
+    def placement(self, D, side, x0):
+        """W^H M dpsi(x0) (actuator side) / V^H M dpsi(x0) (sensor side), once per
+        design and position."""
+        key = (side, float(x0))
+        v = self._pl.get(key)
+        if v is None:
+            B = self._W if side == 'a' else self._V
+            v = self._pl[key] = B.conj().T @ D.Mdpsi_dx(float(x0))
+        return v
+
+    def grads_reduced(self, D, x, z, arow, nvec, Kfb, xa, xs, pa, ps, na, ns, flags, eta=1.0):
+        """fe_codesign.grads on the reduced pair (SISO), term by term."""
+        kd = self.kd
+        if (flags.get('FB') or flags.get('FC')) and not self._fields_reducible(D, pa, ps, na, ns):
+            xf, zf = self.lift(x, z)
+            return D.grads(self, xf, zf, arow, nvec, Kfb, xa, xs, pa, ps, na, ns, flags, eta=eta, _full=True)
+        xp, xc, zp, zc = x[:kd], x[kd:], z[:kd], z[kd:]
+        nv = np.asarray(nvec, complex).ravel()
+        out = {}
+        if flags['K']:
+            if isinstance(arow, (tuple, list)) and len(arow) == 3:
+                g = self._r.design_grad_tri(dict(x=x, z=z))
+                for k_ in ('d', 'e', 'f', 'n'):
+                    out[k_] = np.asarray(g[k_]) / eta
+                out['K'] = g['K'] / eta
+            else:
+                g = self._r.design_grad(dict(x=x, z=z))
+                out['a'] = np.asarray(g['a']) / eta; out['n'] = np.asarray(g['n']) / eta; out['K'] = g['K'] / eta
+        bt = np.asarray(self._r.b, complex).ravel(); ct = np.asarray(self._r.c, complex).ravel()
+        Sa = Kfb * np.vdot(ct, xp) + np.dot(nv, xc)
+        Sc = np.vdot(zp, bt) * Kfb + D.mc * np.sum(np.conj(zc))
+        if flags['B']:
+            out['xa'] = float(np.real(np.vdot(zp, self.placement(D, 'a', xa)) * Sa / eta))
+        if flags['C']:
+            out['xs'] = float(np.real(Sc * np.vdot(self.placement(D, 's', xs), xp) / eta))
+        if flags.get('FB'):
+            out['va_packed'] = self._field_row('va', 0, zp, np.conj(Sa) / eta)
+        if flags.get('FC'):
+            out['vs_packed'] = self._field_row('vs', 0, xp, Sc / eta)
+        return out
+
+    # ---------------- field gradients in the reduced space (STAGE6 6.29) ----------------
+    # The nodal field gradient of a row is retract(g) with g = s M W z~ (actuator)
+    # or s M V x~ (sensor), retract(g) = (g - Re(g^H psi) M psi) / nv, and the
+    # packer maps it to the field parameters by Re(G^H J) (J = pk.field_jacobians).
+    # So the packed gradient is [Re(conj(s) u~^H X) - Re(conj(s) u~^H h) y] / nv with
+    # X = B^H M J, h = B^H M psi, y = Re(psi^H M J), B = W or V: projected ONCE per
+    # design, O(kd P) per row instead of the length-n lift.
+    def _fields_reducible(self, D, pa, ps, na, ns):
+        pk = getattr(self, 'pk', None)
+        if pk is None or np.iscomplexobj(D.M.data):
+            return False
+        if self._fimg is None:
+            jac = pk.field_jacobians()
+            if any(J is None for L in jac.values() for J in L):
+                self._fimg = False
+            else:
+                img = {}
+                for key, L in jac.items():
+                    B = self._W if key == 'va' else self._V
+                    P_, N_ = (pa, na) if key == 'va' else (ps, ns)
+                    for j, J in enumerate(L):
+                        psi = np.asarray(P_, complex).reshape(D.n, -1)[:, j]
+                        nv = float(np.atleast_1d(N_)[j])
+                        MJ = D.M @ J; Mpsi = D.M @ psi
+                        img[(key, j)] = (B.conj().T @ MJ, B.conj().T @ Mpsi, np.real(psi.conj() @ MJ), nv)
+                self._fimg = img
+        return self._fimg is not False
+
+    def _field_row(self, key, j, u, s):
+        X, h, y, nv = self._fimg[(key, j)]
+        cs = np.conj(s)
+        t = float(np.real(cs * np.vdot(u, h)))
+        return (np.real(cs * (np.conj(u) @ X)) - t * y) / nv
+
 
 class _ProxyCLMIMO(_ProxyCL):
-    """MIMO proxy (STAGE6): D.grads_mimo needs m, p, the controller gradient
-    of the REDUCED loop (x, z reduced as for SISO) and the port-side vectors,
-    computed here with the FULL-length B, C and the lifted x, z."""
+    """MIMO proxy (STAGE6): the controller gradient of the REDUCED loop and the
+    port-side scalars from the reduced ports W^H B, V^H C."""
     def __init__(self, b, c, rcl, V, W, n):
         super().__init__(b, c, rcl, V, W, n)
         self.m, self.p = rcl.m, rcl.p
+
     def port_sides(self, res, arow, nvec, K):
-        n, r, m, p = self._n, self._r.r, self.m, self.p
+        res = self._reduce(res)
+        kd, r, m, p = self.kd, self._r.r, self.m, self.p
         x, z = res['x'], res['z']
-        xp, xc, zp, zc = x[:n], x[n:], z[:n], z[n:]
+        xp, xc, zp, zc = x[:kd], x[kd:], z[:kd], z[kd:]
         Cc = np.asarray(nvec, complex).reshape(m, r); Dc = np.asarray(K, complex).reshape(m, p)
-        zB = np.conj(self.b.conj().T @ zp)
-        act = Dc @ (self.c.conj().T @ xp) + Cc @ xc
+        zB = np.conj(np.asarray(self._r.b, complex).conj().T @ zp)
+        act = Dc @ (np.asarray(self._r.c, complex).conj().T @ xp) + Cc @ xc
         sen = zB @ Dc + np.conj(zc) @ self._r.Bc_of(arow)
         return act, sen
+
+    def grads_reduced(self, D, x, z, arow, nvec, Kfb, xa, xs, pa, ps, na, ns, flags, eta=1.0):
+        """fe_codesign.grads_mimo on the reduced pair, term by term."""
+        if (flags.get('FB') or flags.get('FC')) and not self._fields_reducible(D, pa, ps, na, ns):
+            xf, zf = self.lift(x, z)
+            return D.grads(self, xf, zf, arow, nvec, Kfb, xa, xs, pa, ps, na, ns, flags, eta=eta, _full=True)
+        kd = self.kd
+        xp, zp = x[:kd], z[:kd]
+        out = {}
+        res = dict(x=x, z=z)
+        if flags['K']:
+            g = self._r.design_grad_tri(res)
+            for k_ in ('d', 'e', 'f', 'Bc', 'n', 'K'):
+                out[k_] = np.asarray(g[k_]) / eta
+        act, sen = self.port_sides(res, arow, nvec, Kfb)
+        if flags['B']:
+            out['xa'] = np.array([float(np.real(np.vdot(zp, self.placement(D, 'a', xa[i])) * act[i] / eta))
+                                  for i in range(self.m)])
+        if flags['C']:
+            out['xs'] = np.array([float(np.real(sen[j] * np.vdot(self.placement(D, 's', xs[j]), xp) / eta))
+                                  for j in range(self.p)])
+        if flags.get('FB'):
+            out['va_packed'] = [self._field_row('va', i, zp, np.conj(act[i]) / eta) for i in range(self.m)]
+        if flags.get('FC'):
+            out['vs_packed'] = [self._field_row('vs', j, xp, sen[j] / eta) for j in range(self.p)]
+        return out
 
 
 class ReducedOracle:
@@ -235,8 +355,12 @@ class ReducedOracle:
         GV = V.conj().T @ (self.M @ V); GV = 0.5 * (GV + GV.conj().T)
         GW = W.conj().T @ (self.M @ W); GW = 0.5 * (GW + GW.conj().T)
         GW_h = sqrtm(GW)
+        # Gram matrices for FULL-MODEL residuals of reduced vectors (STAGE6 6.29):
+        # ||(A - l M) V y + b w|| from kd x kd products, no lift per pair
+        AV = self.A @ V; MV = self.M @ V
         self._proj = dict(At=At, Mt=Mt, GV=GV, GW=GW,
-                          GV_h=sqrtm(GV), GW_h=GW_h, GW_mh=np.linalg.inv(GW_h))
+                          GV_h=sqrtm(GV), GW_h=GW_h, GW_mh=np.linalg.inv(GW_h),
+                          GAA=AV.conj().T @ AV, GAM=AV.conj().T @ MV, GMM=MV.conj().T @ MV)
         # Hessenberg-triangular (QZ) form of the reduced pencil, ONCE per basis
         # update: At = Q AA Z^H, Mt = Q BB Z^H with AA, BB upper triangular, so
         # (i w Mt - At)^{-1} y = Z (i w BB - AA)^{-1} Q^H y -- one triangular
@@ -323,6 +447,7 @@ class _RowPool:
         import multiprocessing as mp
         ctx = mp.get_context('fork')
         self.ro_id, self.ver, self.procs, self.conns = id(ro), ver, [], []
+        self._sent = [None] * nw; self._keep = [None] * nw     # the design each worker holds (kept alive: id is a token)
         for _ in range(nw):
             a, b = ctx.Pipe()
             pr = ctx.Process(target=_row_worker, args=(ro, b), daemon=True)
@@ -349,7 +474,11 @@ class _RowPool:
         r, mc, _ = cl._mk
         for j, c in enumerate(self.conns):
             idx = np.where(slot == j + 1)[0]
-            c.send((cl.b, cl.c, r, mc, om[idx], arow, nvec, K, wv[idx], maxit, k))
+            # the design's ports (length n) go to a worker ONCE per design: the
+            # worker keeps the per-design reduced loop (make_cl) under this token
+            first = self._sent[j] != id(cl)
+            self._sent[j] = id(cl); self._keep[j] = cl
+            c.send((id(cl), cl.b if first else None, cl.c if first else None, r, mc, om[idx], arow, nvec, K, wv[idx], maxit, k))
         out = [None] * len(om)
         own = np.where(slot == 0)[0]
         for i, o in zip(own, cl.gain_batch(om[own], arow, nvec, K, wv[own], maxit=maxit, k=k, par=False)):
@@ -385,6 +514,7 @@ def _row_pool(cl):
 def _row_worker(ro, conn):
     global ROW_WORKERS
     ROW_WORKERS = 0                      # no pools inside a worker
+    held = (None, None)
     while True:
         try:
             msg = conn.recv()
@@ -392,11 +522,14 @@ def _row_worker(ro, conn):
             break
         if msg is None:
             break
-        B, C, r, mc, om, arow, nvec, K, wv, maxit, k = msg
+        tok, B, C, r, mc, om, arow, nvec, K, wv, maxit, k = msg
         try:
-            cl = ro.make_cl(B, C, r, mc)
+            if B is not None or held[0] != tok:
+                held = (tok, ro.make_cl(B, C, r, mc))
+            cl = held[1]
+            nc0 = cl.ncalls
             out = cl.gain_batch(om, arow, nvec, K, wv, maxit=maxit, k=k, par=False) if len(om) else []
-            conn.send((True, out, cl.ncalls))
+            conn.send((True, out, cl.ncalls - nc0))
         except Exception as e:           # reported to the caller, which raises
             conn.send((False, repr(e), 0))
 
@@ -448,7 +581,7 @@ class _ReducedCL:
         # SNAPSHOT the basis and projection: the oracle may be enriched while
         # this object is alive (a 16-dim projection was read through a 12-dim
         # closed loop once), and a per-design object must stay consistent
-        self.V, self.W, self.P, self.n, self.M = ro.V, ro.W, dict(ro._proj), ro.n, ro.M
+        self.V, self.W, self.P, self.n, self.M, self.A = ro.V, ro.W, dict(ro._proj), ro.n, ro.M, ro.A
         self.mimo = getattr(rcl, 'm', None) is not None
         if self.mimo:
             self.b, self.c = np.asarray(b, complex), np.asarray(c, complex)
@@ -458,6 +591,7 @@ class _ReducedCL:
             self.proxy = _ProxyCL(self.b, self.c, rcl, self.V, self.W, self.n)
         self.ncalls = 0
         self._mk = None                     # (r, mc, basis version): set by make_cl
+        self._res_ports = None              # b^H A V, b^H M V, b^H b (residuals, once per design)
 
     def gain_k(self, omega, arow, nvec, K, k=2, want_vectors=True):
         rcl = self.rcl
@@ -513,17 +647,18 @@ class _ReducedCL:
             # reduced right-hand side is W^H u = G_W^{1/2} shat
             rhs = np.concatenate([P['GW_h'] @ shat, np.zeros(r, complex)])
             xt = rcl.solve(rhs)                        # reduced state, ctrl part
-            xp = V @ xt[:kd]
-            qMq = float(np.real(np.vdot(xp, M @ xp)))
+            # REDUCED pair (STAGE6 6.29): x = [V x~_p; x_c], z = [W z~_p; z_c] are
+            # never formed -- x_p^H M x_p = x~^H G_V x~, V^H M x_p = G_V x~,
+            # z_p^H M x_p = z~^H M~ x~ (M~ = W^H M V); the gradients take the
+            # reduced vectors (_ProxyCL.grads_reduced)
+            qMq = float(np.real(np.vdot(xt[:kd], P['GV'] @ xt[:kd])))
             sc = sig / np.sqrt(qMq) if qMq > 0 else 1.0
-            xt = xt * sc; xp = xp * sc
-            rhsH = np.concatenate([V.conj().T @ (M @ xp), np.zeros(r, complex)])
+            xt = xt * sc
+            rhsH = np.concatenate([P['GV'] @ xt[:kd], np.zeros(r, complex)])
             zt = rcl.solveH(rhsH) / sig
-            zp = W @ zt[:kd]
-            x = np.concatenate([xp, xt[kd:]]); z = np.concatenate([zp, zt[kd:]])
-            out.append(dict(omega=omega, sigma=sig, x=x, z=z,
-                            gprime=float(np.imag(np.vdot(z[:n], M @ x[:n]) +
-                                                 np.vdot(z[n:], x[n:])))))
+            out.append(dict(omega=omega, sigma=sig, x=xt, z=zt, reduced=True,
+                            gprime=float(np.imag(np.vdot(zt[:kd], P['Mt'] @ xt[:kd]) +
+                                                 np.vdot(zt[kd:], xt[kd:])))))
         return out
 
     def gain(self, omega, arow, nvec, K, tol=1e-10, want_vectors=True):
@@ -733,14 +868,12 @@ class _ReducedCL:
             RHw = self._RH(bs['om'], w, bs['Ts'], iv); bRH = np.einsum('k,mkp->mp', np.conj(bsv['bt']), RHw)[:, 0]
             ztp = (RHw[:, :, 0] - bsv['RHc'] * (np.conj(bsv['g']) * bRH)[:, None]) / s_[:, None]
             ztc = (bsv['SKHn'] * (bsv['Gi00'] * bRH)[:, None]) / s_[:, None]
-        Vb, Wb, M, n = self.V, self.W, self.M, self.n
-        XP = Vb @ xtp.T; ZP = Wb @ ztp.T; MXP = M @ XP
+        # REDUCED pairs (STAGE6 6.29): no lift to length n; gprime from M~ = W^H M V
+        gp = np.imag(np.einsum('fk,kl,fl->f', np.conj(ztp), P['Mt'], xtp) + np.einsum('fk,fk->f', np.conj(ztc), xtc))
         res = []
         for jj, i in enumerate(iv):
-            xp, zp = XP[:, jj], ZP[:, jj]
-            x = np.concatenate([xp, xtc[jj]]); z = np.concatenate([zp, ztc[jj]])
-            gp = float(np.imag(np.vdot(zp, MXP[:, jj]) + np.vdot(ztc[jj], xtc[jj])))
-            res.append(dict(omega=float(om[i]), sigma=float(s_[jj]), x=x, z=z, gprime=gp))
+            res.append(dict(omega=float(om[i]), sigma=float(s_[jj]), x=np.concatenate([xtp[jj], xtc[jj]]),
+                            z=np.concatenate([ztp[jj], ztc[jj]]), reduced=True, gprime=float(gp[jj])))
         return res
 
     # -------- block closed-loop solves (plant-only right-hand sides) --------
@@ -827,7 +960,7 @@ class _ReducedCL:
         self.ro._sv_fallback = getattr(self.ro, '_sv_fallback', 0) + 1
         return s_[o], U[:, o], Vh[o]
 
-    def near_line_pairs(self, arow, nvec, K, cl_full, eps, reach=1.0, res_tol=1e-4, mc=1.0, kmax=8):
+    def near_line_pairs(self, arow, nvec, K, eps, reach=1.0, res_tol=1e-4, mc=1.0, kmax=8):
         """Every residual-filtered Ritz pair with Re >= -eps - reach, rightmost
         first: the rows note item 2 asks for.  Same eigensolve as abscissa()."""
         from scipy.linalg import eig as deig
@@ -840,7 +973,7 @@ class _ReducedCL:
         else:
             Ac = ctl.A_of(*arow); Bc = np.full(r, mc, complex)
             nv = np.asarray(nvec, complex).ravel()
-            bt = W.conj().T @ self.b; ct = V.conj().T @ self.c
+            bt = np.asarray(self.rcl.b, complex).ravel(); ct = np.asarray(self.rcl.c, complex).ravel()   # W^H b, V^H c
             Acl = np.zeros((kd + r, kd + r), complex); Mcl = np.zeros_like(Acl)
             Acl[:kd, :kd] = P['At'] + complex(K) * np.outer(bt, np.conj(ct))
             Acl[:kd, kd:] = np.outer(bt, nv); Acl[kd:, :kd] = np.outer(Bc, np.conj(ct)); Acl[kd:, kd:] = Ac
@@ -849,19 +982,52 @@ class _ReducedCL:
             Uc = np.zeros((kd + r, 2), complex); Uc[:kd, 0] = bt; Uc[kd:, 1] = Bc
             Vc = np.zeros((kd + r, 2), complex); Vc[:kd, 0] = np.conj(complex(K)) * ct; Vc[kd:, 0] = np.conj(nv); Vc[:kd, 1] = ct
             self._cpl = (Uc, Vc)
+        self._red_pencil = (Acl, Mcl)          # W^H A_cl V, W^H M_cl V (the closed-loop block, STAGE6 6.29)
         lam, VL, VR = self._near_line_eigs(Acl, Mcl, eps, reach, kmax)
         out = []
         for j in np.argsort(-lam.real):
             if lam[j].real < -eps - reach or len(out) >= kmax:
                 break
-            vr = np.concatenate([V @ VR[:kd, j], VR[kd:, j]])
-            Av = cl_full.Acl_apply(vr, arow, nvec, K); Mv = cl_full.Mcl_apply(vr)
-            res = np.linalg.norm(Av - lam[j] * Mv) / max(abs(lam[j]) * np.linalg.norm(Mv) + np.linalg.norm(Av), 1e-300)
+            # the FULL-model residual of the lifted Ritz pair, from Gram matrices
+            # (STAGE6 6.29; was a lift + A_cl, M_cl products at length n per pair)
+            res = self._full_residual(VR[:, j], complex(lam[j]), arow, nvec, K, mc)
             if res > res_tol:
                 continue
-            ul = np.concatenate([W @ VL[:kd, j], VL[kd:, j]])
-            out.append(dict(lam=complex(lam[j]), v=vr, u=ul, eta=np.vdot(ul, Mv), res=float(res)))
+            vr, ul = VR[:, j], VL[:, j]
+            eta = np.vdot(ul[:kd], P['Mt'] @ vr[:kd]) + np.vdot(ul[kd:], vr[kd:])      # u^H M_cl v
+            out.append(dict(lam=complex(lam[j]), v=vr, u=ul, eta=eta, res=float(res), reduced=True))
         return out
+
+    def _full_residual(self, y, lam, arow, nvec, K, mc):
+        """||A_cl v - lam M_cl v|| / (|lam| ||M_cl v|| + ||A_cl v||) for the lifted
+        v = [V y_p; y_c], EXACTLY as cl_full.Acl_apply / Mcl_apply would give it,
+        from the basis Gram matrices (V^H A^H A V, V^H A^H M V, V^H M^H M V: once
+        per basis) and the design's port products (b^H A V, b^H M V, b^H b: once
+        per design) -- O(kd^2) per pair instead of O(n kd)."""
+        import controller as ctl
+        P, kd = self.P, self.V.shape[1]
+        yp, yc = y[:kd], y[kd:]
+        if self._res_ports is None:
+            Bf = np.asarray(self.b, complex).reshape(self.n, -1)
+            self._res_ports = ((self.A.conj().T @ Bf).conj().T @ self.V, (self.M @ Bf).conj().T @ self.V,
+                               Bf.conj().T @ Bf)
+        bA, bM, bb = self._res_ports
+        ct = np.asarray(self.rcl.c, complex).reshape(kd, -1)
+        cy = ct.conj().T @ yp                                   # c^H x_p
+        if self.mimo:
+            m, p, r = self.rcl.m, self.rcl.p, self.rcl.r
+            wv = np.asarray(K, complex).reshape(m, p) @ cy + np.asarray(nvec, complex).reshape(m, r) @ yc
+            bot = self.rcl.L_of_a(arow) @ yc + self.rcl.Bc_of(arow) @ cy
+        else:
+            wv = complex(K) * cy + np.array([np.dot(np.asarray(nvec, complex).ravel(), yc)])
+            bot = ctl.A_of(*arow) @ yc + np.full(len(yc), mc, complex) * cy[0]
+        def plant2(l):
+            G = P['GAA'] - l * P['GAM'] - np.conj(l) * P['GAM'].conj().T + abs(l) ** 2 * P['GMM']
+            return float(np.real(np.vdot(yp, G @ yp) + 2 * np.vdot(wv, (bA - l * bM) @ yp) + np.vdot(wv, bb @ wv)))
+        r2 = max(plant2(lam), 0.0) + float(np.linalg.norm(bot - lam * yc) ** 2)
+        a2 = max(plant2(0.0), 0.0) + float(np.linalg.norm(bot) ** 2)
+        m2 = max(float(np.real(np.vdot(yp, P['GMM'] @ yp))), 0.0) + float(np.linalg.norm(yc) ** 2)
+        return float(np.sqrt(r2) / max(abs(lam) * np.sqrt(m2) + np.sqrt(a2), 1e-300))
 
     def _reduced_pencil_mimo(self, arow, nvec, K, mc):
         """The reduced closed-loop pencil (A_cl, M_cl) and its exact controller
@@ -873,7 +1039,7 @@ class _ReducedCL:
         rc = self.rcl; m, p = rc.m, rc.p
         Ac = ctl.A_of(*arow); Bc = rc.Bc_of(arow)
         Cc = np.asarray(nvec, complex).reshape(m, r); Dc = np.asarray(K, complex).reshape(m, p)
-        Bt = W.conj().T @ self.b; Ct = V.conj().T @ self.c
+        Bt = np.asarray(rc.b, complex); Ct = np.asarray(rc.c, complex)     # W^H B, V^H C: formed once, in make_cl
         Acl = np.zeros((kd + r, kd + r), complex); Mcl = np.zeros_like(Acl)
         Acl[:kd, :kd] = P['At'] + Bt @ Dc @ Ct.conj().T
         Acl[:kd, kd:] = Bt @ Cc; Acl[kd:, :kd] = Bc @ Ct.conj().T; Acl[kd:, kd:] = Ac

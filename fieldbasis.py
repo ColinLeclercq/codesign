@@ -138,18 +138,22 @@ def atom_field(x, a, c, rho, tau, smin, kmax):
     return phi @ np.asarray(a, complex)
 
 
+def atom_jacobian(x, a, c, rho, tau, smin, kmax):
+    """The complex field derivatives dv/dtheta (n x 5 n_atoms), theta = (Re a,
+    Im a, c, rho, tau): atom_grad(G) = Re(G^H J).  (STAGE6 6.29: the reduced
+    gradients project J once per design instead of lifting every row.)"""
+    phi, dx, s, k = _atoms(x, c, rho, tau, smin, kmax)
+    a = np.asarray(a, complex)[None, :]
+    return np.concatenate([phi, 1j * phi,
+                           a * phi * (dx / s ** 2 - 1j * k),
+                           a * phi * dx ** 2 / s ** 3 * (2.0 * smin * np.asarray(rho, float))[None, :],
+                           a * phi * 1j * dx * (kmax / np.cosh(np.asarray(tau, float)) ** 2)[None, :]], axis=1)
+
+
 def atom_grad(x, a, c, rho, tau, smin, kmax, G):
     """Gradient of a real F(v) w.r.t. (Re a, Im a, c, rho, tau), given the nodal
     G = dF/dRe v + i dF/dIm v (the packer's convention: dF = Re(conj(G) . dv))."""
-    phi, dx, s, k = _atoms(x, c, rho, tau, smin, kmax)
-    a = np.asarray(a, complex)[None, :]
-    Gc = np.conj(np.asarray(G, complex))[:, None]
-    red = lambda dv: np.real(np.sum(Gc * dv, axis=0))
-    g_re = red(phi); g_im = red(1j * phi)
-    g_c = red(a * phi * (dx / s ** 2 - 1j * k))
-    g_rho = red(a * phi * dx ** 2 / s ** 3) * 2.0 * smin * np.asarray(rho, float)
-    g_tau = red(a * phi * 1j * dx) * kmax / np.cosh(np.asarray(tau, float)) ** 2
-    return np.concatenate([g_re, g_im, g_c, g_rho, g_tau])
+    return np.real(np.conj(np.asarray(G, complex)) @ atom_jacobian(x, a, c, rho, tau, smin, kmax))
 
 
 def split_atoms(p, n):

@@ -504,7 +504,10 @@ class FECoDesign:
 
     # ---------- gradients for every group, from (x, z) or (v, u) ----------
     def grads(self, cl, x, z, arow, nvec, Kfb, xa, xs, pa, ps, na, ns,
-              flags, eta=1.0):
+              flags, eta=1.0, _full=False):
+        if getattr(cl, 'is_reduced', False) and not _full and len(x) == cl.kd + cl._r.r:
+            # a REDUCED pair (STAGE6 6.29): no length-n vector (reduced._ProxyCL)
+            return cl.grads_reduced(self, x, z, arow, nvec, Kfb, xa, xs, pa, ps, na, ns, flags, eta)
         if getattr(cl, 'm', None) is not None:          # MIMO (STAGE6)
             return self.grads_mimo(cl, x, z, arow, nvec, Kfb, xa, xs, pa, ps, na, ns, flags, eta)
         n = self.n

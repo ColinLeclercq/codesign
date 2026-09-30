@@ -277,7 +277,7 @@ class Evaluator:
             P = rc.P; Ac = _ctl.A_of(*arow); Bc = _ctl.Bc_of(arow, D.r, D.mc)
             _cert = _csp.hinf_dense_levelset if REDUCED_CERT == 'dense' else _csp.hinf_certified_sparse
             gr, wr, _, okr = _cert(
-                _sp.csc_matrix(P['At']), _sp.csc_matrix(P['Mt']), rc.W.conj().T @ b, rc.V.conj().T @ c,
+                _sp.csc_matrix(P['At']), _sp.csc_matrix(P['Mt']), rc.rcl.b, rc.rcl.c,   # W^H b, V^H c (make_cl)
                 Ac, Bc, nvec, K, g, gam_lb=(max(float(t), 1e-8) if REDUCED_CERT == 'dense' else max(0.5 * t, 1e-8)),
                 wlo=float(ws[0]), whi=float(ws[-1]))   # dense: ask the question itself -- anything above t (1 + rtol)?
             _near = [float(q) for q in self.W if abs(wr - q) <= 1e-3] if np.isfinite(wr) else []
@@ -320,6 +320,7 @@ class Evaluator:
         b, c, pa, ps, na, ns = D.bc(xa, xs, va, vs)
         if self.oracle is not None:
             cl = self.oracle.make_cl(b, c, D.r, D.mc); clg = cl.proxy   # reduced sigma rows
+            clg.pk = pk                         # field gradients in the reduced space (reduced._ProxyCL)
             clf = D.cl(b, c)                                            # full matvecs for residuals
         else:
             cl = D.cl(b, c); clg = cl; clf = cl
@@ -509,7 +510,7 @@ class Evaluator:
         clr = True
         pairs = []
         if self.oracle is not None and not self.force_full_alpha:
-            pairs = cl.near_line_pairs(arow, nvec, K, clf, self.eps, reach=self.reach,
+            pairs = cl.near_line_pairs(arow, nvec, K, self.eps, reach=self.reach,
                                        res_tol=self.res_tol, mc=D.mc)
             for pr in pairs:
                 gj = np.asarray(pk.grad(D.grads(clg, pr['v'], pr['u'], arow, nvec, K, xa, xs,
@@ -528,7 +529,7 @@ class Evaluator:
         al_rows_qp = al_rows
         if self.cl_block and len(pairs) >= 2 and len(al_rows) >= 2:
             try:
-                hermite_cl = self._closed_loop_block(pairs[:2], clf, clg, arow, nvec, K,
+                hermite_cl = self._closed_loop_block(pairs[:2], cl, clf, clg, arow, nvec, K,
                                                      xa, xs, pa, ps, na, ns, flags, NZ)
                 al_rows_qp = al_rows[2:]
             except Exception as _e:
@@ -663,14 +664,22 @@ class Evaluator:
                     al_ctrl=al_ctrl, al_ctrl_rest=al_ctrl_rest, ctrl_rows=ctrl_rows, lmi=lmi, hermite=hermite, pair=pair,
                     hermite_cl=hermite_cl, z=z.copy())
 
-    def _closed_loop_block(self, pr2, clf, clg, arow, nvec, K, xa, xs, pa, ps, na, ns, flags, NZ):
-        """Hermite data for the two rightmost near-line closed-loop eigenvalues."""
+    def _closed_loop_block(self, pr2, cl, clf, clg, arow, nvec, K, xa, xs, pa, ps, na, ns, flags, NZ):
+        """Hermite data for the two rightmost near-line closed-loop eigenvalues.
+        Reduced pairs (STAGE6 6.29): the lift blockdiag(V, I) / blockdiag(W, I)
+        has orthonormal columns, so the QR, M_cl-biorthonormalisation and the
+        compression Y^H A_cl X are those of the reduced pencil W^H (A_cl, M_cl) V
+        -- no length-n vector."""
         import hurwitz as _hw
         D, pk = self.D, self.pk
         X = np.column_stack([p_['v'] for p_ in pr2]); Y = np.column_stack([p_['u'] for p_ in pr2])
         Xq, _ = np.linalg.qr(X); Yq, _ = np.linalg.qr(Y)
-        MX = np.column_stack([clf.Mcl_apply(Xq[:, j]) for j in range(2)])
-        AX = np.column_stack([clf.Acl_apply(Xq[:, j], arow, nvec, K) for j in range(2)])
+        if pr2[0].get('reduced'):
+            Acl_r, Mcl_r = cl._red_pencil
+            MX = Mcl_r @ Xq; AX = Acl_r @ Xq
+        else:
+            MX = np.column_stack([clf.Mcl_apply(Xq[:, j]) for j in range(2)])
+            AX = np.column_stack([clf.Acl_apply(Xq[:, j], arow, nvec, K) for j in range(2)])
         Gm = Yq.conj().T @ MX
         Yt = Yq @ np.linalg.inv(Gm).conj().T                 # Yt^H M_cl Xq = I
         B = Yt.conj().T @ AX

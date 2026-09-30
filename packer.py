@@ -173,14 +173,18 @@ class Packer:
             i = sum(len(o) for o in out)
             if self.f['FB']:
                 m_ = _fb.NATOM_PAR * Aa['n']
-                out += [_fb.atom_grad(self.D.xn, *_fb.split_atoms(zz[i:i + m_], Aa['n']), Aa['smin'], Aa['kmax'],
+                out += [np.asarray(g['va_packed'], float) if 'va_packed' in g else
+                        _fb.atom_grad(self.D.xn, *_fb.split_atoms(zz[i:i + m_], Aa['n']), Aa['smin'], Aa['kmax'],
                                       np.asarray(g['va'], complex))]; i += m_
             if self.f['FC']:
                 m_ = _fb.NATOM_PAR * As['n']
-                out += [_fb.atom_grad(self.D.xn, *_fb.split_atoms(zz[i:i + m_], As['n']), As['smin'], As['kmax'],
+                out += [np.asarray(g['vs_packed'], float) if 'vs_packed' in g else
+                        _fb.atom_grad(self.D.xn, *_fb.split_atoms(zz[i:i + m_], As['n']), As['smin'], As['kmax'],
                                       np.asarray(g['vs'], complex))]; i += m_
             return np.concatenate(out)
-        if self.f['FB']:
+        if self.f['FB'] and 'va_packed' in g:
+            out += [np.asarray(g['va_packed'], float)]
+        elif self.f['FB']:
             if Pa is not None and self.sym_fld:
                 raise NotImplementedError('field basis with the mirror-symmetric field constraint')
             gx = (Pa.T @ np.asarray(g['va'])) if Pa is not None else self.D.smooth_map_adj(g['va'])
@@ -196,9 +200,36 @@ class Packer:
                 gx = gx + self.sbr * np.conj(h)
             out += [gx.real] if self.f.get('real_fb') else [gx.real, gx.imag]
         if self.f['FC'] and not self.sym_fld:
-            gx = (Ps.T @ np.asarray(g['vs'])) if Ps is not None else self.D.smooth_map_adj(g['vs'])
-            out += [gx.real] if self.f.get('real_fc') else [gx.real, gx.imag]
+            if 'vs_packed' in g:
+                out += [np.asarray(g['vs_packed'], float)]
+            else:
+                gx = (Ps.T @ np.asarray(g['vs'])) if Ps is not None else self.D.smooth_map_adj(g['vs'])
+                out += [gx.real] if self.f.get('real_fc') else [gx.real, gx.imag]
         return np.concatenate(out)
+
+    def field_jacobians(self, z=None):
+        """{'va': [J], 'vs': [J]}: for each free field the complex n x P matrix J
+        with packed field gradient = Re(G^H J) for a nodal gradient G (STAGE6
+        6.29: the reduced rows project J once per design).  None where the map is
+        not of that form here (smoothed raw fields, the mirror-symmetric or
+        real-field variants): those rows are lifted."""
+        import fieldbasis as _fb
+        out = {}
+        Aa, As = getattr(self.D, 'atoms_a', None), getattr(self.D, 'atoms_s', None)
+        Pa, Ps = getattr(self.D, 'field_basis_a', None), getattr(self.D, 'field_basis_s', None)
+        if Aa is not None or As is not None:
+            zz = np.asarray(z if z is not None else self._atom_z[0], float)
+            ia, is_ = self.atom_params(zz)
+            if self.f['FB']:
+                out['va'] = [_fb.atom_jacobian(self.D.xn, *_fb.split_atoms(ia, Aa['n']), Aa['smin'], Aa['kmax'])]
+            if self.f['FC']:
+                out['vs'] = [_fb.atom_jacobian(self.D.xn, *_fb.split_atoms(is_, As['n']), As['smin'], As['kmax'])]
+            return out
+        if self.f['FB']:
+            out['va'] = [np.hstack([np.conj(Pa), 1j * np.conj(Pa)]).astype(complex) if (Pa is not None and not self.sym_fld and not self.f.get('real_fb')) else None]
+        if self.f['FC'] and not self.sym_fld:
+            out['vs'] = [np.hstack([np.conj(Ps), 1j * np.conj(Ps)]).astype(complex) if (Ps is not None and not self.f.get('real_fc')) else None]
+        return out
 
     def zero_grad(self):
         """The gradient dict with every entry zero (rows that touch only some groups)."""
@@ -412,8 +443,12 @@ class PackerMIMO:
         for key, flag, P_, A_, cnt in (('va', 'FB', Pa, Aa, m), ('vs', 'FC', Ps, As, p)):
             if not self.f[flag]:
                 continue
-            gl = g.get(key) or [np.zeros(self.D.n, complex)] * cnt
+            pkd = g.get(key + '_packed')
+            gl = (g.get(key) or [np.zeros(self.D.n, complex)] * cnt) if pkd is None else None
             for j in range(cnt):
+                if pkd is not None:                    # reduced rows (STAGE6 6.29)
+                    out += [np.asarray(pkd[j], float)]; i += len(pkd[j])
+                    continue
                 gv = np.asarray(gl[j], complex)
                 if A_ is not None:
                     mm_ = _fb.NATOM_PAR * A_['n']
@@ -423,6 +458,31 @@ class PackerMIMO:
                     gx = (P_.T @ gv) if P_ is not None else self.D.smooth_map_adj(gv)
                     out += [gx.real, gx.imag]; i += 2 * len(gx)
         return np.concatenate(out) if out else np.zeros(0)
+
+    def field_jacobians(self, z=None):
+        """{'va': [J per actuator], 'vs': [J per sensor]}: complex n x P matrices
+        with packed field gradient = Re(G^H J) for a nodal gradient G (STAGE6
+        6.29); None for smoothed raw fields (the rows are then lifted)."""
+        import fieldbasis as _fb
+        Pa, Ps, Aa, As = self._fields_cfg()
+        zz = np.asarray(z if z is not None else self._atom_z[0], float)
+        i = (2 * self.nth if self.nth else 0) + (self.m if self.f['B'] else 0) + (self.p if self.f['C'] else 0)
+        out = {}
+        for key, flag, P_, A_, cnt in (('va', 'FB', Pa, Aa, self.m), ('vs', 'FC', Ps, As, self.p)):
+            if not self.f[flag]:
+                continue
+            L = []
+            for _ in range(cnt):
+                if A_ is not None:
+                    mm_ = _fb.NATOM_PAR * A_['n']
+                    L.append(_fb.atom_jacobian(self.D.xn, *_fb.split_atoms(zz[i:i + mm_], A_['n']), A_['smin'], A_['kmax']))
+                    i += mm_
+                elif P_ is not None:
+                    L.append(np.hstack([np.conj(P_), 1j * np.conj(P_)]).astype(complex)); i += 2 * P_.shape[1]
+                else:
+                    L.append(None); i += 2 * self.D.n
+            out[key] = L
+        return out
 
     def blocks(self):
         """[(name, slice)] of the design vector: controller entries by kind

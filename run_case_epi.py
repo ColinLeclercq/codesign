@@ -203,7 +203,7 @@ def continuation_gate_reduced(D, pk, z0, z1, watch0, eps, oracle, depth=4,
     def _ritz(z):
         arow, nvec, K, b, c = _design(z)
         rc = oracle.make_cl(b, c, D.r, D.mc)
-        pairs = rc.near_line_pairs(arow, nvec, K, D.cl(b, c), eps, reach=reach, res_tol=res_tol, mc=D.mc, kmax=16)
+        pairs = rc.near_line_pairs(arow, nvec, K, eps, reach=reach, res_tol=res_tol, mc=D.mc, kmax=16)
         return [complex(p_['lam']) for p_ in pairs], (arow, nvec, K, b, c)
 
     def _seg(za, zb, wa, d):
@@ -3217,7 +3217,7 @@ def main():
             # the provisional best's stability (rollback if it fails).
             try:
                 _rcg = _ro.make_cl(bb, cc, D.r, D.mc)
-                _pairs_g = _rcg.near_line_pairs(aa, nn, KK, D.cl(bb, cc), a.eps, reach=1.0,
+                _pairs_g = _rcg.near_line_pairs(aa, nn, KK, a.eps, reach=1.0,
                                                 res_tol=a.sqp_row_res_tol, mc=D.mc)
                 if _pairs_g:
                     _jg = int(np.argmax([p_['lam'].real for p_ in _pairs_g]))
