@@ -13,8 +13,8 @@ through `scipy.sparse.linalg.splu` by ATTRIBUTE access:
     closedloop_sparse.py:145   lu = spla.splu(Sp.tocsc())   # the ONLY factorisation
     certify_sparse.py:112      self._lu = spla.splu(S)
     certify_sparse.py:314      lu = spla.splu(S)
-    fe_codesign.py:108         self._Hlu = spla.splu(Hop)    # Sobolev, once per mesh
-    fe_codesign.py:133         self._Mlu = _spla.splu(...)   # mass, once per mesh
+    fe_codesign.py (_Hlu)      Sobolev LU, once per mesh, on first use (free-field cases)
+    fe_codesign.py (smooth_unmap) self._Mlu = _spla.splu(...) # mass, once per mesh
 
 so replacing the module attribute intercepts all of them, and the returned
 SuperLU object is wrapped in a proxy that counts `.solve()` calls and forwards

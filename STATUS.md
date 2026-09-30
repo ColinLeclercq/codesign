@@ -144,6 +144,7 @@ factorisations per round, ~70 with reduced-model certification every 4th round.
 
 ## Next
 
+0. Before 2-D scale (STAGE6 6.28): reduced-space gradients (no n-length vectors in the SQP), winding count in parallel segments with a mesh-independent tail, LU ordering / MUMPS, certificate economies, blocked enrichment, parallel full-model tasks.
 0. MIMO: done at ne=100 (STAGE6); open: the K+B+C centralized tail (-0.25 %/round when stopped) and a start from
    the 5.339317 decentralized record (cluster), multistart (the decentralized problems are multimodal),
    `--sqp-stat pred` for SISO (cluster regression), control-cost weight W K S (later, user). The compensator's

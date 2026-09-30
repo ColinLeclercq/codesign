@@ -294,3 +294,12 @@ faer).  Removed from the first version of reduce_compensator: plain balanced
 truncation (destabilised every order <= 8).  Scratch only: the QP dump hook,
 the synthetic checkpoint builder (`mkck.py`), benchmarks.
 
+## 13. 2026-09-30 review fixes (STAGE6 6.28)
+
+Added: `reduced._fit_subspace`, `sparse_spectrum._m_lu` / `_MLU_CACHE` /
+`_SFAR_CACHE`, `FECoDesign._Hlu` (lazy property; `_Hlu_f`).  Replaced: the
+eager Sobolev and pencil-M factorisations, the per-call M LUs, the silent
+`ev = [0]` fallback of `stability_region`.  `tools/check_siso_identity.sh`:
+exact identity -> agreement to 1e-7 (identity still reported).  Gated: the SISO
+warm-start search (`not MIMO`).
+

@@ -652,3 +652,17 @@ Start peaks on the reduced model: 9 within 5 % (-6.07 ... 8.41). Running
 | QP | one thread: -28 %, bitwise same; constraint generation tried, not a win on the plateau, removed; second QP per iteration: to A/B (6.26) |
 | finite differences | only the peak curvature d2 sigma/d w2 (5.7 %); gradients analytic, Hessian BFGS (6.26) |
 | order-5 central compensator | closed-loop weighted truncation start (plain BT destabilises); 3.967890 in 88 min, within 1 % in 23 min; order 16: 3.715450 in 5.3 h (6.27) |
+
+**2026-09-30 13:33 (user: review the code for anything silly before the cluster) -- STAGE6 6.28**
+
+| item | status |
+|---|---|
+| four read-only reviews, claims checked against code and the LU table | done (6.28) |
+| sigma_2 / k=1 warm-subspace thrash | fixed (-3 % inner; SISO value changes 3.6e-9; identity check -> agreement 1e-7) |
+| dense SISO warm-start search on the MIMO path (160 GB at 1e5) | fixed (skipped for MIMO) |
+| mass LU refactorised 5x/round, s_far per call, unused pencil M LU, Sobolev LU at construction | fixed (bit-identical) |
+| stability_region silent fallback ev=[0] | fixed (proven plant enclosure, printed) |
+| n-length lifting in every row/gradient (6.25's "n does not enter the SQP" was wrong) | **open, must precede 2-D** |
+| winding ~700 LUs/accepted round (83 %), certificate, enrichment, LU ordering | **open, must precede 2-D** (6.28 list) |
+| second QP per iteration | dropped (n-independent, algorithm change) |
+

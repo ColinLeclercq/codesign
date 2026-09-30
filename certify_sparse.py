@@ -554,8 +554,16 @@ def stability_region(A, M, Ac, wpad=2.0, spad=1.0):
             ev = spla.eigs(A.tocsc(), k=k, M=M.tocsc(), which='LR',
                            tol=1e-6, maxiter=3000, return_eigenvectors=False,
                            v0=_v0(n))
-        except Exception:
-            ev = np.array([0.0 + 0.0j])
+        except Exception as _e:
+            # ARPACK 'LR' without shift-invert can fail on a large stiff mesh; the
+            # old fallback ev = [0] was SILENT and dropped the plant's extent
+            # (2026-09-30 review).  Fall back to the proven plant enclosure right
+            # of Re = -1 (sparse_spectrum.plant_rectangle) and say so.
+            from sparse_spectrum import plant_rectangle
+            s_f, w_lo, w_hi = plant_rectangle(A, M, -1.0)
+            ev = np.array([-1.0 + 1j * w_hi, -1.0 - 1j * w_lo, complex(s_f)])
+            print(f"stability_region: plant eigs failed ({type(_e).__name__}); "
+                  f"using the plant enclosure right of -1: Re <= {s_f:.3g}, Im in [{-w_lo:.3g}, {w_hi:.3g}]", flush=True)
         _PLANT_EV_CACHE.clear(); _PLANT_EV_CACHE[_key] = ev
     allv = np.concatenate([pol, ev])
     wlo = float(np.min(allv.imag)) - wpad

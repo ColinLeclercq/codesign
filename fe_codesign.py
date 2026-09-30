@@ -103,11 +103,21 @@ class FECoDesign:
         # set to 0 at cavity scale, where one factor can be ~1 GB.
         self.lu_cache_max = 8
         self.sob_len = float(sob_len)
-        if self.sob_len > 0:
-            Hop = (self.M + (self.sob_len ** 2) * self.Kstiff).tocsc()
-            self._Hlu = spla.splu(Hop)
-        else:
-            self._Hlu = None
+        self._Hlu_f = None                   # the Sobolev factor, on first use (_Hlu)
+
+    @property
+    def _Hlu(self):
+        """LU of M + l^2 K for the smoothing change of variable; None when
+        sob_len == 0.  Factorised on FIRST USE (2026-09-30 review: the default
+        --sob_len 0.8 factorised it at construction for every case, while only
+        the free-field cases use it -- one LU plus its fill held all run and
+        inherited by every forked worker)."""
+        if self.sob_len <= 0:
+            return None
+        if self._Hlu_f is None:
+            import scipy.sparse.linalg as _spla
+            self._Hlu_f = _spla.splu((self.M + (self.sob_len ** 2) * self.Kstiff).tocsc())
+        return self._Hlu_f
 
 
     def smooth_map(self, xi):

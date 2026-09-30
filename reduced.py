@@ -287,6 +287,21 @@ class ReducedOracle:
         return out
 
 
+def _fit_subspace(Vc, kd, p, V0):
+    """A cached warm-start subspace (kd x p') resized to p columns: the leading
+    p when p' >= p, else completed by the random start's columns and
+    re-orthonormalised; V0 when there is none.  (2026-09-30: the k = 1 rows
+    cache 5 columns and the k = 2 sigma_2 blocks 6, at the SAME keys -- a
+    followed top is evaluated by both in every evaluation -- and each discarded
+    the other's entry as the wrong shape: every block row restarted from the
+    random subspace, 4x the iterations, measured.)"""
+    if Vc is None or Vc.shape[0] != kd:
+        return V0
+    if Vc.shape[1] >= p:
+        return Vc[:, :p]
+    return np.linalg.qr(np.hstack([Vc, V0[:, :p - Vc.shape[1]]]))[0]
+
+
 ROW_WORKERS = 0           # forked processes evaluating rows besides this one (--row-workers; 0 = serial)
 PAR_MIN_ROWS = 32         # smaller batches stay in this process (a round trip costs ~1 ms)
 
@@ -651,7 +666,7 @@ class _ReducedCL:
                     Vc = cache.get(key + dk)
                     if Vc is not None:
                         break
-            V[i] = Vc if (Vc is not None and Vc.shape == (kd, p)) else V0
+            V[i] = _fit_subspace(Vc, kd, p, V0)
         tol = np.where(wv, 1e-10, 1e-6)
         sig = np.full((m, k), np.nan); v1 = np.zeros((m, kd, k), complex)
         act = np.arange(m)
@@ -783,9 +798,8 @@ class _ReducedCL:
                 V = cache.get(key + dk)
                 if V is not None:
                     break
-        if V is None or V.shape != (kd, p):
-            rng = np.random.default_rng(12345)
-            V = np.linalg.qr(rng.normal(size=(kd, p)) + 1j * rng.normal(size=(kd, p)))[0]
+        rng = np.random.default_rng(12345)
+        V = _fit_subspace(V, kd, p, np.linalg.qr(rng.normal(size=(kd, p)) + 1j * rng.normal(size=(kd, p)))[0])
         for it in range(maxit):
             B = GVh @ self._blkS(GWh @ V)                    # S V
             Ub, sb, Whb = svd(B, full_matrices=False)

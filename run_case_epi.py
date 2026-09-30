@@ -2147,7 +2147,10 @@ def main():
         elif src_case != a.case:
             print(f"resume file is case {src_case}; inheriting only the groups "
                   f"it optimised", flush=True)
-    if src is None and not a.cold:
+    # (MIMO starts from --mimo-start: the SISO warm-start search is not needed,
+    # and its stability check is a DENSE eig of the plant -- 160 GB at n = 1e5;
+    # 2026-09-30 review)
+    if src is None and not a.cold and not MIMO:
         # warm-start selection lives in warmstart.py: it filters out UNSTABLE
         # candidates (the old directories hold closed loops with alpha up to
         # +4.3e6, which look attractive to a lowest-gamma search precisely

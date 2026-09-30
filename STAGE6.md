@@ -916,6 +916,135 @@ container.**
   first pass at order 16).
 - Result record: `results_mimo_prod/kbc_cen5/`.
 
+## 6.28 Code review before the cluster (user, 2026-09-30 13:33)
+
+Four independent read-only reviews:
+- the driver, split in two halves;
+- the SQP / reduced model / packer / gradients;
+- certificates / spectra / winding / closed-loop classes.
+
+Their claims were checked against the code and against the lu_counter table
+of the order-5 run (38,421 full-size LUs over 46 rounds). Their scratch
+benchmarks at n = 1e5 and on a 2-D model problem (n = 14,400) are theirs.
+
+**Correction to 6.25.** "The dimension n does not enter the SQP" was WRONG.
+- Every row's singular pair is lifted to full length (x = V x~, z = W z~,
+  M x in `_batch_pairs` / `gain_k`).
+- Every gradient (`G` -> `grads_mimo` -> `_ProxyCL._reduce`) projects it
+  straight back (V^H x; V = W orthonormal, so the round trip is the identity)
+  and forms b^H z_p, c^H x_p and the placement terms in full length.
+- ~3700 `G` calls per evaluation at 1225 rows. At n = 199 this is invisible.
+  At n = 1e5, kd = 130 it is ~0.1 s per call (reviewer benchmark), i.e.
+  minutes per evaluation.
+- The row pool also pickles those n-vectors.
+- All of it has an exact reduced form: port sides with rcl.b / rcl.c, placement
+  terms with W^H Mdpsi once per design, gprime = Im(z~^H Mt x~ + z_c^H x_c).
+- **Must be done before any 2-D case.**
+
+**LU count by call site (order-5 run, 46 rounds).**
+
+| call site | full-size LUs | share |
+|---|---|---|
+| winding count at acceptance (`winding_cert.py:234`) | 31,770 | 82.7 % |
+| abscissa certificate | 1,714 | 4.5 % |
+| Hamiltonian pencil, band | 1,184 | 3.1 % |
+| Hamiltonian pencil, all-w | 1,240 | 3.2 % |
+| gains in the certificate | 1,063 | 2.8 % |
+| enrichment / compaction / eigen-enrichment | 927 | 2.4 % |
+| band candidates, M factors | ~450 | 1.2 % |
+
+At n = 199 each LU is ~0.1 ms. On the 2-D model the reviewer measured a
+resolvent LU at 0.2-0.5 s and a Hamiltonian LU at 3.4-35 s. **At that size
+the full-model work is the round**, and today all of it is serial.
+
+**Fixed now.**
+- **Warm subspace across block sizes** (`reduced._fit_subspace`). k = 1 rows
+  cached 5 columns and k = 2 blocks 6 at the same keys, and each discarded the
+  other's entry as the wrong shape.
+  - Now the leading columns are used, or completed.
+  - Big round: 626 -> 608.5 s inner (-3 %; the reviewer's 4x iteration count was
+    on its own test model).
+  - The SISO 5-round value changes by 3.6e-9 (8.754365078411837 against
+    8.754365110002194): the first non-identical SISO result. Attributed by
+    reverting this one change: identical again. `tools/check_siso_identity.sh`
+    now requires agreement to 1e-7 and reports identity.
+- **SISO warm-start search skipped for MIMO.** Its stability filter is a
+  DENSE plant eig (`warmstart.py:57`, ungated): 160 GB at n = 1e5.
+  - Dormant only because no matching SISO result files existed in `results/`.
+  - Its borrowed-controller branch could also have put a SISO packer on a MIMO
+    run.
+- **Mass-matrix LU once per matrix** (`sparse_spectrum._m_lu`).
+  - It was refactorised by highgain_estimates, closed_loop_tail, PlantPencil and
+    every plant_rectangle call (5 per round, 20 per plant_heights).
+  - s_far = lambda_max(H, M) cached per plant (it was recomputed by each of the
+    17 plant_rectangle calls of plant_heights).
+  - ClosedLoopPencil's M LU is now built on first use: the loop never tiles, so
+    it was never used.
+  - All bit-identical.
+- **Sobolev LU (M + l^2 K) on first use.** The default --sob_len 0.8 factorised
+  it for every case, K+B+C included, and every forked worker inherited it.
+- **`stability_region`: the silent ev = [0] fallback on an ARPACK failure**
+  (ARPACK 'LR' without shift-invert, fragile on stiff meshes) now falls back to
+  the proven plant enclosure right of -1 and prints it.
+- Checks: frozen path 10.23128516441147, witness invariant, hurwitz selftest,
+  SISO agreement 3.6e-9: PASS.
+
+**Must be done before 2-D scale (exact changes; A/B at ne = 100 to rounding):**
+1. **Reduced-space gradients and pairs** (above): no n-length vector in the SQP
+   and no n-vectors through the row pipes.
+2. **Winding count: ~700 LUs per accepted round.**
+   - Its knots (121 + pole windows) split the march into independent segments
+     whose phase changes add: farm them to the process pool.
+   - Tail frequency WT from ||M^-1 A|| ~ h^-2 (960 at ne = 100): replace by the
+     mesh-independent numerical-range bound of 6.19.
+   - Real 2-D plants: S(conj s) = conj S(s) halves the points.
+3. **splu defaults everywhere** (no permc_spec). On the 2-D model the
+   Hamiltonian LU went 35.1 s -> 3.4 s with MMD_AT_PLUS_A (+ symmetric mode) and
+   the resolvent LU 0.51 -> 0.21 s. For cavity/step sizes, MUMPS/PETSc (stage 7
+   plan).
+4. **Certificate.**
+   - The all-w question re-proves the band it just certified. Ask it only on
+     [-W, wlo] U [whi, W]: exact, about half the Hamiltonian LUs.
+   - `eigs_near` asks k = 8, ncv = 30, tol 1e-9 where the nearest pair sets
+     the disk.
+   - The witness climb is derivative-free Brent on the FULL model to xatol
+     1e-11 (~23 LUs per round) although gain() returns g'(w): a few Newton
+     steps, or the reduced model plus 1-2 full checks.
+   - The 9 location shifts after a witness are independent: parallel.
+5. **Enrichment.**
+   - `_orth` is column-by-column BLAS2 with conj copies of the basis (~47 s
+     per union step at n = 1e5, kd = 130; 1.8 s blocked).
+   - The same frequency is factorised 2-4 times per round (peak sweep,
+     witness, next round's enrichment) through an 8-entry FIFO shared with
+     complex shifts, which must be 0 at cavity scale: build the enrichment
+     vectors inside the peak sweep.
+
+**Moderate waste (per round or per run), to do with 1-5.**
+- A full certificate of the unchanged best design in no-progress rounds, only
+  to get its peak list.
+- band_from_closedloop twice per round on the same candidate.
+- The start computes the same 241-point full sweep twice, plus D.hinf.
+- The pool ships A and M with every continuation task.
+- Save-time repeats of acceptance-time work (winding at -eps/2, all-w at the
+  same level, alpha).
+- Reduced sweeps as per-frequency loops instead of gain_batch.
+- 9 G calls per sigma_2 block where 4 suffice.
+- The Ts stack rebuilt per gain_batch call.
+- Gate work on candidates that cannot be accepted.
+- Plant enclosures at three lines where one suffices.
+
+**Parallel structure for the cluster.**
+- Rows (done, `--row-workers`): parallel over frequencies; the cost depends on
+  kd and |Omega|, not n.
+- Full-model tasks: independent LUs at different points/shifts. Winding
+  segments, certificate intervals and shifts, enrichment anchors, the peak
+  sweep, band tiles, plant heights per depth. Process-parallel; memory per LU
+  is the limit at n ~ 1e6.
+- QP: serial, size independent of n.
+- The second QP per iteration (6.26): NOT to be pursued. It saves ~12 % of a
+  round at ne = 100, its size does not grow with n, and it is an algorithm
+  change.
+
 ## 6.23 Open items
 
 - the plant heights of the tail certificate: ~100 s at ne = 400 per process
@@ -932,8 +1061,9 @@ container.**
 - ne >= 400 MIMO runs: on the cluster (user, 2026-09-28).
 - orders 10 and 15 of the central K+B+C compensator (user, 2026-09-30):
   `tools/mimo_n100.sh kbc_cen10` / `kbc_cen15` (weighted-truncation starts, 6.27);
-- the second QP per SQP iteration (BFGS multipliers at the new iterate; 6.26):
-  A/B against the old-multiplier update; gradient assembly in the row workers.
+- before 2-D scale: the five items of 6.28 (reduced-space gradients, winding
+  in parallel segments and the mesh-independent tail, LU ordering / MUMPS,
+  certificate economies, blocked enrichment) and the parallel full-model tasks.
 - K+B+C centralized: still -0.25 %/round when stopped (6.20); its start was the
   c4cf908 decentralized record (5.474), not the better 11c4073 one (5.339) -- both
   (the tail and the start) on the cluster; `--wall` as a hard stop would bound such
