@@ -5,6 +5,7 @@
 #   tools/ab_check.sh OUTDIR            run THIS tree's cases into OUTDIR
 #   tools/ab_check.sh --compare A B     compare two OUTDIRs
 #   AB_CASES="kbc5" tools/ab_check.sh OUTDIR   one case only
+#   AB_EXTRA="--nproc 1" tools/ab_check.sh OUTDIR   extra driver flags for every case
 # Cases: kbc5  K+B+C central order 5 from results_mimo_prod/start_kbc_cen5.npz, 4 rounds
 #        at    atoms central from the at_dec record, 2 rounds (static gains, wide band)
 set -uo pipefail; cd "$(dirname "$0")/.."
@@ -50,7 +51,7 @@ ATOMS="--field-basis laplace --field-n 80 --field-lo -38.9 --field-hi 39.2 --fie
 run() {  # name rounds args
   local od=$out/$1; rm -rf $od; mkdir -p $od
   local t0=$(date +%s)
-  python run_case_epi.py --eps 0.05 --start 0 $LOOP --outer $2 --stop-progress 8:0.0015 --n-act 2 --n-sens 2 ${@:3} \
+  python run_case_epi.py --eps 0.05 --start 0 $LOOP --outer $2 --stop-progress 8:0.0015 --n-act 2 --n-sens 2 ${@:3} ${AB_EXTRA:-} \
       --lucount --outdir $od --dump $od/dump > $od/run.log 2>&1
   echo $(( $(date +%s) - t0 )) > $out/$1.time
 }

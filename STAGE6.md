@@ -1281,6 +1281,119 @@ already parallel (`--row-workers`) and do not grow with n.
   - a GPU sparse direct solver (cuDSS) could be timed on one BFS matrix later,
     against 96 CPU cores doing 96 shifts at once.
 
+## 6.30 Parallel full-model tasks (user, 2026-09-30 21:10)
+
+The user asked for three things:
+- parallelise the parts that matter at the backward-facing step (BFS);
+- validate on GL on 2 cores;
+- measure the speed-up and say how it changes with the dimension.
+
+Running on 1 task must give the same result as before.
+
+### Design
+
+**`fullpar.py`** is one process pool for every full-model task.
+- `start(nproc, D=..., Phi_b=..., Psi_c=...)` forks the workers.
+  - Every task gets the plant, its mass LU and the reduced oracle's input bases by fork inheritance. Nothing large goes through a pipe except the ports.
+  - The driver forks the pool at warm-up, right after the mass factorisation, so the plant enclosure and heights can use it.
+  - It re-forks before the rounds, once the counters, the certificate settings and the input bases exist.
+  - `pmap` re-forks by itself when the mesh object changed. The MIMO setup sets the compensator order after the warm-up fork: the first version failed on exactly that (`reshape (8,2)`).
+- `pmap(fn, args)` returns `[fn(a) for a in args]` in order, one task at a time, with dynamic scheduling.
+  - With `--nproc 1` there is no pool, and every call site runs its OLD serial code.
+  - Each task is a pure function of its arguments. There are no warm starts, and ARPACK start vectors are fixed. So a result does not depend on the process that computed it.
+- LU accounting: each worker returns its lu_counter delta, which is merged under the submitting driver line. The continuation gate's tracked queries now go through `pmap` too, so they are counted; before they were not.
+- `fullpar.report()` prints, at the end of a run, the pool's task time against its wall time.
+
+**What runs in the pool (all bitwise the serial result unless stated).**
+
+| task | where | parallel unit | exact? |
+|---|---|---|---|
+| winding count | `winding_cert.winding_count` -> `_march`, `_seg_task` | segments between knots (4 per worker, at most knots/4) | count and ok: yes. Points: +-1 %, since each segment restarts its step rule |
+| certificate decision | `certify_sparse.certify_greater` | one GENERATION of critical intervals at a time (the FIFO queue is generation by generation); results merged in queue order | yes: same shifts, disks, counters, witness |
+| location shifts | `hinf_certified_sparse` | the 9 shifts | yes |
+| candidate samples | `hinf_certified_sparse(sigma_many=...)` | frequencies | yes |
+| full sigma sweeps | `certified_norm` (peak reference, 241-point sweep), start seeding (`fullpar.sigmas`) | frequencies | yes |
+| enrichment | `ReducedOracle.enrich_many` / `enrich_columns` / `_enrich_task` | anchors: columns (LU, pairs, Woodbury, input-basis images) in the workers, basis updates in order here | yes |
+| eigen-anchors | `enrich_eig(bc=...)`, `compact(bc=...)` | eigenvalues | yes |
+| band refinement shifts | `sparse_spectrum.closed_loop_right_of` | shifts | yes |
+| band / plant tiles | `eigs_in_rectangle(spec=...)` | top-level tiles | yes |
+| plant heights | `plant_heights` | depths (s_far computed first, then handed to the workers) | yes |
+
+Other points:
+- **Projection once per anchor batch.** `enrich_many` runs the basis updates in order and computes the projection (A V, M V, the Gram matrices, the QZ form) once, after the last anchor. It depends on the final basis only, so the result is bitwise the same.
+- **Not parallel, and why.**
+  - The witness climb is sequential (about 10 evaluations).
+  - The abscissa certificate keeps its own `--cert-nseg` segments on the same pool.
+  - The SQP is n-independent; its rows have their own pool (`--row-workers`). The two pools never run at the same time: rows during the SQP, full-model tasks during certification.
+
+**Options for the cluster.** Both default to off; the defaults are bit-identical.
+- `--cert-split N` starts the certificate's queue with N intervals. With the default 1 the certificate has only about 4 shifts per generation on average (measured below), so wider pools idle. It uses other shifts but gives the same rigorous decision.
+- `--oracle-union new`: the union Galerkin step projects only W's new columns. When V = W, W's leading columns are V's and deflate to nothing anyway.
+  - Measured at n = 25,600, 8 anchors: the basis updates take 4.9 s instead of 7.8 s.
+  - Dimension 272 either way, subspace cosine 1 - 2e-15, reduced sigma equal to 4e-15.
+  - The vectors differ at rounding level, so it is not the default.
+
+### Validation
+
+- **`tools/check_parallel.py`** (new) runs every pooled task on the order-5 K+B+C, atoms and SISO K+B+C records:
+  - sweeps;
+  - certificate;
+  - enrichment basis;
+  - closed-loop set right of -1 (refinement shifts, tiles, count);
+  - plant enclosure and heights;
+  - winding counts.
+- **Previous commit vs 1 task:** ALL IDENTICAL, including the winding points.
+- **1 task vs 2 tasks:** ALL IDENTICAL. The winding points differ by at most 7 of 600-800; the counts are equal.
+- **A/B runs** (`tools/ab_check.sh`, new `AB_EXTRA`):
+  - Previous commit `--nproc 1` vs new `--nproc 1`: every round value bitwise equal, full-model LUs 4759 = 4759 and 1538 = 1538.
+  - New `--nproc 1` vs `--nproc 2`: every round value bitwise equal. LU counts 4741 and 1555, because the winding segment boundaries and the gate queries are now counted.
+- **`check_invariants.sh`** with the pool on: PASS (frozen 10.23128516441147, witness invariant, hurwitz).
+- **`check_siso_identity.sh`** with the pool on: 8.754365072650645, as before (4.3e-9 to siso-v1).
+- **Full order-5 run with the pool:** same flags as the 6.29 run (`tools/mimo_n100.sh kbc_cen5`; `--nproc` defaults to 2, rows serial).
+  - The sandbox restarted at round 22, which killed the run.
+  - Every one of rounds 0-22 is bitwise equal to the 6.29 run (t and certified value from the dumps).
+  - Wall at round 22: 2431 s against 2581 s (-5.8 %). The 6.29 run used the pool only for the gate's tracked queries.
+
+### Speed-up on 2 cores, and how it changes with n
+
+**GL ne = 100 (n = 199), whole runs.** Order 5, 23 rounds: 2581 -> 2431 s (x1.06). A/B, 4 and 2 rounds:
+- K+B+C: 202 -> 197 s. The pool did 14.0 s of task work in 8.0 s of wall (x1.74).
+- Atoms: 127 -> 124 s. The pool did 12.8 s of task work in 8.2 s (x1.56).
+- At n = 199 a factorisation costs 0.1 ms, so the pooled work is only 7-10 % of a run. The rest is the reduced SQP, which does not depend on n.
+
+**The same task code on a 2-D operator** (`tools/bench_parallel_2d.py`: 5-point convection-diffusion-reaction on N x N, 2 actuators, 2 sensors, the order-5 compensator, `--lu-order mmd_at_plus_a`). The results are bitwise identical serial vs pool at every size. Speed-ups are serial time / pool time, from two runs; the second run is the final code:
+
+| n | one gain | sweep | winding | certificate | enrichment |
+|---|---|---|---|---|---|
+| 1,600 | 0.013-0.021 s | 1.50 / 1.46 | 1.57 / 1.86 | 1.54 / 2.01 | 1.03 / 1.30 |
+| 6,400 | 0.053 s | 1.69 / 1.62 | 1.69 / 1.61 | 1.54 / 1.46 | 1.05 / 1.07 |
+| 25,600 | 0.26 s | 1.81 / 1.80 | 1.65 / 1.71 | 1.64 / 1.55 | 1.07 / 1.10 |
+
+(The 1,600 row is noisy: tasks of 10-20 ms.)
+
+**Direction: the speed-up grows with n, towards a bound set by each task's structure, not by overhead.**
+1. **Overhead fades.** A task's overhead is the dispatch (~1 ms) plus pickling the ports, which is O(n). Its work is a 2-D LU, O(n^1.5) with nested dissection (measured ~n^1.15 from 6.4k to 25.6k). So the overhead fraction falls with n. Pure LU tasks (the sweeps) go 1.46 -> 1.81 of 2.
+2. **Structural bounds remain.**
+   - Winding: the boundary points (1 extra LU per segment) and the imbalance of 8 segments. ~1.7 of 2; on N workers at most min(4N, knots/4) segments, ~40-60 on GL.
+   - Certificate: the width of the generations. Measured on the ne=100 records, including the 9 location shifts: widths [9,1,9,1,2,4,4,4,6,4,2] and [9,1,2,4,4,4]. That is 46 and 24 shifts in 11 and 6 generations: at most ~4x on any number of workers. `--cert-split 32` widens them to 15x and 12x, for 2.3x and 2x the shifts.
+   - Enrichment: the basis updates stay serial (O(n kd^2) per anchor). Only the LUs (20-30 % of the enrichment at these sizes) are parallel: ~1.1 on 2 cores. `--oracle-union new` removes ~40 % of the serial part.
+3. **The run becomes the full-model tasks.** The SQP does not grow with n, and the full-model work goes from 7-10 % of a run at n = 199 to essentially all of it at the BFS. The end-to-end speed-up therefore rises from ~1.03-1.06 at GL ne=100 to the task-level bounds above.
+
+**At the BFS** (n ~ 192k, one LU ~ 10 s, ~1200 full LUs per round on the order-5 run's mix):
+
+| component | share of a round's LUs | bound with 96 workers |
+|---|---|---|
+| winding counts | ~80 % | ~40-60x (segments) |
+| gains (peak reference, enrichment anchors, climb) | ~20 % | ~12-20x (frequencies per call) |
+| certificate (Hamiltonian LUs of size 2n, ~3-10x a resolvent LU) | small | ~4x, or 12-15x with `--cert-split` |
+
+A round would take ~3 h serial and roughly 10-15 min on one 96-core node. Memory is one LU per worker: 96 x 1.5 GB fits in 512 GB.
+
+Levers beyond this pass, if needed:
+- MUMPS inside `sparse_lu` (fewer, faster LUs per worker);
+- fewer points per winding count;
+- the widened certificate queue.
+
 ## 6.23 Open items
 
 - the plant heights of the tail certificate: ~100 s at ne = 400 per process
@@ -1297,9 +1410,9 @@ already parallel (`--row-workers`) and do not grow with n.
 - ne >= 400 MIMO runs: on the cluster (user, 2026-09-28).
 - orders 10 and 15 of the central K+B+C compensator (user, 2026-09-30):
   `tools/mimo_n100.sh kbc_cen10` / `kbc_cen15` (weighted-truncation starts, 6.27);
-- before 2-D scale: the five items of 6.28 are done (6.29); left: the parallel
-  full-model tasks, MUMPS as a `sparse_lu` backend, the singular-M (velocity
-  mass) versions of the M-norm bounds at the BFS.
+- before 2-D scale: the five items of 6.28 are done (6.29), the parallel
+  full-model tasks too (6.30); left: MUMPS as a `sparse_lu` backend, the
+  singular-M (velocity mass) versions of the M-norm bounds at the BFS.
 - K+B+C centralized: still -0.25 %/round when stopped (6.20); its start was the
   c4cf908 decentralized record (5.474), not the better 11c4073 one (5.339) -- both
   (the tail and the start) on the cluster; `--wall` as a hard stop would bound such

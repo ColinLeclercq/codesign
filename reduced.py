@@ -45,6 +45,7 @@ from scipy.linalg import sqrtm, svd, solve
 from closedloop_sparse import ClosedLoopResolvent as ClosedLoop
 
 ORTH = 'block'          # basis orthogonalisation: 'block' or 'column' (driver --oracle-orth)
+UNION = 'full'          # union Galerkin step: 'full' (W against V entire) or 'new' (W's new columns only; --oracle-union)
 
 
 class _ProxyCL:
@@ -298,100 +299,115 @@ class ReducedOracle:
         self.Phi_b, self.Psi_c = Phi_b, Psi_c
         self.galerkin = True          # the input basis requires the union space (see enrich)
 
-    def enrich(self, cl_full, omega, arow, nvec, K, nvec_dirs=2):
-        """One full-model factorisation at omega (the one the certifier makes
-        anyway), n_vec singular pairs, the two Woodbury columns."""
+    @staticmethod
+    def enrich_columns(cl_full, omega, arow, nvec, K, nvec_dirs=2, Phi_b=None, Psi_c=None):
+        """The anchor's new columns (one full-model factorisation at omega):
+        n_vec singular pairs, the two Woodbury columns, the input-basis images.
+        Independent of the basis, so the anchors of a round are computed in the
+        full-model pool (enrich_many) and applied in order."""
         pairs = cl_full.gain_k(float(omega), arow, nvec, K, k=max(1, nvec_dirs))
         lu = cl_full._st['lu']
-        n = self.n
+        n = cl_full.n
         cols_V = [p['x'][:n] for p in pairs] + [lu.solve(cl_full.b)]
         cols_W = [p['z'][:n] for p in pairs] + [lu.solve(cl_full.c, trans='H')]
-        Pb, Pc = getattr(self, 'Phi_b', None), getattr(self, 'Psi_c', None)
         # tangential interpolation: INPUT directions to the right (V), OUTPUT
         # directions to the left (W).  (A first version added both to both
         # sides to force equal dimensions; the forced truncation cut
         # interpolating columns and the model was wrong even at its anchors.)
-        if Pb is not None:                              # all columns in one solve (STAGE6 6.29)
-            Yb = lu.solve(np.ascontiguousarray(Pb, complex)); cols_V += [Yb[:, k] for k in range(Yb.shape[1])]
-        if Pc is not None:
-            Yc = lu.solve(np.ascontiguousarray(Pc, complex), trans='H'); cols_W += [Yc[:, k] for k in range(Yc.shape[1])]
-        self.V = self._orth(self.V, np.column_stack(cols_V))
-        self.W = self._orth(self.W, np.column_stack(cols_W))
+        if Phi_b is not None:                           # all columns in one solve (STAGE6 6.29)
+            Yb = lu.solve(np.ascontiguousarray(Phi_b, complex)); cols_V += [Yb[:, k] for k in range(Yb.shape[1])]
+        if Psi_c is not None:
+            Yc = lu.solve(np.ascontiguousarray(Psi_c, complex), trans='H'); cols_W += [Yc[:, k] for k in range(Yc.shape[1])]
+        return np.column_stack(cols_V), np.column_stack(cols_W)
+
+    def enrich(self, cl_full, omega, arow, nvec, K, nvec_dirs=2, cols=None, project=True):
+        """One full-model factorisation at omega (the one the certifier makes
+        anyway), n_vec singular pairs, the two Woodbury columns (`cols`: the
+        columns already computed, enrich_many; project=False: the projection is
+        left to the caller, which makes it once after its last anchor)."""
+        XV, XW = cols if cols is not None else self.enrich_columns(
+            cl_full, omega, arow, nvec, K, nvec_dirs, getattr(self, 'Phi_b', None), getattr(self, 'Psi_c', None))
+        k0 = self._union_k0()
+        self.V = self._orth(self.V, XV)
+        self.W = self._orth(self.W, XW)
         # equal dimension is required for a square reduced pencil
         if getattr(self, 'galerkin', False):
             # UNION GALERKIN: V = W = orth(V u W).  Contains R b and R^H c, so
             # Hermite interpolation at the anchors holds; the pencil
             # U^H (iwM - A) U does not lose rank the way the oblique coupling
             # of unrelated input/output spaces does (cond 1e18 measured).
-            U = self._orth(self.V, self.W)
+            U = self._orth(self.V, self.W[:, k0:])
             self.V, self.W = U, U.copy(); self.cut = (0, 0); k = U.shape[1]
         else:
             k = min(self.V.shape[1], self.W.shape[1])
             self.cut = (self.V.shape[1] - k, self.W.shape[1] - k)
             self.V, self.W = self.V[:, :k], self.W[:, :k]
         self.anchors.append(float(omega))
-        self._project()
+        if project:
+            self._project()
         return k
 
-    def enrich_eig(self, cl_full, lams, arow, nvec, K):
+    def _union_k0(self):
+        """Columns of W the union step may skip: with --oracle-union new and V = W
+        (every union step), W's leading columns ARE V's and deflate to nothing
+        against it -- only the new ones are projected (O(n kd k_new) instead of
+        O(n kd^2); same span, same kept columns, rounding-level different
+        vectors, STAGE6 6.30).  0 = the full step (the default)."""
+        if UNION == 'new' and getattr(self, 'galerkin', False) and self.V.shape == self.W.shape \
+                and np.array_equal(self.V, self.W):
+            return self.V.shape[1]
+        return 0
+
+    def enrich_many(self, cl_full, omegas, arow, nvec, K, nvec_dirs=2, bc=None):
+        """enrich() at every omega, in order.  With the full-model pool up
+        (fullpar) and the design's (b, c) given, the anchors' factorisations and
+        columns are computed in the workers; the basis updates stay in order
+        here, so the basis is the serial one bit for bit (STAGE6 6.30)."""
+        import fullpar
+        omegas = [float(w) for w in omegas]
+        if not omegas:
+            return self.dim
+        if bc is None or not fullpar.active() or len(omegas) < 2:
+            cols = [None] * len(omegas)
+        else:
+            cols = fullpar.pmap(_enrich_task, [(bc[0], bc[1], arow, nvec, K, w, nvec_dirs) for w in omegas])
+        # the basis updates in order; the projection (A V, M V, the Gram
+        # matrices, the QZ form: O(nnz kd + n kd^2 + kd^3)) once, after the
+        # last one -- it depends on the final basis only (STAGE6 6.30)
+        for w, c_ in zip(omegas, cols):
+            self.enrich(cl_full, w, arow, nvec, K, nvec_dirs=nvec_dirs, cols=c_, project=False)
+        self._project()
+        return self.dim
+
+    def enrich_eig(self, cl_full, lams, arow, nvec, K, bc=None):
         """Right/left eigenvectors of the FULL closed loop at known eigenvalues
         (one factorisation each, shift-invert at the located value) into V, W:
         the frequency-response anchors do not put the near-line eigenvectors
         in the basis, and without them the reduced pencil need not contain the
         rightmost eigenvalue at all.  These are the watch-list eigenvalues the
-        continuation gate already tracks."""
+        continuation gate already tracks.  With the full-model pool up and the
+        design's (b, c) given, the eigenvector solves run in the workers."""
+        import fullpar
         n = self.n; cv, cw = [], []
-        for lam in lams:
-            v, u, res = cl_full.eigvecs_at(complex(lam), arow, nvec, K)
+        if bc is not None and fullpar.active() and len(lams) > 1:
+            vecs = fullpar.pmap(_eigvec_task, [(bc[0], bc[1], arow, nvec, K, complex(lam)) for lam in lams])
+        else:
+            vecs = [cl_full.eigvecs_at(complex(lam), arow, nvec, K) for lam in lams]
+        for v, u, res in vecs:
             if v is None or not np.isfinite(res) or res > 1e-6:
                 continue
             cv.append(v[:n]); cw.append(u[:n])
         if cv:
+            k0 = self._union_k0()
             self.V = self._orth(self.V, np.column_stack(cv))
             self.W = self._orth(self.W, np.column_stack(cw))
             if getattr(self, 'galerkin', False):
-                U = self._orth(self.V, self.W); self.V, self.W = U, U.copy()
+                U = self._orth(self.V, self.W[:, k0:]); self.V, self.W = U, U.copy()
             else:
                 k = min(self.V.shape[1], self.W.shape[1])
                 self.V, self.W = self.V[:, :k], self.W[:, :k]
             self._project()
         return len(cv)
-
-    def enrich_shift(self, lams, second_order=True):
-        """Anchor the RESOLVENT at complex shifts (near-line eigenvalues):
-        the plant part of a closed-loop eigenvector satisfies
-        (lam M - A) x = b u  =>  x in span R(lam) b, and with b over the input
-        basis, x in span R(lam) Phi_b for ANY controller and position; the left
-        eigenvector likewise in span R(lam)^H Psi_c.  second_order adds
-        R(lam) M R(lam) Phi_b (and the adjoint): exact to second order as lam
-        moves.  One factorisation per shift.  (Adding only the eigenvector of
-        the current design lost the binding mode after one SQP step: its Ritz
-        residual left the filter and the SQP dropped the row.)"""
-        Pb, Pc = getattr(self, 'Phi_b', None), getattr(self, 'Psi_c', None)
-        if Pb is None and Pc is None:
-            return 0
-        Mc = self.M.astype(complex); Ac = self.A.astype(complex)
-        cv, cw = [], []
-        for lam in lams:
-            lu = sparse_lu.factor(complex(lam) * Mc - Ac)
-            if Pb is not None:
-                X = lu.solve(np.asarray(Pb, complex))
-                cv.append(X)
-                if second_order:
-                    cv.append(lu.solve(np.asarray(Mc @ X)))
-            if Pc is not None:
-                Y = lu.solve(np.asarray(Pc, complex), trans='H')
-                cw.append(Y)
-                if second_order:
-                    cw.append(lu.solve(np.asarray(Mc.conj().T @ Y), trans='H'))
-        if cv:
-            self.V = self._orth(self.V, np.column_stack(cv))
-        if cw:
-            self.W = self._orth(self.W, np.column_stack(cw))
-        if getattr(self, 'galerkin', False):
-            U = self._orth(self.V, self.W); self.V, self.W = U, U.copy()
-        self._project()
-        return len(lams)
 
     def _project(self):
         V, W = self.V, self.W
@@ -424,7 +440,7 @@ class ReducedOracle:
     def dim(self):
         return self.V.shape[1]
 
-    def compact(self, cl_full, anchors, arow, nvec, K, lams=(), nvec_dirs=3):
+    def compact(self, cl_full, anchors, arow, nvec, K, lams=(), nvec_dirs=3, bc=None):
         """Restart the basis from a set of anchors (frequencies) and eigenvalues
         at the CURRENT design: the basis grows ~10 per round with old
         directions from designs since left behind; past a cap it is rebuilt
@@ -432,10 +448,9 @@ class ReducedOracle:
         per eigenvalue, the same as the round's anchoring."""
         self.V = np.zeros((self.n, 0), complex); self.W = np.zeros((self.n, 0), complex)
         self.anchors = []
-        for w in anchors:
-            self.enrich(cl_full, float(w), arow, nvec, K, nvec_dirs=nvec_dirs)
+        self.enrich_many(cl_full, anchors, arow, nvec, K, nvec_dirs=nvec_dirs, bc=bc)
         if lams:
-            self.enrich_eig(cl_full, lams, arow, nvec, K)
+            self.enrich_eig(cl_full, lams, arow, nvec, K, bc=bc)
         return self.dim
 
     # ------------------------------------------------------------ oracle
@@ -1311,3 +1326,20 @@ def input_basis(D, which, lo, hi, other=0.0, nsnap=121, tol=1e-8):
     U, sv, _ = np.linalg.svd(np.array(S).T, full_matrices=False)
     k = int(np.searchsorted(-sv / sv[0], -tol))
     return U[:, :max(k, 1)], sv / sv[0]
+
+
+# ------------------------------------------------ full-model pool tasks (fullpar)
+def _enrich_task(t):
+    """An anchor's columns in a worker: the design's closed loop from the
+    registered mesh object, the input bases from the pool's context."""
+    import fullpar
+    b, c, arow, nvec, K, w, nvec_dirs = t
+    cl = fullpar.CTX['D'].cl(b, c)
+    return ReducedOracle.enrich_columns(cl, w, arow, nvec, K, nvec_dirs,
+                                        fullpar.CTX.get('Phi_b'), fullpar.CTX.get('Psi_c'))
+
+
+def _eigvec_task(t):
+    import fullpar
+    b, c, arow, nvec, K, lam = t
+    return fullpar.CTX['D'].cl(b, c).eigvecs_at(lam, arow, nvec, K)

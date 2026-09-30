@@ -262,6 +262,96 @@ class _FM:
         return f, fp, Ks, G
 
 
+def _h_hot(w, hot):
+    """Mandatory resolution near known poles of f and hinted zeros: within
+    their influence window the step may not exceed max(dist/2, |w - Im p|/4),
+    so a ~2 pi swing of width ~dist is sampled by many points and the approach
+    is geometric."""
+    h = np.inf
+    for wi, di in hot:
+        if abs(w - wi) < 6.0 * di + 1.0:
+            h = min(h, max(0.5 * di, 0.25 * abs(w - wi)))
+    return h
+
+
+def _march(F, line, wa, wb, knots, hot, hmin, WT, maxpts):
+    """Adaptive march of arg f along Re s = line from Im s = wa to wb (the whole
+    contour -W_T..W_T in one call is the serial count).  The step never passes
+    an unvisited knot.  Returns dict(total, w, f, f0, npts, ok)."""
+    s_of = lambda w: complex(line, w)
+    w = wa
+    ki = 0
+    while ki < len(knots) and knots[ki] <= w + 1e-12:
+        ki += 1
+    f, fp, *_ = F(s_of(w))
+    f0 = f
+    total = 0.0
+    npts = 1
+    ok = True
+    h = max(hmin, 0.35 * abs(f) / max(abs(fp), 1e-300))
+    h = min(h, WT / 8.0, _h_hot(w, hot))
+    while w < wb and npts < maxpts:
+        h = min(h, wb - w)
+        if ki < len(knots):
+            h = min(h, max(hmin, knots[ki] - w))
+        while True:
+            fm, fpm, *_ = F(s_of(w + 0.5 * h))    # midpoint
+            f2, fp2, *_ = F(s_of(w + h))
+            npts += 2
+            d1 = np.angle(fm / f)
+            d2 = np.angle(f2 / fm)
+            ok_half = (abs(d1) <= 0.5 * np.pi and abs(d2) <= 0.5 * np.pi
+                       and abs(fm - f) <= max(0.75 * min(abs(f), abs(fm)),
+                                              1e-14)
+                       and abs(f2 - fm) <= max(0.75 * min(abs(fm), abs(f2)),
+                                               1e-14))
+            # far-side activity check: if either forward point reports a much
+            # smaller phase-safe scale than the step, the step landed on or
+            # past a feature edge -- bisect even if the increments look calm.
+            scale = min(abs(fm) / max(abs(fpm), 1e-300),
+                        abs(f2) / max(abs(fp2), 1e-300))
+            if ok_half and h <= 1.4 * scale:
+                break
+            h *= 0.5
+            if h < hmin:
+                ok = False
+                break
+        if not ok:
+            break
+        total += d1 + d2
+        w += h
+        while ki < len(knots) and knots[ki] <= w + 1e-12:
+            ki += 1
+        f, fp = f2, fp2
+        h = max(hmin, min(0.35 * abs(f) / max(abs(fp), 1e-300), 2.5 * h,
+                          WT / 8.0, _h_hot(w, hot)))
+    return dict(total=total, w=w, f=f, f0=f0, npts=npts, ok=ok, nsolve=F.nsolve)
+
+
+def _make_F(A, M, b, c, arow, nvec, K, mc, ctrl_exact, lam_c, lam_c2):
+    mimo = np.ndim(b) == 2 or np.ndim(c) == 2
+    F = (_FM if mimo else _F)(A, M, b, c, arow, nvec, K, mc=mc)
+    if ctrl_exact:
+        F.ctrl_exact = True
+        F.lam_c = lam_c
+        if lam_c2 is not None:
+            F.lam_c2 = lam_c2
+    return F
+
+
+def _seg_task(t):
+    """One segment of the march in a worker (fullpar): the plant from the
+    registered context, the design and the march parameters from the task."""
+    import fullpar
+    (b, c, arow, nvec, K, mc, ctrl_exact, lam_c, lam_c2, line, wa, wb, knots, hot, hmin, WT, maxpts) = t
+    D = fullpar.CTX['D']
+    F = _make_F(D.A, D.M, b, c, arow, nvec, K, mc, ctrl_exact, lam_c, lam_c2)
+    return _march(F, line, wa, wb, knots, hot, hmin, WT, maxpts)
+
+
+SEG_PER_WORKER = 4      # segments per worker when the pool is up (dynamic load balance)
+
+
 def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
                   mc=1.0, p_plant=None, tail=None, hot=None, zeros_hint=None,
                   hmin_frac=1e-6, maxpts=20000, verbose=False, ctrl_exact=False):
@@ -328,17 +418,6 @@ def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
     # for m arcsin(q) < pi/2; SISO keeps q = 1/2 (m = 1), MIMO uses q = 1/(2m)
     q_tail = 0.5 / (F.m if mimo else 1)
 
-    def h_hot(w):
-        # mandatory resolution near known poles of f and hinted zeros: within
-        # their influence window the step may not exceed
-        # max(dist/2, |w - Im p|/4), so a ~2 pi swing of width ~dist is
-        # sampled by many points and the approach is geometric.
-        h = np.inf
-        for wi, di in hot:
-            if abs(w - wi) < 6.0 * di + 1.0:
-                h = min(h, max(0.5 * di, 0.25 * abs(w - wi)))
-        return h
-
     a_c = float(np.linalg.norm(F.Ac, 2)) if F.r else 0.0
 
     def kmax_at(w):
@@ -397,61 +476,40 @@ def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
             if -WT < x < WT:
                 ks.add(float(x))
     knots = np.array(sorted(ks))
-    ki = 0
-
-    # adaptive march upward along Re = line from -WT to +WT
+    # adaptive march upward along Re = line from -WT to +WT: in one piece
+    # (serial), or in segments between knots farmed to the full-model pool
+    # (fullpar, STAGE6 6.30).  The phase changes of the segments add up to the
+    # whole contour's; each segment restarts its step rule at its first knot,
+    # so the points (not the count) differ from the one-piece march.
     s_of = lambda w: complex(line, w)
-    w = -WT
-    while ki < len(knots) and knots[ki] <= w + 1e-12:
-        ki += 1
-    f, fp, *_ = F(s_of(w))
-    args = [np.angle(f)]
-    total = 0.0
     # step floor: relative to the truncation W_T (SISO, unchanged); MIMO caps the
     # reference at 4000 -- a high static gain (abs(D_c) ~ 5e3 with the atom fields)
     # pushes W_T to ~1e5 and a floor of 0.1 in w cannot resolve the plant's
     # near-line poles (INCONCLUSIVE with the right count, 2026-09-29)
     hmin = hmin_frac * (min(WT, 4000.0) if mimo else WT)
-    npts = 1
-    ok = True
-    h = max(hmin, 0.35 * abs(f) / max(abs(fp), 1e-300))
-    h = min(h, WT / 8.0, h_hot(w))
-    while w < WT and npts < maxpts:
-        h = min(h, WT - w)
-        if ki < len(knots):
-            h = min(h, max(hmin, knots[ki] - w))
-        while True:
-            fm, fpm, *_ = F(s_of(w + 0.5 * h))    # midpoint
-            f2, fp2, *_ = F(s_of(w + h))
-            npts += 2
-            d1 = np.angle(fm / f)
-            d2 = np.angle(f2 / fm)
-            ok_half = (abs(d1) <= 0.5 * np.pi and abs(d2) <= 0.5 * np.pi
-                       and abs(fm - f) <= max(0.75 * min(abs(f), abs(fm)),
-                                              1e-14)
-                       and abs(f2 - fm) <= max(0.75 * min(abs(fm), abs(f2)),
-                                               1e-14))
-            # far-side activity check: if either forward point reports a much
-            # smaller phase-safe scale than the step, the step landed on or
-            # past a feature edge -- bisect even if the increments look calm.
-            scale = min(abs(fm) / max(abs(fpm), 1e-300),
-                        abs(f2) / max(abs(fp2), 1e-300))
-            if ok_half and h <= 1.4 * scale:
-                break
-            h *= 0.5
-            if h < hmin:
-                ok = False
-                break
-        if not ok:
-            break
-        total += d1 + d2
-        w += h
-        while ki < len(knots) and knots[ki] <= w + 1e-12:
-            ki += 1
-        f, fp = f2, fp2
-        npts += 0
-        h = max(hmin, min(0.35 * abs(f) / max(abs(fp), 1e-300), 2.5 * h,
-                          WT / 8.0, h_hot(w)))
+    import fullpar
+    _D = fullpar.CTX.get('D')
+    nseg = (min(SEG_PER_WORKER * fullpar.NPROC, max(1, len(knots) // 4))
+            if (fullpar.active() and _D is not None and A is _D.A and M is _D.M) else 1)
+    if nseg <= 1:
+        mr = _march(F, line, -WT, WT, knots, hot, hmin, WT, maxpts)
+        total, w, f, npts, ok = mr['total'], mr['w'], mr['f'], mr['npts'], mr['ok']
+        args = [np.angle(mr['f0'])]
+    else:
+        idx = np.unique(np.rint(np.linspace(0, len(knots) - 1, nseg + 1)).astype(int))[1:-1]
+        edges = [-WT] + [float(knots[j]) for j in idx if -WT < knots[j] < WT] + [WT]
+        lc2 = getattr(F, 'lam_c2', None)
+        segs = fullpar.pmap(_seg_task, [(b, c, arow, nvec, K, mc, ctrl_exact, (F.lam_c if ctrl_exact else None), lc2,
+                                         line, edges[j], edges[j + 1], knots, hot, hmin, WT, maxpts)
+                                        for j in range(len(edges) - 1)])
+        total = float(sum(sg['total'] for sg in segs))
+        npts = int(sum(sg['npts'] for sg in segs))
+        F.nsolve += int(sum(sg['nsolve'] for sg in segs))
+        # a segment that stopped short (step floor, point budget) leaves the
+        # contour open: not a count
+        ok = all(sg['ok'] and sg['w'] >= edges[j + 1] for j, sg in enumerate(segs))
+        w, f = segs[-1]['w'], segs[-1]['f']
+        args = [np.angle(segs[0]['f0'])]
     # close the contour: on the tails |f - 1| < 1/2, so f cannot wind there
     # and the tail contribution is the principal-argument return to f = 1.
     # Contour orientation: the line traversed UPWARD with the region to its

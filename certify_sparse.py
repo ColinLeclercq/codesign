@@ -231,25 +231,34 @@ def certify_greater(A, M, b, c, Ac, Bc, nvec, Kfb, gam, sigma_of_w,
             if verbose:
                 print(f"   early witness at w={w0:+.4f}")
             return True, 0, float(w0)
-    P = SparsePencil(A, M, b, c, Ac, Bc, nvec, Kfb, gam)
-    CI = [(float(wlo), float(whi))]
-    nshift = 0
-    n_bisect = 0
+    # PARALLEL (STAGE6 6.30): the critical intervals are processed first in,
+    # first out and each shift depends only on its own interval, so the queue is
+    # a sequence of GENERATIONS; a whole generation goes to the full-model pool
+    # and the results are merged in queue order -- the same shifts, disks,
+    # counters and witness as one at a time.
+    par = _par_ok(A, M)
+    P = None if par else SparsePencil(A, M, b, c, Ac, Bc, nvec, Kfb, gam)
+    key = _pencil_key(b, c, Ac, Bc, nvec, Kfb, gam) if par else None
+    # CERT_SPLIT > 1 starts the queue with that many equal intervals: a first
+    # generation as wide as the pool (the default 1 is the serial algorithm;
+    # other shifts, the same rigorous cover and decision)
+    nsp = max(1, int(CERT_SPLIT))
+    ed = np.linspace(float(wlo), float(whi), nsp + 1)
+    CI = [(float(ed[i]), float(ed[i + 1])) for i in range(nsp)] if nsp > 1 else [(float(wlo), float(whi))]
+    st = dict(nshift=0, n_bisect=0)
     global LAST_INCOMPLETE
     LAST_INCOMPLETE = False
-    while CI and nshift < itmax:
-        lo, hi = CI.pop(0)
-        if hi - lo < eps_eigs:
-            continue
-        theta = 0.5 * (lo + hi)
-        nshift += 1
-        try:
-            lam = P.eigs_near(1j * theta, k=k)
-        except Exception:
+
+    def merge(lo, hi, theta, res):
+        # one shift's outcome, exactly the serial loop body: None to go on,
+        # or the return value
+        global N_DISK_UNTRUSTED, N_DISK_RETRIED, N_DISK_BISECTED, N_DISK_OVERSIZED, N_DISK_UNCOVERED, LAST_INCOMPLETE
+        if res[0] == 'err':
             if theta - lo > eps_eigs: CI.append((lo, theta))
             if hi - theta > eps_eigs: CI.append((theta, hi))
-            continue
-        if not getattr(P, 'last_converged', True):
+            return None
+        _, lam, conv, lam1, conv1 = res
+        if not conv:
             # 2026-09-25: the eigenvalue set is PARTIAL (ARPACK did not converge),
             # so the disk below is sized from eigenvalues that need not be the
             # nearest -- a possible false 'no crossing'.  Bisecting instead made
@@ -257,47 +266,39 @@ def certify_greater(A, M, b, c, Ac, Bc, nvec, Kfb, gam, sigma_of_w,
             # frequent), so the frozen behaviour is KEPT and the event COUNTED;
             # reduced pencils use hinf_dense_levelset instead.  To resolve at the
             # certification stack (cluster regression).
-            global N_DISK_UNTRUSTED, N_DISK_RETRIED, N_DISK_BISECTED
             N_DISK_UNTRUSTED += 1
             if DISK_STRICT:
                 # 2026-09-26 (STAGE5 30): the disk needs only the NEAREST
                 # eigenvalues -- ask ARPACK for a few, with a larger subspace and
-                # budget, on the factors already held; if it still does not
-                # converge, no disk: bisect the interval (budgeted).
+                # budget, on the factors already held (_shift_eval); if it still
+                # does not converge, no disk: bisect the interval (budgeted).
                 # k = 4: the even pencil's eigenvalues come in pairs (lambda,
                 # -conj(lambda)) mirrored across the imaginary axis, at EQUAL
                 # distance from every shift on it.
-                if n_bisect < DISK_BISECT_MAX:
-                    try:
-                        lam1 = P.eigs_near(1j * theta, k=4, maxiter=300, ncv=40)
-                    except Exception:
-                        lam1 = np.array([]); P.last_converged = False
-                else:
-                    lam1 = np.array([]); P.last_converged = False
-                if getattr(P, 'last_converged', True) and lam1.size:
+                if not (st['n_bisect'] < DISK_BISECT_MAX and lam1 is not None):
+                    lam1, conv1 = np.array([]), False
+                if conv1 and lam1.size:
                     N_DISK_RETRIED += 1
                     if lam.size and np.min(np.abs(lam - 1j * theta)) > np.min(np.abs(lam1 - 1j * theta)) * (1 + 1e-9):
-                        global N_DISK_OVERSIZED
                         N_DISK_OVERSIZED += 1          # the partial set's disk would have been too large
                     lam = np.concatenate([lam1, lam])
-                elif n_bisect < DISK_BISECT_MAX:
-                    n_bisect += 1
+                elif st['n_bisect'] < DISK_BISECT_MAX:
+                    st['n_bisect'] += 1
                     N_DISK_BISECTED += 1
                     if theta - lo > eps_eigs: CI.append((lo, theta))
                     if hi - theta > eps_eigs: CI.append((theta, hi))
-                    continue
+                    return None
                 else:
                     # bisection budget spent: this interval is NOT covered.  The
                     # frozen code sized a disk from the partial set -- or, when the
                     # set was EMPTY (ne=200 at w = 278: ARPACK converged no
                     # eigenvalue for any k, ncv, budget), dropped the interval
                     # unproven.  Strict: the decision is INCONCLUSIVE.
-                    global N_DISK_UNCOVERED
                     N_DISK_UNCOVERED += 1
                     LAST_INCOMPLETE = True
-                    return False, nshift, float('nan')
+                    return (False, st['nshift'], float('nan'))
         if lam.size == 0:
-            continue
+            return None
         scale = max(1.0, float(np.max(np.abs(lam))))
         for l in lam:
             if abs(l.real) < tol_imag * scale:
@@ -306,7 +307,7 @@ def certify_greater(A, M, b, c, Ac, Bc, nvec, Kfb, gam, sigma_of_w,
                     if sigma_of_w(w) > gam:
                         if verbose:
                             print(f"   witness: sigma({w:+.6f}) > {gam:.6f}")
-                        return True, nshift, float(w)
+                        return (True, st['nshift'], float(w))
         r = float(np.min(np.abs(lam - 1j * theta)))
         if verbose:
             print(f"   shift w={theta:+.4f}: nearest eig {r:.3e} -> remove "
@@ -315,7 +316,82 @@ def certify_greater(A, M, b, c, Ac, Bc, nvec, Kfb, gam, sigma_of_w,
             CI.append((lo, theta - r))
         if hi - (theta + r) > eps_eigs:
             CI.append((theta + r, hi))
-    return False, nshift, float('nan')
+        return None
+
+    while CI and st['nshift'] < itmax:
+        if not par:
+            lo, hi = CI.pop(0)
+            if hi - lo < eps_eigs:
+                continue
+            theta = 0.5 * (lo + hi)
+            st['nshift'] += 1
+            out = merge(lo, hi, theta, _shift_eval(P, theta, k, DISK_STRICT and st['n_bisect'] < DISK_BISECT_MAX))
+            if out is not None:
+                return out
+            continue
+        gen = [iv for iv in CI if iv[1] - iv[0] >= eps_eigs]
+        batch = gen[:itmax - st['nshift']]
+        rest = gen[len(batch):]
+        CI[:] = rest
+        import fullpar
+        res = fullpar.pmap(_shift_task, [(key, (b, c, Ac, Bc, nvec, Kfb, gam), 0.5 * (lo + hi), k, DISK_STRICT, {})
+                                         for lo, hi in batch])
+        for (lo, hi), r_ in zip(batch, res):
+            st['nshift'] += 1
+            out = merge(lo, hi, 0.5 * (lo + hi), r_)
+            if out is not None:
+                return out
+    return False, st['nshift'], float('nan')
+
+
+def _shift_eval(P, theta, k, retry, eig_kw=None):
+    """The pencil's eigenvalues nearest i theta: ('err',) if the solver raised,
+    else ('ok', lam, converged, lam1, converged1) with the strict retry (k = 4,
+    larger subspace) on the same factors when the first set is partial and
+    `retry` is set."""
+    try:
+        lam = P.eigs_near(1j * theta, k=k, **(eig_kw or {}))
+    except Exception:
+        return ('err',)
+    conv = getattr(P, 'last_converged', True)
+    lam1 = conv1 = None
+    if not conv and retry:
+        try:
+            lam1 = P.eigs_near(1j * theta, k=4, maxiter=300, ncv=40)
+            conv1 = getattr(P, 'last_converged', True)
+        except Exception:
+            lam1, conv1 = np.array([]), False
+    return ('ok', lam, conv, lam1, conv1)
+
+
+def _par_ok(A, M):
+    """The full-model pool is up and this is its plant."""
+    import fullpar
+    D = fullpar.CTX.get('D')
+    return fullpar.active() and D is not None and A is D.A and M is D.M
+
+
+def _pencil_key(b, c, Ac, Bc, nvec, Kfb, gam):
+    return (hash(np.ascontiguousarray(b).tobytes()), hash(np.ascontiguousarray(c).tobytes()),
+            hash(np.ascontiguousarray(Ac).tobytes()), hash(np.ascontiguousarray(Bc).tobytes()),
+            hash(np.ascontiguousarray(nvec).tobytes()), hash(np.ascontiguousarray(Kfb).tobytes()), float(gam))
+
+
+_WPENCIL = {}          # worker side: the last pencils, by design and level
+
+
+def _shift_task(t):
+    """One decision or location shift in a worker (fullpar)."""
+    import fullpar
+    key, (b, c, Ac, Bc, nvec, Kfb, gam), theta, k, retry, eig_kw = t
+    P = _WPENCIL.get(key)
+    if P is None:
+        D = fullpar.CTX['D']
+        P = SparsePencil(D.A, D.M, b, c, Ac, Bc, nvec, Kfb, gam)
+        while len(_WPENCIL) >= 2:
+            _WPENCIL.pop(next(iter(_WPENCIL)))
+        _WPENCIL[key] = P
+    return _shift_eval(P, theta, k, retry, eig_kw)
 
 
 N_DISK_UNTRUSTED = 0  # shifts whose eigenvalue set was PARTIAL (ARPACK did not converge)
@@ -375,13 +451,14 @@ def _climb_slope(f2, w0, s0, d0, lo, hi, xtol=1e-11, itmax=40):
     return best_w, best_s
 
 
+CERT_SPLIT = 1       # initial critical intervals of certify_greater (driver --cert-split; 1 = serial algorithm)
 NEAR_K = 8           # eigenvalues asked at each decision shift (driver --cert-near-k; 8 = the frozen value)
 CLIMB = 'brent'      # witness climb: 'brent' (frozen) or 'slope' (driver --cert-climb, needs slope_of_w)
 
 
 def hinf_certified_sparse(A, M, b, c, Ac, Bc, nvec, Kfb, sigma_of_w, gam_lb,
                           wlo=-4.0, whi=4.0, rtol=1e-4, itmax=60, k=None,
-                          eps_eigs=1e-6, verbose=False, slope_of_w=None):
+                          eps_eigs=1e-6, verbose=False, slope_of_w=None, sigma_many=None):
     """Certified L-infinity norm, built on the Schwerdtner-Mengi-Voigt decision
     procedure.
 
@@ -393,14 +470,16 @@ def hinf_certified_sparse(A, M, b, c, Ac, Bc, nvec, Kfb, sigma_of_w, gam_lb,
 
     Returns (gamma, w_star, n_certify_calls, certified).
     k: eigenvalues per decision shift (default NEAR_K); slope_of_w(w) -> (sigma,
-    dsigma/dw) enables the slope climb (CLIMB == 'slope').
+    dsigma/dw) enables the slope climb (CLIMB == 'slope'); sigma_many(ws) -> the
+    sigma_1 values at several frequencies at once (the full-model pool).
     """
     k = NEAR_K if k is None else int(k)
     gam = float(gam_lb); w_star = np.nan
     for it in range(itmax):
         gtest = gam * (1.0 + rtol)
         # decide, and get a witness frequency if one exists
-        P = SparsePencil(A, M, b, c, Ac, Bc, nvec, Kfb, gtest)
+        par = _par_ok(A, M)
+        P = None if par else SparsePencil(A, M, b, c, Ac, Bc, nvec, Kfb, gtest)
         found, _, w_wit = certify_greater(A, M, b, c, Ac, Bc, nvec, Kfb,
                                           gtest, sigma_of_w, wlo, whi, k=k,
                                           eps_eigs=eps_eigs, verbose=False)
@@ -414,11 +493,18 @@ def hinf_certified_sparse(A, M, b, c, Ac, Bc, nvec, Kfb, sigma_of_w, gam_lb,
             return gam, w_star, it + 1, True
         # a higher peak exists: locate it via the level set of the pencil
         ws = []
-        for th in np.linspace(wlo, whi, 9):
-            try:
-                lam = P.eigs_near(1j * th, k=max(k, 12))
-            except Exception:
+        ths = np.linspace(wlo, whi, 9)
+        if par:                               # the 9 location shifts in the full-model pool (STAGE6 6.30)
+            import fullpar
+            key = _pencil_key(b, c, Ac, Bc, nvec, Kfb, gtest)
+            locs = fullpar.pmap(_shift_task, [(key, (b, c, Ac, Bc, nvec, Kfb, gtest), float(th), max(k, 12), False, {})
+                                              for th in ths])
+        else:
+            locs = [_shift_eval(P, float(th), max(k, 12), False) for th in ths]
+        for res in locs:
+            if res[0] == 'err':
                 continue
+            lam = res[1]
             sc = max(1.0, float(np.max(np.abs(lam))) if lam.size else 1.0)
             ws += [float(l.imag) for l in lam
                    if abs(l.real) < 1e-8 * sc and wlo <= l.imag <= whi]
@@ -430,7 +516,7 @@ def hinf_certified_sparse(A, M, b, c, Ac, Bc, nvec, Kfb, sigma_of_w, gam_lb,
             cand = np.concatenate([cand, [w_wit]])
         if cand.size == 0:
             return gam, w_star, it + 1, False
-        vals = np.array([sigma_of_w(w) for w in cand])
+        vals = np.array(sigma_many(cand) if sigma_many is not None else [sigma_of_w(w) for w in cand])
         m = int(np.argmax(vals))
         wbest, gbest = float(cand[m]), float(vals[m])
         # Climb to the LOCAL PEAK, not just the best sampled point.  Without
@@ -686,7 +772,8 @@ def stability_and_abscissa(A, M, b, c, Ac, Bc, nvec, Kfb, eps=1e-3,
         tasks = [(As_, Ms_, b, c, Ac, Bc, nvec, Kfb, eps, shrink, k, eps_int,
                   itmax, float(edges[i]), float(edges[i + 1]))
                  for i in range(nseg)]
-        out = pool.map(_seg_worker, tasks, chunksize=1)
+        import fullpar
+        out = fullpar.pmap(_seg_worker, tasks) if pool is fullpar.POOL else pool.map(_seg_worker, tasks, chunksize=1)
         clear = all(o[0] for o in out)
         a_seen = max(o[1] for o in out)
         ns = sum(o[2] for o in out)
@@ -863,7 +950,9 @@ def continuation_step(A, M, b, c, Ac, Bc, nvec, Kfb, watch, eps=1e-3,
     if pool is not None and len(dedup) > 2:
         As_, Ms_ = _ship(A, M)
         tasks = [(As_, Ms_, b, c, Ac, Bc, nvec, Kfb, lam0, off, k) for lam0 in dedup]
-        tracked = pool.map(_track_worker, tasks, chunksize=1)
+        import fullpar
+        # through fullpar when it is its pool: the workers' factorisations are counted (STAGE6 6.30)
+        tracked = fullpar.pmap(_track_worker, tasks) if pool is fullpar.POOL else pool.map(_track_worker, tasks, chunksize=1)
     else:
         tracked = [_track_one(cl, arow, nvec, Kfb, lam0, off, k)
                    for lam0 in dedup]

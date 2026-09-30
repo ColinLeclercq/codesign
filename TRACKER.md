@@ -680,3 +680,13 @@ Start peaks on the reduced model: 9 within 5 % (-6.07 ... 8.41). Running
 | moderate items (no-progress certificate, band memo, start sweep, pool pickling, save repeats, gain_batch sweeps, 9 -> 6 G calls, Ts stack, gate on unacceptable candidates, enclosures, eigen-enrichment repeat) | done |
 | save-time winding implied by a complete final band check | done |
 | validation | invariants PASS (frozen 10.23128516441147); SISO agreement 4.3e-9 (column orth); atoms A/B same trajectory, -34 % wall; K+B+C order 5 full run 3.985055 (check_mimo PASS) vs 3.967890; old code from a 1e-12-perturbed start 3.996517: path spread 0.7 % |
+
+**2026-09-30 21:10 (user: parallelise the full-model tasks, validate on GL on 2 cores, speed-up vs n, 1 task = before) -- STAGE6 6.30**
+
+| item | status |
+|---|---|
+| one full-model pool (`fullpar`), forked at warm-up and before the rounds, auto re-fork on a changed mesh object | done |
+| winding segments, certificate generations + location shifts + candidate samples, full sweeps, enrichment anchors / eigen-anchors, band shifts and tiles, plant heights | done; bitwise = serial except the winding point count (count equal) |
+| 1 task = previous commit | done: component check ALL IDENTICAL; A/B round values and LU counts identical; invariants and SISO check pass |
+| speed-up | GL ne=100: pooled work 7-10 % of a run, x1.56-1.74 on it, ~3 % end to end; 2-D operator n = 1.6k-25.6k: sweeps 1.46 -> 1.81, winding ~1.7, certificate ~1.55, enrichment ~1.1; grows with n towards structural bounds (6.30) |
+| `--cert-split`, `--oracle-union new` | options for the cluster (default off, bit-identical defaults) |

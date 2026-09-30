@@ -1256,6 +1256,9 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
     cl = D.cl(b, c)
     sig = lambda w: cl.gain(w, arow, nvec, K, want_vectors=False)['sigma']
     sigd = lambda w: (lambda r_: (r_['sigma'], r_['gprime']))(cl.gain(float(w), arow, nvec, K))   # the slope climb (--cert-climb)
+    import fullpar
+    # several full samples at once: in the full-model pool when it is up (STAGE6 6.30)
+    sig_many = (lambda ws_: fullpar.sigmas(b, c, arow, nvec, K, ws_)) if fullpar.active() else None
     Ac = ctl.A_of(*arow); Bc = ctl.Bc_of(arow, D.r, D.mc)
     # PROVISIONAL rounds return here, BEFORE the full certificate (2026-09-24:
     # placed after it, provisional rounds paid for the full level-set
@@ -1300,7 +1303,8 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
             gam_lb = float(D.hinf(arow, nvec, K, b, c)[0])
     g, w, ncall, ok = csp.hinf_certified_sparse(
         D.A, D.M, b, c, Ac, Bc, nvec, K, sig, gam_lb=max(gam_lb, 1e-8),
-        wlo=wlo, whi=whi, rtol=float(getattr(certified_norm, 'rtol', 1e-4)), slope_of_w=sigd)
+        wlo=wlo, whi=whi, rtol=float(getattr(certified_norm, 'rtol', 1e-4)), slope_of_w=sigd,
+        sigma_many=sig_many)
     # ALL FREQUENCIES (STAGE6 6.21, --cert-all-w): the band is a heuristic; the
     # tail bound W (numerical range, sparse_spectrum.closed_loop_tail) proves
     # sigma_1 < g beyond W, and one more level-set question on [-W, W] at g
@@ -1325,7 +1329,8 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
                         continue
                     g_i, w_i, nc_i, ok_i = csp.hinf_certified_sparse(
                         D.A, D.M, b, c, Ac, Bc, nvec, K, sig, gam_lb=float(g),
-                        wlo=lo_, whi=hi_, rtol=float(getattr(certified_norm, 'rtol', 1e-4)), slope_of_w=sigd)
+                        wlo=lo_, whi=hi_, rtol=float(getattr(certified_norm, 'rtol', 1e-4)), slope_of_w=sigd,
+        sigma_many=sig_many)
                     nc2 += nc_i; ok2 = ok2 and ok_i
                     if g_i > g2:
                         g2, w2 = g_i, w_i
@@ -1351,7 +1356,7 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
         nsw = 241                      # no reduced model yet: the frozen reference
     if not _peak_ref:
         ws = np.linspace(wlo, whi, nsw)
-        gs = np.array([sig(x) for x in ws])
+        gs = np.array(sig_many(ws) if sig_many else [sig(x) for x in ws])
     if ro_ is not None and ro_.dim > 0:
         rc_ = ro_.make_cl(b, c, D.r, D.mc)
         wf = np.linspace(wlo, whi, 1201)
@@ -1369,7 +1374,7 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
             # the disagreement anchoring.  ~50 fewer full factorisations a round.
             _top = [float(wf[j]) for j in loc[np.argsort(-gf[loc])][:4]] if loc.size else []
             ws = np.array(sorted(set([round(float(x), 9) for x in list(peaks)[:12] + _top + [float(wf[int(np.argmax(gf))])]])))
-            gs = np.array([sig(x) for x in ws])
+            gs = np.array(sig_many(ws) if sig_many else [sig(x) for x in ws])
             _pin_lus(D, list(ws) + list(peaks) + [w])        # the next enrichment's anchors (STAGE6 6.29)
     else:
         i = np.arange(1, len(gs) - 1)
@@ -1388,7 +1393,7 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
             gh, wh = D.hinf(arow, nvec, K, b, c)[:2]
             if gh > float(g) * (1.0 + 1e-6):
                 W3 = np.linspace(3 * wlo, 3 * whi, 3601)
-                g3 = np.array([sig(x) for x in W3]); j3 = int(np.argmax(g3))
+                g3 = np.array(sig_many(W3) if sig_many else [sig(x) for x in W3]); j3 = int(np.argmax(g3))
                 where = 'OUTSIDE' if not (wlo <= W3[j3] <= whi) else 'INSIDE'
                 print(f"    band check: D.hinf {gh:.4f} at w={wh:+.3f} > certificate {float(g):.4f}; "
                       f"dense 3x-band sweep max {g3[j3]:.4f} at w={W3[j3]:+.3f} ({where} the band)", flush=True)
@@ -1546,6 +1551,11 @@ def main():
                     help='orthogonalisation of the reduced basis (reduced.py): block = BLAS3 passes against the '
                          'basis (default, STAGE6 6.29); column = the reference column-by-column version, for the '
                          'SISO agreement check against the siso-v1 tree')
+    ap.add_argument('--oracle-union', dest='oracle_union', choices=['full', 'new'], default='full',
+                    help="union Galerkin step of the reduced basis: full = W's columns all projected against V "
+                         "(default, bit-identical); new = only W's new columns (V = W before the step): O(n kd k_new) "
+                         "instead of O(n kd^2) per anchor, the serial part of the enrichment at the cavity; same span, "
+                         "rounding-level different basis (STAGE6 6.30)")
     ap.add_argument('--row-workers', dest='row_workers', type=int, default=0,
                     help='reduced-model rows (gain_batch) evaluated in this many FORKED processes besides this one, '
                          'frequencies split by w-blocks (reduced._RowPool; STAGE6 6.26). 0 = serial')
@@ -1661,6 +1671,10 @@ def main():
     ap.add_argument('--cert-near-k', dest='cert_near_k', type=int, default=8,
                     help='eigenvalues asked at each certificate decision shift (only the nearest sizes the disk; '
                          '8 = the frozen value, the nominal scripts use 2: 5-9x fewer solves, STAGE6 6.29)')
+    ap.add_argument('--cert-split', dest='cert_split', type=int, default=1,
+                    help='certificate decision: start from this many equal critical intervals (1 = the serial '
+                         'algorithm, bit for bit at any --nproc); ~--nproc widens the first generations for the '
+                         'full-model pool: other shifts, the same rigorous decision (STAGE6 6.30)')
     ap.add_argument('--cert-climb', dest='cert_climb', choices=['brent', 'slope'], default='brent',
                     help="certificate witness climb: brent (frozen, derivative-free to 1e-11) or slope (the "
                          "analytic g', ~10 evaluations instead of ~30-40; STAGE6 6.29)")
@@ -2110,9 +2124,23 @@ def main():
     except Exception:
         pass
     import sparse_lu; sparse_lu.ORDER = a.lu_order
-    import reduced as _reduced_mod; _reduced_mod.ORTH = a.oracle_orth
+    import reduced as _reduced_mod; _reduced_mod.ORTH = a.oracle_orth; _reduced_mod.UNION = a.oracle_union
     D = FECoDesign(ne=a.ne, r=a.r, sob_len=a.sob_len)
     import massops; massops.warmup(D.M)          # the mass matrix, factorised ONCE (STAGE6 6.29)
+    # THE FULL-MODEL POOL (fullpar, STAGE6 6.30).  Take the whole allocation
+    # unless told otherwise.  Forked here, after the plant and its mass LU, so
+    # the workers hold them; re-forked before the rounds with the reduced
+    # oracle's input bases.  --nproc 1: no pool, every task in this process
+    # (the serial code, bit for bit).
+    if a.nproc < 0:
+        try:
+            from parallel import ParallelOracle as _PO
+            a.nproc = _PO.available_cores()
+        except Exception:
+            a.nproc = 1
+    import fullpar
+    csp.register_plant(D.A, D.M)          # the continuation gate's tracked queries carry a tag (STAGE6 6.29)
+    fullpar.start(a.nproc, D=D)
     def _plant_warmup():
         # once per mesh, before the loop (STAGE6 6.29): the widest plant
         # enclosure (every narrower one is filtered from it) and the
@@ -2475,24 +2503,10 @@ def main():
             _stab_rec = dict(alpha_start=float(_al_start), alpha_end=float(_al_start),
                              evals=0, stabilised=True, wall=0.0, skipped=True)
 
-    # Take the whole allocation unless told otherwise.  |Omega| starts around
-    # 48 and grows past 120, so early calls leave workers idle while later ones
-    # use them all; sizing the pool to the node costs nothing and the constraint
-    # block is the one that scales.
-    if a.nproc < 0:
-        try:
-            from parallel import ParallelOracle as _PO
-            a.nproc = _PO.available_cores()
-        except Exception:
-            a.nproc = 1
-    _pool = None
     _par = None
     if a.nproc and a.nproc > 1:
-        import multiprocessing as _mp
-        csp.register_plant(D.A, D.M)          # forked workers hold them: tasks carry a tag (STAGE6 6.29)
-        _pool = _mp.get_context('fork').Pool(processes=a.nproc)
         nseg = max(1, a.cert_nseg)
-        D.cert_pool = _pool if nseg > 1 else None
+        D.cert_pool = fullpar.POOL if nseg > 1 else None
         D.cert_nseg = nseg
         try:
             if MIMO:
@@ -2508,10 +2522,10 @@ def main():
             print(f"  parallel constraints unavailable ({type(_e).__name__}); "
                   f"running them serially", flush=True)
             _par = None
-        print(f"pool: {a.nproc} workers for the |Omega| constraints; "
-              + (f"stability certificate SERIAL"
+        print(f"pool: {a.nproc} workers for the full-model tasks (fullpar) and the |Omega| constraints; "
+              + (f"abscissa certificate SERIAL"
                  if D.cert_nseg <= 1 else
-                 f"certificate in {D.cert_nseg} segments"), flush=True)
+                 f"abscissa certificate in {D.cert_nseg} segments"), flush=True)
 
     _band_last = dict(lam=[], info={})          # the last located set (dumps, records)
     n_allw_outside = [0]                         # all-w certificates that found the norm outside the band
@@ -2661,8 +2675,8 @@ def main():
             and len(_ls[0]) == len(wg) and np.allclose(_ls[0], wg, rtol=0, atol=1e-12):
         sg = np.asarray(_ls[1], float)       # the start certificate's full sweep, same grid (STAGE6 6.29)
     else:
-        sg = np.array([cl_.gain(float(w), arow_, nvec_, K_,
-                                want_vectors=False)['sigma'] for w in wg])
+        sg = np.array(fullpar.sigmas(b_, c_, arow_, nvec_, K_, wg) if fullpar.active() else
+                      [cl_.gain(float(w), arow_, nvec_, K_, want_vectors=False)['sigma'] for w in wg])
     keep = list(wg[sg >= a.seed_frac * sg.max()])
     # plus every local maximum, however small -- these are the frequencies the
     # exchange would otherwise have to discover one at a time
@@ -2830,8 +2844,14 @@ def main():
                   f"{', c %d' % _Pc.shape[1] if _Pc is not None else ''})", flush=True)
     certified_norm.sweep_n = int(a.cert_sweep)
     csp.DISK_STRICT = (a.cert_disk == 'strict')
-    csp.NEAR_K = int(a.cert_near_k); csp.CLIMB = a.cert_climb
+    csp.NEAR_K = int(a.cert_near_k); csp.CLIMB = a.cert_climb; csp.CERT_SPLIT = int(a.cert_split)
     certified_norm.rtol = float(a.cert_rtol)
+    if fullpar.active():
+        # re-fork the full-model pool now that the counters, the certificate
+        # settings and the reduced oracle's input bases exist (the enrichment
+        # anchors' tasks use them)
+        fullpar.start(a.nproc, D=D, Phi_b=getattr(_ro, 'Phi_b', None) if _ro is not None else None,
+                      Psi_c=getattr(_ro, 'Psi_c', None) if _ro is not None else None)
     if a.oracle == 'reduced':
         # MEMOISE the closed-loop abscissa certificate per design: the SQP's
         # certified validation and the gate certified the identical design one
@@ -2906,7 +2926,7 @@ def main():
         aa_, nn_, KK_, xa_, xs_, va_, vs_ = pk.unpack(z)
         bb_, cc_, *_ = D.bc(xa_, xs_, va_, vs_)
         clf = D.cl(bb_, cc_)
-        nadd = 0
+        todo = []
         for wf_ in freqs:
             w_ = round(float(wf_), 6)
             prev = _anchored.get(w_)
@@ -2914,8 +2934,12 @@ def main():
             if prev is not None and np.all(np.abs(np.asarray(prev[0]) - xa_) < 1e-9) \
                     and np.all(np.abs(np.asarray(prev[1]) - xs_) < 1e-9):
                 continue
-            _ro.enrich(clf, float(wf_), aa_, nn_, KK_, nvec_dirs=a.oracle_nvec)     # the exact frequency: its LU may be pinned
-            _anchored[w_] = (np.array(xa_, float), np.array(xs_, float)); nadd += 1
+            _anchored[w_] = (np.array(xa_, float), np.array(xs_, float))
+            todo.append(float(wf_))                 # the exact frequency: its LU may be pinned
+        # the anchors' factorisations in the full-model pool, the basis updates
+        # in order (reduced.enrich_many; serial without the pool)
+        _ro.enrich_many(clf, todo, aa_, nn_, KK_, nvec_dirs=a.oracle_nvec, bc=(bb_, cc_))
+        nadd = len(todo)
         if nadd:
             print(f"    oracle: +{nadd} anchor(s) ({why}) -> dim {_ro.dim}", flush=True)
         return nadd
@@ -2983,7 +3007,8 @@ def main():
                 _keep = sorted({round(float(x), 6): float(x) for x in _last_peaks}.values())   # exact frequencies (pinned LUs)
                 _lams_c = [complex(x) for x in (watch_cur or [])] + ([_al0_lam] if _al0_lam is not None else [])
                 _old = _ro.dim
-                _ro.compact(D.cl(_bb_, _cc_), _keep, _aa_, _nn_, _KK_, lams=_lams_c, nvec_dirs=a.oracle_nvec)
+                _ro.compact(D.cl(_bb_, _cc_), _keep, _aa_, _nn_, _KK_, lams=_lams_c, nvec_dirs=a.oracle_nvec,
+                            bc=(_bb_, _cc_))
                 _anchored.clear()
                 for w_ in _keep:
                     _anchored[round(w_, 6)] = (np.array(_xa_, float), np.array(_xs_, float))
@@ -3009,7 +3034,7 @@ def main():
             # the same design: their eigenvectors are in the basis (STAGE6 6.29;
             # repeating them only re-deflated the same columns)
             _lams = [l_ for l_ in _lams if l_ not in _eig_done]
-            _ne = _ro.enrich_eig(_clf_, _lams, _aa_, _nn_, _KK_) if _lams else 0
+            _ne = _ro.enrich_eig(_clf_, _lams, _aa_, _nn_, _KK_, bc=(_bb_, _cc_)) if _lams else 0
             _nlu += _ne
             _RED_AB_STATS['reduced'] = _RED_AB_STATS['fallback'] = 0
             if it == 0:
@@ -3474,7 +3499,7 @@ def main():
                 _okc, watch_cand, _nq, _nsp = continuation_gate(
                     D, pk, zwatch, zc, watch_cur, a.eps,
                     depth=a.cont_depth, motion_frac=a.cont_motion,
-                    motion_floor=a.cont_floor, kwatch=a.cont_k, pool=_pool)
+                    motion_floor=a.cont_floor, kwatch=a.cont_k, pool=fullpar.POOL)
             _nsp_seen = _nsp
             _ndz_used = float(np.linalg.norm(zc - zwatch))
             if not _okc and a.cont_accept_winding:
@@ -4378,11 +4403,8 @@ def main():
                 os.remove(_c)
         except OSError:
             pass
-    if _pool is not None:
-        try:
-            _pool.close(); _pool.join()
-        except Exception:
-            pass
+    print(fullpar.report(), flush=True)
+    fullpar.stop()
     print(json.dumps({k: summ[k] for k in
                       ('case', 'gamma', 'alpha', 'n_active', 'outer',
                        'nOmega', 'calls', 'seconds')}), flush=True)

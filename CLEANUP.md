@@ -359,3 +359,34 @@ warm-start search (`not MIMO`).
 **Fixed in the tools.**
 - `tools/check_siso_identity.sh`: the reference tree's loop drops the flags it
   predates.
+
+## 15. 2026-09-30: parallel full-model tasks (STAGE6 6.30)
+
+**Added.**
+- `fullpar.py`: `start`, `stop`, `pmap`, `sigmas`, `report`, the stamp check, and the lu_counter merge.
+- `winding_cert`: `_march` (the old in-line march, moved into a function unchanged), `_h_hot`, `_make_F`, `_seg_task`, `SEG_PER_WORKER`.
+- `certify_sparse`:
+  - `certify_greater` rewritten around `merge()`. Its serial branch is the old loop body; the generation branch is new.
+  - `_shift_eval`, `_shift_task`, `_par_ok`, `_pencil_key`, `CERT_SPLIT` (driver `--cert-split`);
+  - `hinf_certified_sparse(sigma_many=...)`.
+- `reduced`:
+  - `enrich_columns`, `enrich_many`, `enrich(cols=, project=)`, `enrich_eig(bc=)`, `compact(bc=)`;
+  - `_enrich_task`, `_eigvec_task`;
+  - `UNION` / `_union_k0` (driver `--oracle-union`).
+- `sparse_spectrum`: `_near_eval`, `_near_task`, `_pencil_of`, `_tile_task`, `_rect_task`, `eigs_in_rectangle(spec=)`.
+- Tools:
+  - `tools/check_parallel.py`, `tools/bench_parallel_2d.py`;
+  - `tools/ab_check.sh` `AB_EXTRA`;
+  - `results_parallel/bench_parallel_2d.json`.
+
+**Replaced.**
+- The driver's own `multiprocessing` pool. It is now fullpar's, forked at warm-up and again before the rounds. The continuation gate and the abscissa certificate segments use it through `fullpar.pmap`, so their LUs are counted.
+- `_enrich`'s per-anchor `enrich` calls -> `enrich_many`.
+
+**Removed.**
+- `ReducedOracle.enrich_shift`: never called (dead since the input-basis enrichment).
+- The per-anchor projection inside `enrich_many`: once per batch now.
+
+**Tried and not kept as a default.**
+- The union step on W's new columns only: not bitwise (per-column GEMM results depend on the column count). It is the `--oracle-union new` option instead.
+- More winding segments per worker: 4 is the best of 4 / 8 / 16 (516 / 524 / 550 points, 4.9 / 5.0 / 5.5 s at n = 6400).

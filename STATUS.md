@@ -59,7 +59,7 @@ factorisations per round, ~70 with reduced-model certification every 4th round.
 | 3 working-set policy (items 4, 5) | built and measured; **dropped** as default (see items 4-5) | not met, by design: the reduced oracle removed the cost it targeted |
 | 4 explicit constraints + inner solver (items 2, 8, 9) | **done**, on the reduced oracle rather than the full one (full-model rows were unaffordable at ne=200; every round is certified on the full model instead) | K+B+C rides the boundary unaided (face S); KKT residual 2.5e-5 / 5.1e-5 x gradient scale at the final designs; IPM-vs-SQP decided by structure, not overhead |
 | 5 projection oracle (algebra items 8, 11-13) | **done** for K, K+B+C, K+FB+FC at ne=100/200/400; 27-case validation -> **next: cluster**; item 11 done as an option (below) | 0 factorisations per inner evaluation (1 when the Ritz filter refuses); reduced vs certified 1e-13..1e-14 at the witness every round (asserted); trajectory test: model refreshed by anchoring each round, compacted at dim 120 |
-| 6 parallel certificates (algebra 4-6, 10; note item 6) | **next: parallel** | -- |
+| 6 parallel certificates (algebra 4-6, 10; note item 6) | **done** (STAGE6 6.30): one full-model pool (`fullpar`, `--nproc`) for the winding segments, certificate generations and shifts, full sweeps, enrichment anchors, band shifts/tiles, plant heights | 1 task bit-identical to before (A/B, component check, invariants, SISO); N tasks = 1 task except the winding point count |
 | 7 cavity readiness (algebra 1-3, 9) | **next: cavity** (GL-side parts done: tail certificate, exact tail constants) | -- |
 
 ## Optimisation note, section 9
@@ -73,7 +73,7 @@ factorisations per round, ~70 with reduced-model certification every 4th round.
 | 3 sigma_2 enrolment | **done** | full 2x2 Clarke block (cross terms), not only the diagonal |
 | 4 neighbour seeding (A-N satellites) | **dropped** | peak following + in-solve refinement track drifting peaks directly; with the reduced oracle the working set costs no factorisation |
 | 5 retirement, abs(Omega) <~ 50 | **dropped** | same; capping measured risky (certified 40.99 vs t 7.93 once) |
-| 6 parallel gate, replay-validated | **next: parallel** (stage 6) | |
+| 6 parallel gate, replay-validated | **done**: the gate's tracked queries and the winding count at acceptance run in the full-model pool; same decisions bit for bit (A/B at 1 and 2 tasks) | STAGE6 6.30 |
 | 7 controller-pole cap -> regulariser | **done** | band from the closed loop; certified over all frequencies at GL |
 | 8 inner solver, two levels (IPOPT vs SQP, restart overhead) | **done**: SQP (Clarabel, cones) | IPOPT **dropped**: the inner solve is no longer the bottleneck and the SQP represents the kinks exactly |
 | 9 Newton polish of the balance system | **dropped** | tried: unsafeguarded at a corner; the SQP reaches KKT residuals ~3e-5 |
@@ -90,13 +90,13 @@ factorisations per round, ~70 with reduced-model certification every 4th round.
 | 1 tail bound for a singular mass matrix | **next: cavity** | GL version done (`tools/tail_certificate.py`: every record certified over all frequencies) |
 | 2 once-per-mesh constants, tight and certified | GL: **done** (exact ||M^-1 A||, rigorous compensator resolvent bound); cavity Lanczos version **next: cavity** | |
 | 3 P_plant at cavity scale (Beyn) | **next: cavity** | |
-| 4 parallel winding certificate | **next: parallel** | now the largest single cost: 400-960 factorisations per refused continuation |
-| 5 `--rigor` Neumann segment bound | **next: parallel** (inside item 4) | |
-| 6 cost table, parallel column | **next: parallel** | |
+| 4 parallel winding certificate | **done**: segments between knots in the full-model pool, same counts (STAGE6 6.30) | ~80 % of the full-model LUs; bound ~40-60x on a 96-core node |
+| 5 `--rigor` Neumann segment bound | **left** (not needed for the parallel split; midpoint validation stays) -> cavity if a count is ever disputed | |
+| 6 cost table, parallel column | **done** for 2 cores and projected to 96 (STAGE6 6.30 tables) | |
 | 7 MIMO | **done** in the production loop (branch `mimo`, STAGE6): rank-(m+p) resolvent, certificates, det(I - K G) winding count, reduced oracle, packer (central / decentral / static), driver; SISO bit-identical | ne=100: atoms 3.877 -> 2.383533 (the two-pair floor, central and decentral); K+B+C 6.399 -> 5.566 (decentral) / 3.793 (central); prototype STAGE5 34.3 |
 | 8 projection oracle, GL prototype | **done** | 27-case validation -> cluster |
 | 9 subspace dimension in 2-D | **next: cavity** | GL: dim 95-142 with the cap at 120 |
-| 10 anchor-preconditioned winding tail | **next: parallel** | |
+| 10 anchor-preconditioned winding tail | **dropped**: superseded by the mesh-independent numerical-range tail (STAGE6 6.29) | |
 | 11 watch-list tracking by interpolation (Mengi) | **option** (`--cont-track reduced`) | validated against dense truth on 42 real steps (no cluster needed): same decisions 42/42, 0 false accepts, 11x fewer factorisations in the gate; not the GL default (ne=100 loop: 6.405826 vs 6.399134, a stop-rule difference, not a gate one); switch on at the cavity (STAGE5 33) |
 | 12 margin on the reduced model | **done** | = note item 2's cheap form |
 | 13 global optimisation, position cases | **dropped** | as note item (b) |
@@ -145,11 +145,11 @@ factorisations per round, ~70 with reduced-model certification every 4th round.
 
 ## Next
 
-0. Before 2-D scale: the 6.28 list is **done and validated** (STAGE6 6.29: reduced-space rows, M once at warm-up, mesh-independent winding tail, LU ordering in one place, certificate economies, blocked enrichment, the moderate items). Left: the parallel full-model tasks (winding segments, certificate shifts/intervals, anchors, peak sweep, band tiles, plant heights) and, at the cavity, MUMPS and the singular-M bounds.
+0. Before 2-D scale: the 6.28 list is **done and validated** (STAGE6 6.29: reduced-space rows, M once at warm-up, mesh-independent winding tail, LU ordering in one place, certificate economies, blocked enrichment, the moderate items). The parallel full-model tasks are done too (6.30). Left, at the cavity: MUMPS in `sparse_lu`, the singular-M (velocity mass) bounds.
 0. MIMO: done at ne=100 (STAGE6); open: the K+B+C centralized tail (-0.25 %/round when stopped) and a start from
    the 5.339317 decentralized record (cluster), multistart (the decentralized problems are multimodal),
    `--sqp-stat pred` for SISO (cluster regression), control-cost weight W K S (later, user). The compensator's
    face S carries over (kbc_dec entered it at round 0: the SISO optimum's pair on the line). Runs at ne >= 400 go to the cluster (user, 2026-09-28).
-1. Parallelisation (stage 6): winding count, gate and certificate shifts, reduced rows over workers.
+1. Parallelisation (stage 6): **done** (6.26 rows, 6.30 full-model tasks); on the cluster: `--nproc` = cores, `--row-workers` = cores - 1, `--cert-split` ~ cores, `--oracle-union new`.
 2. Cavity (stage 7): operators from the user's solver, MUMPS/PETSc, subspace dimension, residual-based disks; the tail bound and P_plant are sparse now (STAGE6 6.13, 6.19) -- to be measured at 3-D sizes.
 3. Cluster: 27-case regression, multistart over controllers.

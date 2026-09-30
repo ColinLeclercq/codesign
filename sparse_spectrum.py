@@ -226,21 +226,34 @@ def _tile(P, x0, x1, y0, y1, kmax, res_tol, depth, maxdepth, stats):
     return out, ok
 
 
-def eigs_in_rectangle(P, x0, x1, y0, y1, kmax=40, res_tol=1e-8, tile=2.0, maxdepth=6):
+def eigs_in_rectangle(P, x0, x1, y0, y1, kmax=40, res_tol=1e-8, tile=2.0, maxdepth=6, spec=None):
     """All eigenvalues of the pencil P in [x0, x1] x [y0, y1]: tiles of side
     <= `tile`, each either PROVED empty (free_radius) or exhausted by the
     nearest-k eigenvalues of its centre (the k-th lying outside the tile),
-    split otherwise.  Returns (eigenvalues, ok, stats)."""
+    split otherwise.  Returns (eigenvalues, ok, stats).  The tiles are
+    independent: with the full-model pool up and `spec` describing P
+    (('plant',) or ('cl', b, c, arow, nvec, K) of the registered plant), each
+    tile is exhausted in a worker; merged in tile order (STAGE6 6.30)."""
     nx = max(1, int(np.ceil((x1 - x0) / tile))); ny = max(1, int(np.ceil((y1 - y0) / tile)))
     xs = np.linspace(x0, x1, nx + 1); ys = np.linspace(y0, y1, ny + 1)
     stats = dict(shifts=0, free=0); out = []; ok = True
-    for i in range(nx):
-        for j in range(ny):
-            e_, o_ = _tile(P, xs[i], xs[i + 1], ys[j], ys[j + 1], kmax, res_tol, 0, maxdepth, stats)
-            ok = ok and o_
-            for l_ in e_:
-                if all(abs(l_ - q) > 1e-8 * max(1.0, abs(l_)) for q in out):
-                    out.append(l_)
+    boxes = [(xs[i], xs[i + 1], ys[j], ys[j + 1]) for i in range(nx) for j in range(ny)]
+    import fullpar
+    if spec is not None and fullpar.active() and len(boxes) > 1:
+        tiles = fullpar.pmap(_tile_task, [(spec, bx, kmax, res_tol, maxdepth) for bx in boxes])
+    else:
+        tiles = None
+    for iq, bx in enumerate(boxes):
+        if tiles is None:
+            e_, o_ = _tile(P, *bx, kmax, res_tol, 0, maxdepth, stats)
+        else:
+            e_, o_, st_ = tiles[iq]
+            for k_, v_ in st_.items():
+                stats[k_] = stats.get(k_, 0) + v_
+        ok = ok and o_
+        for l_ in e_:
+            if all(abs(l_ - q) > 1e-8 * max(1.0, abs(l_)) for q in out):
+                out.append(l_)
     return out, ok, stats
 
 
@@ -273,7 +286,10 @@ def plant_eigs_right(A, M, s0, cache=True):
     if s_far < s0:
         out = (np.zeros(0, complex), dict(info, ok=True, n_shifts=0))
     else:
-        lam, ok, st = eigs_in_rectangle(PlantPencil(A, M), s0, s_far, -Wlo, Whi)
+        import fullpar
+        _D = fullpar.CTX.get('D')
+        lam, ok, st = eigs_in_rectangle(PlantPencil(A, M), s0, s_far, -Wlo, Whi,
+                                        spec=(('plant',) if (_D is not None and A is _D.A and M is _D.M) else None))
         out = (np.array(sorted(lam, key=lambda z: -z.real), complex), dict(info, ok=ok, **st))
     if cache:
         _PLANT_CACHE[key] = out
@@ -329,17 +345,21 @@ def closed_loop_right_of(cl, arow, nvec, K, s0, plant_lam, Ac=None, extra=(), Ml
         if all(abs(z - q) > 1e-3 * max(1.0, abs(z)) for q in shifts):
             shifts.append(z)
     out = []; ns = 0
+    # the shifts are independent: in the full-model pool when it is up (STAGE6 6.30)
+    todo = [z for z in shifts if not (memo is not None and z in memo)]
+    import fullpar
+    _D = fullpar.CTX.get('D')
+    pre = {}
+    if fullpar.active() and _D is not None and cl.M is _D.M and cl.A is _D.A and len(todo) > 1:
+        pre = dict(zip(todo, fullpar.pmap(_near_task, [(cl.b, cl.c, arow, nvec, K, z, k) for z in todo])))
     for z in shifts:
         if memo is not None and z in memo:          # this design, this shift: already solved (memo per design)
             lam, res = memo[z]
         else:
-            try:
-                lam, res = nearest_k(P, z, k); ns += 1
-            except spla.ArpackNoConvergence:
-                try:
-                    lam, res = nearest_k(P, z, 2 * k); ns += 1
-                except spla.ArpackNoConvergence:
-                    continue
+            r_ = pre[z] if z in pre else _near_eval(P, z, k)
+            if r_ is None:
+                continue
+            lam, res = r_; ns += 1
             if memo is not None:
                 memo[z] = (lam, res)
         for l_, r_ in zip(lam, res):
@@ -358,12 +378,51 @@ def closed_loop_right_of(cl, arow, nvec, K, s0, plant_lam, Ac=None, extra=(), Ml
         if inner > 0.0:
             inb, ok, st = [], True, {}         # the loop's band decision: candidates only (tiling at save)
         else:
-            inb, ok, st = eigs_in_rectangle(P, s0, X, -band, band, tile=tile)
+            import fullpar
+            _D = fullpar.CTX.get('D')
+            inb, ok, st = eigs_in_rectangle(P, s0, X, -band, band, tile=tile,
+                                            spec=(('cl', cl.b, cl.c, arow, nvec, K)
+                                                  if (_D is not None and cl.M is _D.M and cl.A is _D.A) else None))
         info.update(band_ok=ok, **{'band_' + k_: v_ for k_, v_ in st.items()})
         for l_ in inb:
             if l_.real >= s0 and all(abs(l_ - q) > 1e-8 * max(1.0, abs(l_)) for q in out):
                 out.append(complex(l_))
     return sorted(out, key=lambda z: -z.real), info
+
+
+def _pencil_of(spec):
+    """The pencil a task describes, on the registered plant (fullpar)."""
+    import fullpar
+    D = fullpar.CTX['D']
+    if spec[0] == 'plant':
+        return PlantPencil(D.A, D.M)
+    _, b, c, arow, nvec, K = spec
+    return ClosedLoopPencil(D.cl(b, c), arow, nvec, K)
+
+
+def _tile_task(t):
+    spec, bx, kmax, res_tol, maxdepth = t
+    st = dict(shifts=0, free=0)
+    e_, o_ = _tile(_pencil_of(spec), *bx, kmax, res_tol, 0, maxdepth, st)
+    return e_, o_, st
+
+
+def _near_eval(P, z, k):
+    """nearest_k at z, with one retry at 2k; None if ARPACK fails twice."""
+    try:
+        return nearest_k(P, z, k)
+    except spla.ArpackNoConvergence:
+        try:
+            return nearest_k(P, z, 2 * k)
+        except spla.ArpackNoConvergence:
+            return None
+
+
+def _near_task(t):
+    """One refinement shift in a worker (fullpar)."""
+    import fullpar
+    b, c, arow, nvec, K, z, k = t
+    return _near_eval(ClosedLoopPencil(fullpar.CTX['D'].cl(b, c), arow, nvec, K), z, k)
 
 
 def closed_loop_set(A, M, cl, arow, nvec, K, s0, band, mc=1.0, count=True, extra=(), ctrl_exact=True, inner=0.0,
@@ -401,12 +460,30 @@ def plant_heights(A, M, depths=(0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1e3, 2e
     if key in _HEIGHT_CACHE:
         return _HEIGHT_CACHE[key]
     Hd = []
-    for d in depths:
-        sf, wl, wh = plant_rectangle(A, M, -float(d), taus=taus)
+    import fullpar
+    _D = fullpar.CTX.get('D')
+    if fullpar.active() and _D is not None and A is _D.A and M is _D.M and len(depths) > 1:
+        # the depths are independent: the first here (it computes s_far, which
+        # the workers are handed), the others in the full-model pool (STAGE6 6.30)
+        rects = [plant_rectangle(A, M, -float(depths[0]), taus=taus)]
+        sfe = _SFAR_CACHE[(id(A), id(M))][2]
+        rects += fullpar.pmap(_rect_task, [(-float(d), taus, sfe) for d in depths[1:]])
+    else:
+        rects = [plant_rectangle(A, M, -float(d), taus=taus) for d in depths]
+    for d, (sf, wl, wh) in zip(depths, rects):
         Hd.append((float(d), max(wl, wh) + 1e-7 * max(1.0, wl, wh) + 1e-6))
     out = (sf + 1e-7 * max(1.0, abs(sf)) + 1e-6, Hd)
     _HEIGHT_CACHE[key] = out
     return out
+
+
+def _rect_task(t):
+    """One depth of plant_heights in a worker (fullpar), with the parent's s_far."""
+    import fullpar
+    s0, taus, sfe = t
+    D = fullpar.CTX['D']
+    _SFAR_CACHE.setdefault((id(D.A), id(D.M)), (D.A, D.M, sfe))
+    return plant_rectangle(D.A, D.M, s0, taus=taus)
 
 
 def numrange_distance(w, s_far, Hd, line=0.0):
