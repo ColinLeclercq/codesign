@@ -48,6 +48,7 @@ from __future__ import annotations
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+import sparse_lu
 from closedloop_sparse import ClosedLoopResolvent
 from scipy.optimize import minimize_scalar
 
@@ -144,7 +145,7 @@ class SparsePencil:
         if self._lu is not None and self._shift == s:
             return self._lu                                # same shift: the factors are held (retries)
         S = (self.AHb - s * self.EH).tocsc()
-        self._lu = spla.splu(S)
+        self._lu = sparse_lu.factor(S)
         self._shift = s
         self._Y = self._lu.solve(self.UH)                  # S^{-1} U_H
         self._G = np.eye(self.VH.shape[0], dtype=complex) + self.VH @ self._Y
@@ -328,9 +329,59 @@ DISK_STRICT = False   # driver --cert-disk strict (the nominal scripts); False =
 N_CLIMB_FAILED = 0   # times the decision found a higher level set the climb could not locate (reported inconclusive)
 
 
+def _climb_slope(f2, w0, s0, d0, lo, hi, xtol=1e-11, itmax=40):
+    """Local maximum of sigma on [lo, hi] from w0 by the SLOPE (STAGE6 6.29):
+    f2(w) -> (sigma, dsigma/dw) from one gain evaluation (the analytic g').
+    Walk uphill with doubling steps until the slope changes sign (a bracket),
+    then safeguarded secant on the slope (bisection when the secant leaves the
+    bracket).  ~10 evaluations where the bounded Brent search to xatol 1e-11
+    used ~30-40, each a new frequency (a full factorisation).  Returns the best
+    (w, sigma) evaluated."""
+    best_w, best_s = w0, s0
+    if d0 == 0.0:
+        return best_w, best_s
+    dirn = 1.0 if d0 > 0 else -1.0
+    h = max(1e-6, 1e-3 * (hi - lo))
+    wa, da = w0, d0
+    wb = db = None
+    for _ in range(itmax):
+        wt = min(max(wa + dirn * h, lo), hi)
+        if wt == wa:
+            return best_w, best_s
+        st, dt = f2(wt)
+        if st > best_s:
+            best_w, best_s = wt, st
+        if dt * dirn <= 0:                  # the slope changed sign: [wa, wt] brackets the top
+            wb, db = wt, dt
+            break
+        wa, da = wt, dt; h *= 2.0
+    if wb is None:
+        return best_w, best_s
+    for _ in range(itmax):                  # zero of the slope in [wa, wb] (da, db of opposite sign)
+        if abs(wb - wa) <= xtol * max(1.0, abs(wa)):
+            break
+        wn = wa - da * (wb - wa) / (db - da) if db != da else 0.5 * (wa + wb)
+        if not (min(wa, wb) < wn < max(wa, wb)):
+            wn = 0.5 * (wa + wb)
+        sn, dn = f2(wn)
+        if sn > best_s:
+            best_w, best_s = wn, sn
+        if dn == 0.0:
+            break
+        if (dn > 0) == (da > 0):
+            wa, da = wn, dn
+        else:
+            wb, db = wn, dn
+    return best_w, best_s
+
+
+NEAR_K = 8           # eigenvalues asked at each decision shift (driver --cert-near-k; 8 = the frozen value)
+CLIMB = 'brent'      # witness climb: 'brent' (frozen) or 'slope' (driver --cert-climb, needs slope_of_w)
+
+
 def hinf_certified_sparse(A, M, b, c, Ac, Bc, nvec, Kfb, sigma_of_w, gam_lb,
-                          wlo=-4.0, whi=4.0, rtol=1e-4, itmax=60, k=8,
-                          eps_eigs=1e-6, verbose=False):
+                          wlo=-4.0, whi=4.0, rtol=1e-4, itmax=60, k=None,
+                          eps_eigs=1e-6, verbose=False, slope_of_w=None):
     """Certified L-infinity norm, built on the Schwerdtner-Mengi-Voigt decision
     procedure.
 
@@ -341,7 +392,10 @@ def hinf_certified_sparse(A, M, b, c, Ac, Bc, nvec, Kfb, sigma_of_w, gam_lb,
     `False` the current value is certified as the global norm to within `rtol`.
 
     Returns (gamma, w_star, n_certify_calls, certified).
+    k: eigenvalues per decision shift (default NEAR_K); slope_of_w(w) -> (sigma,
+    dsigma/dw) enables the slope climb (CLIMB == 'slope').
     """
+    k = NEAR_K if k is None else int(k)
     gam = float(gam_lb); w_star = np.nan
     for it in range(itmax):
         gtest = gam * (1.0 + rtol)
@@ -385,11 +439,17 @@ def hinf_certified_sparse(A, M, b, c, Ac, Bc, nvec, Kfb, sigma_of_w, gam_lb,
         # has 3 active frequencies and hit the iteration cap).
         span = max(1e-6, 0.05 * (whi - wlo))
         try:
-            rr = minimize_scalar(lambda w: -sigma_of_w(w),
-                                 bounds=(wbest - span, wbest + span),
-                                 method='bounded', options=dict(xatol=1e-11))
-            if -float(rr.fun) > gbest:
-                wbest, gbest = float(rr.x), -float(rr.fun)
+            if CLIMB == 'slope' and slope_of_w is not None:
+                s0_, d0_ = slope_of_w(wbest)
+                wc_, gc_ = _climb_slope(slope_of_w, wbest, s0_, d0_, wbest - span, wbest + span)
+                if gc_ > gbest:
+                    wbest, gbest = wc_, gc_
+            else:
+                rr = minimize_scalar(lambda w: -sigma_of_w(w),
+                                     bounds=(wbest - span, wbest + span),
+                                     method='bounded', options=dict(xatol=1e-11))
+                if -float(rr.fun) > gbest:
+                    wbest, gbest = float(rr.x), -float(rr.fun)
         except Exception:
             pass
         if gbest <= gam * (1 + 1e-12):
@@ -421,7 +481,7 @@ def band_from_open_loop(A, M, wmax_scan=8.0, nscan=161, margin=2.0,
     g = np.empty(nscan)
     for i, w in enumerate(ws):
         S = ((1j * w) * M - A).tocsc()
-        lu = spla.splu(S)
+        lu = sparse_lu.factor(S)
         op = spla.LinearOperator(
             (n, n), matvec=lambda v: M @ lu.solve(M @ lu.solve(v), trans='H'),
             dtype=complex)
@@ -622,7 +682,8 @@ def stability_and_abscissa(A, M, b, c, Ac, Bc, nvec, Kfb, eps=1e-3,
         _lo = -8.0 if wlo is None else wlo
         _hi = 8.0 if whi is None else whi
         edges = np.linspace(_lo, _hi, nseg + 1)
-        tasks = [(A, M, b, c, Ac, Bc, nvec, Kfb, eps, shrink, k, eps_int,
+        As_, Ms_ = _ship(A, M)
+        tasks = [(As_, Ms_, b, c, Ac, Bc, nvec, Kfb, eps, shrink, k, eps_int,
                   itmax, float(edges[i]), float(edges[i + 1]))
                  for i in range(nseg)]
         out = pool.map(_seg_worker, tasks, chunksize=1)
@@ -716,11 +777,33 @@ def _track_one(cl, arow, nvec, Kfb, lam0, off, k=1):
     return None
 
 
+# The plant matrices of the run, registered BEFORE the process pool is forked
+# (register_plant): the workers already hold them, so tasks carry a tag instead
+# of pickling A and M through the pipe for every task (STAGE6 6.29: hundreds of
+# MB per task at n ~ 1e6).
+_PLANT = {}
+
+
+def register_plant(A, M):
+    _PLANT.clear(); _PLANT.update(A=A, M=M)
+
+
+def _ship(A, M):
+    return (('__plant__', 'A'), ('__plant__', 'M')) if (_PLANT.get('A') is A and _PLANT.get('M') is M) else (A, M)
+
+
+def _land(A, M):
+    if isinstance(A, tuple) and A[:1] == ('__plant__',):
+        return _PLANT['A'], _PLANT['M']
+    return A, M
+
+
 def _track_worker(t):
     """One tracked eigenvalue, for a process pool.  Queries at different old
     locations are independent (each is its own LU + Arnoldi), so they scale
     like the |Omega| constraints do."""
     (A, M, b, c, Ac, Bc, nvec, Kfb, lam0, off, k) = t
+    A, M = _land(A, M)
     cl, arow = _cl_arow(M, A, b, c, Ac, Bc)
     return _track_one(cl, arow, nvec, Kfb, complex(lam0), off, k)
 
@@ -778,7 +861,8 @@ def continuation_step(A, M, b, c, Ac, Bc, nvec, Kfb, watch, eps=1e-3,
     # the tracked queries are INDEPENDENT (one LU + short Arnoldi each), so
     # they parallelise exactly like the |Omega| constraints; serial otherwise.
     if pool is not None and len(dedup) > 2:
-        tasks = [(A, M, b, c, Ac, Bc, nvec, Kfb, lam0, off, k) for lam0 in dedup]
+        As_, Ms_ = _ship(A, M)
+        tasks = [(As_, Ms_, b, c, Ac, Bc, nvec, Kfb, lam0, off, k) for lam0 in dedup]
         tracked = pool.map(_track_worker, tasks, chunksize=1)
     else:
         tracked = [_track_one(cl, arow, nvec, Kfb, lam0, off, k)
@@ -807,6 +891,7 @@ def _seg_worker(t):
     """One segment of the line, for a process pool.  Independent by construction."""
     (A, M, b, c, Ac, Bc, nvec, Kfb, eps, shrink, k, eps_int, itmax,
      lo, hi) = t
+    A, M = _land(A, M)
     return stability_and_abscissa(A, M, b, c, Ac, Bc, nvec, Kfb, eps=eps,
                                   shrink=shrink, k=k, eps_int=eps_int,
                                   itmax=itmax, wlo=lo, whi=hi)

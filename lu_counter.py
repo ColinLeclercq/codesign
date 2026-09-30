@@ -70,7 +70,7 @@ def _caller(skip: int = 3) -> str:
         imm = None
         while f is not None:
             fn = f.f_code.co_filename
-            if not fn.endswith("lu_counter.py"):
+            if not fn.endswith(("lu_counter.py", "sparse_lu.py", "massops.py")):
                 fn = fn.rsplit("/", 1)[-1]
                 if imm is None:
                     imm = f"{fn}:{f.f_lineno}"

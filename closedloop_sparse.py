@@ -48,6 +48,7 @@ from __future__ import annotations
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+import sparse_lu
 
 def _safe_solve(Gm, rhs):
     """Solve with the Woodbury capacitance, tolerating a singular one.
@@ -137,12 +138,15 @@ class ClosedLoopResolvent:
     def setup(self, omega, arow, nvec, K):
         n, r = self.n, self.r
         cache = getattr(self, 'lu_cache', None)
+        pin = getattr(self, 'lu_pin', None)
         key = complex(omega)
         if cache is not None and key in cache:
             lu = cache[key]                         # reused across iterates
+        elif pin is not None and key in pin:
+            lu = pin[key]                           # pinned anchor frequency (STAGE6 6.29)
         else:
             Sp = (1j * omega) * self.M - self.A
-            lu = spla.splu(Sp.tocsc())              # the ONLY factorisation
+            lu = sparse_lu.factor(Sp)               # the ONLY factorisation (sparse_lu: ordering)
             self.nfac += 1
             # MEMORY.  Each sparse LU is a full factorisation: negligible for
             # a banded 1-D operator (a few MB) but of order 1 GB for a 2-D

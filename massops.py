@@ -23,7 +23,7 @@ subspace (STAGE6 6.29, open item).
 import time
 import numpy as np
 import scipy.sparse as sp
-import scipy.sparse.linalg as spla
+import sparse_lu
 
 _REG = {}          # id(M) -> dict(M=M, c=complex LU, r=real LU)
 
@@ -38,14 +38,14 @@ def _entry(M):
 def lu(M):
     e = _entry(M)
     if e['c'] is None:
-        e['c'] = spla.splu(sp.csc_matrix(M).astype(complex))
+        e['c'] = sparse_lu.factor(sp.csc_matrix(M).astype(complex))
     return e['c']
 
 
 def lu_real(M):
     e = _entry(M)
     if e['r'] is None:
-        e['r'] = spla.splu(sp.csc_matrix(M).tocsc())
+        e['r'] = sparse_lu.factor(sp.csc_matrix(M))
     return e['r']
 
 

@@ -75,6 +75,11 @@ class FECoDesign:
         # Sobolev (H1) gradient preconditioner  P = (M + sob_len^2 K)^{-1} M .
         # sob_len = 0 recovers the plain L2 gradient.  Factor once.
         self._lu_cache = {}          # omega -> sparse LU of S_p
+        # PINNED LUs (STAGE6 6.29): the certificate's peak-reference frequencies
+        # are the next round's enrichment anchors; their factors are held from the
+        # peak sweep to the enrichment (the 8-entry FIFO had evicted them: every
+        # anchor was factorised 2-4 times a round).
+        self._lu_pin = {}
         # warm-started alpha: tracked rightmost eigenvalue + bookkeeping
         self._warm_lam = None
         self._warm_fp = None
@@ -115,8 +120,8 @@ class FECoDesign:
         if self.sob_len <= 0:
             return None
         if self._Hlu_f is None:
-            import scipy.sparse.linalg as _spla
-            self._Hlu_f = _spla.splu((self.M + (self.sob_len ** 2) * self.Kstiff).tocsc())
+            import sparse_lu
+            self._Hlu_f = sparse_lu.factor(self.M + (self.sob_len ** 2) * self.Kstiff)
         return self._Hlu_f
 
 
@@ -253,6 +258,7 @@ class FECoDesign:
             R = ClosedLoopResolventMIMO(self.M, self.A, b, c, r=self.r, mc=self.mc)
             R.lu_cache = self._lu_cache
             R.lu_cache_max = self.lu_cache_max
+            R.lu_pin = self._lu_pin
             return R
         R = ClosedLoopResolvent(self.M, self.A, b, c, r=self.r, mc=self.mc)
         # S_p(omega) = i*omega*M - A is INDEPENDENT of the design: the
@@ -264,6 +270,7 @@ class FECoDesign:
         # cavity scale, where the LU dominates.
         R.lu_cache = self._lu_cache
         R.lu_cache_max = self.lu_cache_max
+        R.lu_pin = self._lu_pin
         return R
 
 

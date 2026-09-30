@@ -1221,12 +1221,41 @@ def _reduced_cert(*args, **kw):
 REDUCED_CERT = 'dense'
 
 
+def _sigmas(cl_, ws, arow, nvec, K):
+    """sigma_1 at every frequency: one batched call on a reduced model
+    (reduced.gain_batch, values only), the per-frequency path otherwise
+    (STAGE6 6.29: the loop's reduced sweeps -- up to 4001 points -- were Python
+    loops of single-frequency calls)."""
+    ws = np.asarray(ws, float)
+    if hasattr(cl_, 'gain_batch'):
+        return np.array([r_['sigma'] for r_ in cl_.gain_batch(ws, arow, nvec, K, np.zeros(len(ws), bool))], float)
+    return np.array([cl_.gain(float(w), arow, nvec, K, want_vectors=False)['sigma'] for w in ws], float)
+
+
+PIN_MAX = 24          # pinned anchor LUs held from a certificate to the next enrichment (STAGE6 6.29)
+
+
+def _pin_lus(D, freqs):
+    """Hold the factors of iwM - A at these frequencies (those still in the
+    FIFO cache) until the next enrichment consumes them; at most PIN_MAX."""
+    if not getattr(certified_norm, 'pin', False):
+        return
+    for x in freqs:
+        if not np.isfinite(x):
+            continue
+        key = complex(float(x))
+        lu = D._lu_cache.get(key)
+        if lu is not None and key not in D._lu_pin and len(D._lu_pin) < PIN_MAX:
+            D._lu_pin[key] = lu
+
+
 def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
     """Certified max_omega sigma_1 and a witness frequency, for the outer loop."""
     arow, nvec, K, xa, xs, va, vs = pk.unpack(z)
     b, c, *_ = D.bc(xa, xs, va, vs)
     cl = D.cl(b, c)
     sig = lambda w: cl.gain(w, arow, nvec, K, want_vectors=False)['sigma']
+    sigd = lambda w: (lambda r_: (r_['sigma'], r_['gprime']))(cl.gain(float(w), arow, nvec, K))   # the slope climb (--cert-climb)
     Ac = ctl.A_of(*arow); Bc = ctl.Bc_of(arow, D.r, D.mc)
     # PROVISIONAL rounds return here, BEFORE the full certificate (2026-09-24:
     # placed after it, provisional rounds paid for the full level-set
@@ -1266,13 +1295,12 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
             # 0.99 x it is a safe strictly positive lower bound, for free
             # (D.hinf cost ~12 full factorisations)
             rc0 = ro0.make_cl(b, c, D.r, D.mc)
-            gam_lb = 0.99 * max(rc0.gain(float(x), arow, nvec, K, want_vectors=False)['sigma']
-                                for x in np.linspace(wlo, whi, 241))
+            gam_lb = 0.99 * float(np.max(_sigmas(rc0, np.linspace(wlo, whi, 241), arow, nvec, K)))
         else:
             gam_lb = float(D.hinf(arow, nvec, K, b, c)[0])
     g, w, ncall, ok = csp.hinf_certified_sparse(
         D.A, D.M, b, c, Ac, Bc, nvec, K, sig, gam_lb=max(gam_lb, 1e-8),
-        wlo=wlo, whi=whi, rtol=float(getattr(certified_norm, 'rtol', 1e-4)))
+        wlo=wlo, whi=whi, rtol=float(getattr(certified_norm, 'rtol', 1e-4)), slope_of_w=sigd)
     # ALL FREQUENCIES (STAGE6 6.21, --cert-all-w): the band is a heuristic; the
     # tail bound W (numerical range, sparse_spectrum.closed_loop_tail) proves
     # sigma_1 < g beyond W, and one more level-set question on [-W, W] at g
@@ -1287,9 +1315,20 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
             Wt, _ = _ss.closed_loop_tail(D.A, D.M, b, c, Ac, Bc, nvec, K, float(g))
             aw = dict(W=float(Wt), band=float(max(whi, -wlo)))
             if np.isfinite(Wt) and Wt > max(whi, -wlo):
-                g2, w2, nc2, ok2 = csp.hinf_certified_sparse(
-                    D.A, D.M, b, c, Ac, Bc, nvec, K, sig, gam_lb=float(g),
-                    wlo=-Wt, whi=Wt, rtol=float(getattr(certified_norm, 'rtol', 1e-4)))
+                # ONLY OUTSIDE THE BAND (STAGE6 6.29): [wlo, whi] was just proved
+                # free of sigma_1 = g (1 + rtol), the level this question asks at
+                # first; a peak found outside climbs within its own interval, and
+                # the rest stays proved at the lower level.
+                g2, w2, nc2, ok2 = float(g), w, 0, True
+                for (lo_, hi_) in ((-Wt, wlo), (whi, Wt)):
+                    if hi_ - lo_ <= 1e-9:
+                        continue
+                    g_i, w_i, nc_i, ok_i = csp.hinf_certified_sparse(
+                        D.A, D.M, b, c, Ac, Bc, nvec, K, sig, gam_lb=float(g),
+                        wlo=lo_, whi=hi_, rtol=float(getattr(certified_norm, 'rtol', 1e-4)), slope_of_w=sigd)
+                    nc2 += nc_i; ok2 = ok2 and ok_i
+                    if g_i > g2:
+                        g2, w2 = g_i, w_i
                 aw.update(g=float(g2), w=float(w2), calls=int(nc2), ok=bool(ok2))
                 if ok2 and g2 > g * (1.0 + 1e-9):
                     g, w = g2, w2
@@ -1316,7 +1355,7 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
     if ro_ is not None and ro_.dim > 0:
         rc_ = ro_.make_cl(b, c, D.r, D.mc)
         wf = np.linspace(wlo, whi, 1201)
-        gf = np.array([rc_.gain(float(x), arow, nvec, K, want_vectors=False)['sigma'] for x in wf])
+        gf = _sigmas(rc_, wf, arow, nvec, K)
         i = np.arange(1, len(gf) - 1)
         loc = i[(gf[i] >= gf[i - 1]) & (gf[i] >= gf[i + 1])]
         _sr2 = lambda w_: rc_.gain(float(w_), arow, nvec, K, want_vectors=False)['sigma']
@@ -1331,6 +1370,7 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
             _top = [float(wf[j]) for j in loc[np.argsort(-gf[loc])][:4]] if loc.size else []
             ws = np.array(sorted(set([round(float(x), 9) for x in list(peaks)[:12] + _top + [float(wf[int(np.argmax(gf))])]])))
             gs = np.array([sig(x) for x in ws])
+            _pin_lus(D, list(ws) + list(peaks) + [w])        # the next enrichment's anchors (STAGE6 6.29)
     else:
         i = np.arange(1, len(gs) - 1)
         loc = i[(gs[i] >= gs[i - 1]) & (gs[i] >= gs[i + 1])]
@@ -1498,6 +1538,14 @@ def main():
     ap.add_argument('--inner-adapt-tol', dest='inner_adapt_tol', type=float, default=0.05)
     ap.add_argument('--inner-maxit-min', dest='inner_maxit_min', type=int, default=5)
     ap.add_argument('--inner-maxit-max', dest='inner_maxit_max', type=int, default=40)
+    ap.add_argument('--lu-order', dest='lu_order', choices=['colamd', 'mmd_at_plus_a'], default='colamd',
+                    help='column ordering of every full-model sparse LU (sparse_lu.py): colamd = scipy default '
+                         '(bit-identical frozen path); mmd_at_plus_a = symmetric minimum degree for 2-D/3-D FE '
+                         'matrices (STAGE6 6.29)')
+    ap.add_argument('--oracle-orth', dest='oracle_orth', choices=['block', 'column'], default='block',
+                    help='orthogonalisation of the reduced basis (reduced.py): block = BLAS3 passes against the '
+                         'basis (default, STAGE6 6.29); column = the reference column-by-column version, for the '
+                         'SISO agreement check against the siso-v1 tree')
     ap.add_argument('--row-workers', dest='row_workers', type=int, default=0,
                     help='reduced-model rows (gain_batch) evaluated in this many FORKED processes besides this one, '
                          'frequencies split by w-blocks (reduced._RowPool; STAGE6 6.26). 0 = serial')
@@ -1610,6 +1658,12 @@ def main():
                     help='winding counts (continuation acceptance, save-time certificate): plain = track f (frozen); '
                          'exact = track det(sI - A_c) f and add the compensator\'s phase in closed form -- conclusive '
                          'when compensator poles sit on the counting line (face S), STAGE5 30')
+    ap.add_argument('--cert-near-k', dest='cert_near_k', type=int, default=8,
+                    help='eigenvalues asked at each certificate decision shift (only the nearest sizes the disk; '
+                         '8 = the frozen value, the nominal scripts use 2: 5-9x fewer solves, STAGE6 6.29)')
+    ap.add_argument('--cert-climb', dest='cert_climb', choices=['brent', 'slope'], default='brent',
+                    help="certificate witness climb: brent (frozen, derivative-free to 1e-11) or slope (the "
+                         "analytic g', ~10 evaluations instead of ~30-40; STAGE6 6.29)")
     ap.add_argument('--cert-disk', dest='cert_disk', choices=['frozen', 'strict'], default='frozen',
                     help='sparse certificate, ARPACK returned a PARTIAL eigenvalue set at a shift: frozen = size the '
                          'eigenvalue-free disk from it anyway (counted); strict = retry for the nearest eigenvalue '
@@ -2055,8 +2109,23 @@ def main():
             a.r = _r
     except Exception:
         pass
+    import sparse_lu; sparse_lu.ORDER = a.lu_order
+    import reduced as _reduced_mod; _reduced_mod.ORTH = a.oracle_orth
     D = FECoDesign(ne=a.ne, r=a.r, sob_len=a.sob_len)
     import massops; massops.warmup(D.M)          # the mass matrix, factorised ONCE (STAGE6 6.29)
+    def _plant_warmup():
+        # once per mesh, before the loop (STAGE6 6.29): the widest plant
+        # enclosure (every narrower one is filtered from it) and the
+        # numerical-range heights of the tail bounds
+        import sparse_spectrum as _ss
+        _t0 = time.time()
+        _ss.plant_eigs_right(D.A, D.M, -float(a.band_recut) - 0.6)
+        _t1 = time.time()
+        _ss.plant_heights(D.A, D.M)
+        print(f"warm-up: plant enclosure right of {-float(a.band_recut) - 0.6:+.2f} ({_t1 - _t0:.1f} s), "
+              f"numerical-range heights ({time.time() - _t1:.1f} s)", flush=True)
+    if MIMO:
+        _plant_warmup()
     D.alpha_argmax = (a.alpha_argmax == 'on')     # eigenvector of the eigenvalue ATTAINING alpha (2026-09-22)
     D.alpha_warm = bool(a.alpha_warm)
     D.alpha_warm_maxstep = a.alpha_maxstep
@@ -2420,6 +2489,7 @@ def main():
     _par = None
     if a.nproc and a.nproc > 1:
         import multiprocessing as _mp
+        csp.register_plant(D.A, D.M)          # forked workers hold them: tasks carry a tag (STAGE6 6.29)
         _pool = _mp.get_context('fork').Pool(processes=a.nproc)
         nseg = max(1, a.cert_nseg)
         D.cert_pool = _pool if nseg > 1 else None
@@ -2447,6 +2517,8 @@ def main():
     n_allw_outside = [0]                         # all-w certificates that found the norm outside the band
     n_band_incomplete = [0]
 
+    _band_memo = {}
+
     def band_from_closedloop(arow_, nvec_, K_, b_, c_, count=False, extra=()):
         """Half-width covering every closed-loop eigenvalue that can raise a
         peak: those with Re >= -a.band_recut.  1.5x their max |Im|, plus the
@@ -2465,10 +2537,16 @@ def main():
         tested (STAGE6 6.13)."""
         import sparse_spectrum as _ss
         half = max(a.whi, -a.wlo)
+        # the same design is asked twice a round (band-first, then at acceptance
+        # with the harvested eigenvalues): the shift results are memoised per
+        # design (STAGE6 6.29)
+        _key = tuple(np.asarray(x_).tobytes() for x_ in (*arow_[:3], np.asarray(arow_[3]) if len(arow_) > 3 else 0, nvec_, K_, b_, c_))
+        if _band_memo.get('key') != _key:
+            _band_memo.clear(); _band_memo['key'] = _key; _band_memo['shifts'] = {}
         lam, info = _ss.closed_loop_set(D.A, D.M, D.cl(b_, c_), arow_, nvec_, K_, -a.band_recut,
                                         band=half, mc=D.mc, count=count, inner=max(0.0, (half - a.wpad) / 1.5 - 0.5),
                                         extra=[complex(z_) for z_ in extra],
-                                        ctrl_exact=(a.wind_ctrl == 'exact'))
+                                        ctrl_exact=(a.wind_ctrl == 'exact'), memo=_band_memo['shifts'])
         _band_last.update(lam=list(lam), info=info)
         D._band_last_lam = list(lam)
         if count and not info.get('complete'):
@@ -2578,8 +2656,13 @@ def main():
     # sigma_1 is significant.
     dw = a.seed_dw
     wg = np.linspace(a.wlo, a.whi, max(int((a.whi - a.wlo) / dw) + 1, 64))
-    sg = np.array([cl_.gain(float(w), arow_, nvec_, K_,
-                            want_vectors=False)['sigma'] for w in wg])
+    _ls, _lz = getattr(certified_norm, 'last_sweep', None), getattr(certified_norm, 'last_sweep_z', None)
+    if _ls is not None and _lz is not None and np.array_equal(_lz, np.asarray(z, float)) \
+            and len(_ls[0]) == len(wg) and np.allclose(_ls[0], wg, rtol=0, atol=1e-12):
+        sg = np.asarray(_ls[1], float)       # the start certificate's full sweep, same grid (STAGE6 6.29)
+    else:
+        sg = np.array([cl_.gain(float(w), arow_, nvec_, K_,
+                                want_vectors=False)['sigma'] for w in wg])
     keep = list(wg[sg >= a.seed_frac * sg.max()])
     # plus every local maximum, however small -- these are the frequencies the
     # exchange would otherwise have to discover one at a time
@@ -2684,6 +2767,8 @@ def main():
     exch_stalled = False
     per_outer = (a.wall - (time.time() - t_start) - 45.) / max(a.outer, 1)
     gbest, zbest, albest = g0, z.copy(), None
+    _wind_best = None       # (design, acceptance-time winding count right of -eps) of the best design
+    _allw_best = None       # (design, level, acceptance-time all-w certificate) of the best design
     # ---- continuation anchor ----
     # The whole stability argument is a chain: stable start, then no crossing
     # on any accepted step.  The chain is only as good as its anchor, so the
@@ -2719,6 +2804,7 @@ def main():
             print(f"rows: gain_batch in {_red_mod.ROW_WORKERS} forked worker(s) + this process", flush=True)
         _ro = ReducedOracle(D)
         certified_norm.oracle = _ro          # fine reduced sweep for the peaks list
+        certified_norm.pin = True            # hold the anchor LUs to the next enrichment (STAGE6 6.29)
         if a.oracle_inputs == 'on':
             # position-robust model (STAGE5 5): input bases over the position
             # ranges + union Galerkin; for K-only cases the Galerkin alone
@@ -2744,6 +2830,7 @@ def main():
                   f"{', c %d' % _Pc.shape[1] if _Pc is not None else ''})", flush=True)
     certified_norm.sweep_n = int(a.cert_sweep)
     csp.DISK_STRICT = (a.cert_disk == 'strict')
+    csp.NEAR_K = int(a.cert_near_k); csp.CLIMB = a.cert_climb
     certified_norm.rtol = float(a.cert_rtol)
     if a.oracle == 'reduced':
         # MEMOISE the closed-loop abscissa certificate per design: the SQP's
@@ -2804,7 +2891,7 @@ def main():
         worst = np.inf
         for _ in range(rounds):
             rc_ = _ro.make_cl(bb_, cc_, D.r, D.mc)
-            rs_ = np.array([rc_.gain(float(x), aa_, nn_, KK_, want_vectors=False)['sigma'] for x in _ws_])
+            rs_ = _sigmas(rc_, _ws_, aa_, nn_, KK_)
             rel = np.where(_mask, np.abs(rs_ - _gs_) / np.maximum(_gs_, 1e-12), 0.0)
             worst = float(rel.max())
             cand = [int(j) for j in np.argsort(-rel)[:a.oracle_sweep_anchors] if rel[j] > a.oracle_sweep_tol]
@@ -2820,14 +2907,14 @@ def main():
         bb_, cc_, *_ = D.bc(xa_, xs_, va_, vs_)
         clf = D.cl(bb_, cc_)
         nadd = 0
-        for w_ in freqs:
-            w_ = round(float(w_), 6)
+        for wf_ in freqs:
+            w_ = round(float(wf_), 6)
             prev = _anchored.get(w_)
             # re-anchor when the fields moved (Woodbury columns refresh)
             if prev is not None and np.all(np.abs(np.asarray(prev[0]) - xa_) < 1e-9) \
                     and np.all(np.abs(np.asarray(prev[1]) - xs_) < 1e-9):
                 continue
-            _ro.enrich(clf, w_, aa_, nn_, KK_, nvec_dirs=a.oracle_nvec)
+            _ro.enrich(clf, float(wf_), aa_, nn_, KK_, nvec_dirs=a.oracle_nvec)     # the exact frequency: its LU may be pinned
             _anchored[w_] = (np.array(xa_, float), np.array(xs_, float)); nadd += 1
         if nadd:
             print(f"    oracle: +{nadd} anchor(s) ({why}) -> dim {_ro.dim}", flush=True)
@@ -2886,24 +2973,26 @@ def main():
         # ---- STAGE 5: anchor the reduced oracle for this round --------------
         if _ro is not None:
             _nlu = 0
+            _eig_done = set()                    # eigenvalues whose eigenvectors are already in (compaction)
             if _ro.dim > a.oracle_dim_cap:
                 # restart from the current design's certified peaks and the
                 # watch-list eigenvalues: the basis carries directions from
                 # designs long left behind
                 _aa_, _nn_, _KK_, _xa_, _xs_, _va_, _vs_ = pk.unpack(zbest)
                 _bb_, _cc_, *_ = D.bc(_xa_, _xs_, _va_, _vs_)
-                _keep = sorted(set(round(float(x), 6) for x in _last_peaks)
-                               | set(round(float(w), 6) for w in sorted(Omega)[:0]))
+                _keep = sorted({round(float(x), 6): float(x) for x in _last_peaks}.values())   # exact frequencies (pinned LUs)
                 _lams_c = [complex(x) for x in (watch_cur or [])] + ([_al0_lam] if _al0_lam is not None else [])
                 _old = _ro.dim
                 _ro.compact(D.cl(_bb_, _cc_), _keep, _aa_, _nn_, _KK_, lams=_lams_c, nvec_dirs=a.oracle_nvec)
                 _anchored.clear()
                 for w_ in _keep:
-                    _anchored[w_] = (np.array(_xa_, float), np.array(_xs_, float))
+                    _anchored[round(w_, 6)] = (np.array(_xa_, float), np.array(_xs_, float))
                 _nlu += len(_keep) + len(_lams_c)
+                _eig_done = set(_lams_c)
                 print(f"    oracle: basis compacted {_old} -> {_ro.dim}", flush=True)
                 _sweep_anchor(zbest)
             _nlu += _enrich(_last_peaks, zbest, "certified peaks")
+            D._lu_pin.clear()                    # the anchors are consumed (STAGE6 6.29)
             # phase 2: the near-line eigenvectors (the continuation watch list
             # plus the accepted design's rightmost) into the basis, one
             # factorisation each, so the reduced pencil's rightmost Ritz value
@@ -2916,7 +3005,11 @@ def main():
                 _al0_lam = complex(_lam0_start)   # round 0: the start certificate's rightmost eigenvalue
             if _al0_lam is not None:
                 _lams.append(_al0_lam)
-            _ne = _ro.enrich_eig(_clf_, _lams, _aa_, _nn_, _KK_)
+            # a compaction this round already factorised at these eigenvalues for
+            # the same design: their eigenvectors are in the basis (STAGE6 6.29;
+            # repeating them only re-deflated the same columns)
+            _lams = [l_ for l_ in _lams if l_ not in _eig_done]
+            _ne = _ro.enrich_eig(_clf_, _lams, _aa_, _nn_, _KK_) if _lams else 0
             _nlu += _ne
             _RED_AB_STATS['reduced'] = _RED_AB_STATS['fallback'] = 0
             if it == 0:
@@ -2948,7 +3041,7 @@ def main():
             _Wg = np.union1d(np.asarray(sorted(Omega), float), np.linspace(a.wlo, a.whi, 241))
             for _g in range(a.oracle_greedy):
                 _rc = _ro.make_cl(_bb_, _cc_, D.r, D.mc)
-                _red = np.array([_rc.gain(float(w), _aa_, _nn_, _KK_, want_vectors=False)['sigma'] for w in _Wg])
+                _red = _sigmas(_rc, _Wg, _aa_, _nn_, _KK_)
                 _j = int(np.argmax(_red))
                 if _red[_j] <= gbest * (1.0 + a.oracle_tol) or any(abs(_Wg[_j] - q) < 1e-6 for q in _anchored):
                     break
@@ -2962,8 +3055,7 @@ def main():
             _bb2, _cc2, *_ = D.bc(_xa2, _xs2, _va2, _vs2)
             # on the reduced oracle when it exists: |Omega| full LUs per round otherwise
             _cl2 = _ro.make_cl(_bb2, _cc2, D.r, D.mc) if _ro is not None else D.cl(_bb2, _cc2)
-            _s1 = np.array([_cl2.gain(float(w), _aa2, _nn2, _KK2,
-                                      want_vectors=False)['sigma'] for w in _W])
+            _s1 = _sigmas(_cl2, _W, _aa2, _nn2, _KK2)
             _gref = float(np.max(_s1))
             _new = set()
             for _i, _w in enumerate(_W):
@@ -3208,143 +3300,154 @@ def main():
         _seen_c = []
         _wind_done = None                 # the candidate's winding count, once computed
         _gate_reduced = False
-        if _prov and a.prov_gate == 'reduced':
-            # PROVISIONAL GATE (2026-09-24): the closed-loop abscissa from the
-            # reduced pencil's near-line Ritz pairs, each residual-checked
-            # against the FULL operator (products, no factorisation); no
-            # rectangle certificate, no continuation.  Completeness near the
-            # line is established at the next full round, which re-certifies
-            # the provisional best's stability (rollback if it fails).
-            try:
-                _rcg = _ro.make_cl(bb, cc, D.r, D.mc)
-                _pairs_g = _rcg.near_line_pairs(aa, nn, KK, a.eps, reach=1.0,
-                                                res_tol=a.sqp_row_res_tol, mc=D.mc)
-                if _pairs_g:
-                    _jg = int(np.argmax([p_['lam'].real for p_ in _pairs_g]))
-                    al_c = float(_pairs_g[_jg]['lam'].real); _lam_c = complex(_pairs_g[_jg]['lam'])
-                    _clr_c = True; _gate_reduced = True
-            except Exception as _eg:
-                print(f"    provisional gate: reduced abscissa failed ({type(_eg).__name__}); full gate", flush=True)
-        if not _gate_reduced:
-            al_c, _lam_c, _, _, _, _clr_c = D.alpha_certified(aa, nn, KK, bb, cc,
-                                                              eps=a.eps,
-                                                              eigs_seen=_seen_c)
-        if _ro is not None and _lam_c is not None and np.isfinite(complex(_lam_c)):
-            _al0_lam = complex(_lam_c)     # the gate's rightmost eigenvalue: next round's eigen-anchor
-        # CLOSED-LOOP PAIR AT THE LINE (2026-09-26, detector only): two distinct
-        # closed-loop eigenvalues within 1e-3 of the line and 1e-2 of each other
-        # -- the closed-loop analogue of the compensator's double pole, which has
-        # no face-S treatment (per-eigenvalue rows + the 2x2 Hermite block).
-        # Never hit on GL; counted so that the cavity runs show it if it happens.
-        _nl = []
-        for _x in (_seen_c or []):
-            _x = complex(_x)
-            if abs(_x.real + a.eps) <= 1e-3 and all(abs(_x - _y) > 1e-9 for _y in _nl):
-                _nl.append(_x)
-        if any(abs(_x - _y) < 1e-2 for _i, _x in enumerate(_nl) for _y in _nl[_i + 1:]):
-            n_clpair[0] += 1
-            print(f"    NOTE: closed-loop pair at the line: {[f'{_x:.5f}' for _x in _nl]}", flush=True)
-        if best.get('z') is not None and (best.get('clr') != bool(_clr_c)
-                                          or abs(float(best.get('al') or 0.0) - al_c) > 1e-6):
-            # the inner solve and the gate certified the SAME design and got
-            # different answers -- this must not happen silently
-            print(f"    CERTIFICATE DISAGREEMENT at the returned iterate: inner "
-                  f"alpha={best.get('al')} clear={best.get('clr')} vs gate "
-                  f"alpha={al_c:+.4f} clear={bool(_clr_c)}", flush=True)
-        # THE CERTIFICATE IS THE AUTHORITY, alpha_krylov is only an aid.
-        #
-        # This was wired the other way round and it was the wrong way: the gate
-        # consulted the certificate ONLY when alpha_krylov had already declared
-        # the point feasible, so a certificate could confirm a "yes" but never
-        # overturn a false "no".  alpha_krylov is a heuristic shift set with no
-        # residual verification, and it was measured returning +1.3529 for a
-        # design whose true alpha is -0.4862 -- rejecting a perfectly good warm
-        # start and, through the phase chain, discarding it.
-        #
-        # So: if the rectangle certificate proves the region
-        # Re in [-eps, s_far] free of eigenvalues, the design IS feasible,
-        # whatever alpha_krylov says.  alpha_krylov is consulted only when the
-        # certificate is unavailable.
-        feasible = None
-        if a.rect_cert and not _gate_reduced:
-            try:
-                # the part of the line the (memoised) abscissa certificate of
-                # this design already proved clear is not swept again
-                # (reduced-oracle loop only; 2026-09-26, STAGE5 30)
-                _skip = None
-                if _ro is not None and bool(_clr_c) and int(getattr(D, 'cert_nseg', 1)) <= 1:
-                    _skip = csp.stability_region(D.A, D.M, ctl.A_of(*aa))[:2]
-                okr, why, nsr = csp.stability_gate(
-                    D.A, D.M, bb, cc, ctl.A_of(*aa),
-                    ctl.Bc_of(aa, D.r, D.mc), nn, KK, eps=a.eps,
-                    shrink=a.cert_shrink, wlo=a.wlo, whi=a.whi,
-                    ctrl_max=a.ctrl_max, skip=_skip)
-                if not okr and why.startswith('INCONCLUSIVE') and _wind_accept:
-                    # MIMO (STAGE6 6.5): with the loops at high gain the band follows a
-                    # closed-loop branch out to |Im| ~ 850 (the band grew to +-1269 at
-                    # ne=100 atoms) and the line sweep runs out of shifts on it (85
-                    # uncovered); the exact winding count, global in w, decides.
-                    _o = _wind_right_of_margin(bb, cc, aa, nn, KK, _seen_c)
-                    if _o is not None:
-                        _wind_done = _o
-                        if _o['ok'] and _o['count'] == 0:
-                            print(f"    gate: line sweep {why}; winding count right of Re=-eps is 0 "
-                                  f"({_o['npts']} pts): clear", flush=True)
-                            okr = True; n_gate_wind[0] += 1
-                # BOTH must hold.  The certificate can only CONFIRM
-                # feasibility, never overrule a positive abscissa: its region is
-                # bounded and alpha is now trustworthy.
-                feasible = bool(okr) and (al_c + a.eps <= 0.0)
-                if okr and al_c + a.eps > 0.0:
-                    print(f"    REJECTED: alpha={al_c:+.4f} > -eps, although "
-                          f"the bounded region looks clear ({why})", flush=True)
-                elif not okr:
-                    if why.startswith('INCONCLUSIVE'):
-                        n_inconcl[0] += 1
-                    else:
-                        n_located[0] += 1
-                    print(f"    gate REJECTS: {why}"
-                          f"  (certificate alpha {al_c:+.4f})", flush=True)
-            except Exception as e:
-                print(f"    gate unavailable ({type(e).__name__}); "
-                      f"falling back to alpha_krylov", flush=True)
-        if feasible is None:
-            feasible = (al_c + a.eps <= 0.0)
-        # POLE CAP, enforced at acceptance and not only inside the inner solve.
-        # The inner |Im lambda(A_c)| <= wmax row is a soft constraint the
-        # solver can end in violation of: one sweep saved KSP+B+C with a
-        # controller pole at |Im| = 138 against a cap of 20, i.e. a resonance
-        # far outside every band any downstream tool certifies.  Exact and
-        # essentially free (r x r).
-        if feasible and a.ctrl_imcap == 'on' and flags['K'] and \
-                flags.get('ctrl_mode', 'full') in ('full', 'sp'):
-            _polc = np.linalg.eigvals(ctl.A_of(*aa))
-            _imc = float(np.max(np.abs(_polc.imag))) if _polc.size else 0.0
-            if _imc > wmax * (1.0 + 1e-6):
-                feasible = False
-                n_located[0] += 1
-                print(f"    gate REJECTS: controller pole |Im|={_imc:.2f} "
-                      f"beyond the cap {wmax:.2f} (soft inner constraint "
-                      f"ended violated)", flush=True)
-        # BAND FROM THE CLOSED LOOP (--ctrl-imcap off).  The |Im| cap on the
-        # compensator was never a design requirement; it kept the compensator's
-        # poles inside the band the exchange samples and the peak certificate
-        # scans, because a peak outside that band is invisible to both.  But
-        # controller poles are only a proxy for closed-loop poles -- the loop
-        # moves them -- so with the cap off the band is set from the thing
-        # that actually makes peaks: closed-loop eigenvalues near the axis.
-        # Dense at GL (n+r ~ 400, milliseconds); the analytic tail bound that
-        # makes this scale-free belongs to stage 5.  The band only grows.
-        if feasible and a.ctrl_imcap == 'off':
-            try:
-                _hw = band_from_closedloop(aa, nn, KK, bb, cc, extra=_seen_c or [])
-                if _hw > a.whi * (1.0 + 1e-9):
-                    print(f"    band widened to [{-_hw:.2f}, {_hw:.2f}] from "
-                          f"the closed-loop spectrum", flush=True)
-                    a.wlo, a.whi = -_hw, _hw
-            except Exception as _e:
-                print(f"    band_from_closedloop unavailable "
-                      f"({type(_e).__name__}); band kept", flush=True)
+        # CANDIDATES THAT CANNOT BE ACCEPTED (STAGE6 6.29): a certified value not
+        # below the best (or an inconclusive certificate) is refused whatever the
+        # gate says, and the next round restarts from the best.  The gate -- the
+        # abscissa certificate, the line sweep, the band from the closed loop, all
+        # full-model factorisations -- is skipped for it (it ran on every
+        # candidate).
+        _acceptable = bool(ok) and bool(np.isfinite(g)) and g < gbest * (1 - 1e-12)
+        al_c, _lam_c, _clr_c, feasible = float('nan'), None, None, False
+        if not _acceptable:
+            print(f"    gate skipped: certified {g:.6f} cannot be accepted (best {gbest:.6f})", flush=True)
+        if _acceptable:
+            if _prov and a.prov_gate == 'reduced':
+                # PROVISIONAL GATE (2026-09-24): the closed-loop abscissa from the
+                # reduced pencil's near-line Ritz pairs, each residual-checked
+                # against the FULL operator (products, no factorisation); no
+                # rectangle certificate, no continuation.  Completeness near the
+                # line is established at the next full round, which re-certifies
+                # the provisional best's stability (rollback if it fails).
+                try:
+                    _rcg = _ro.make_cl(bb, cc, D.r, D.mc)
+                    _pairs_g = _rcg.near_line_pairs(aa, nn, KK, a.eps, reach=1.0,
+                                                    res_tol=a.sqp_row_res_tol, mc=D.mc)
+                    if _pairs_g:
+                        _jg = int(np.argmax([p_['lam'].real for p_ in _pairs_g]))
+                        al_c = float(_pairs_g[_jg]['lam'].real); _lam_c = complex(_pairs_g[_jg]['lam'])
+                        _clr_c = True; _gate_reduced = True
+                except Exception as _eg:
+                    print(f"    provisional gate: reduced abscissa failed ({type(_eg).__name__}); full gate", flush=True)
+            if not _gate_reduced:
+                al_c, _lam_c, _, _, _, _clr_c = D.alpha_certified(aa, nn, KK, bb, cc,
+                                                                  eps=a.eps,
+                                                                  eigs_seen=_seen_c)
+            if _ro is not None and _lam_c is not None and np.isfinite(complex(_lam_c)):
+                _al0_lam = complex(_lam_c)     # the gate's rightmost eigenvalue: next round's eigen-anchor
+            # CLOSED-LOOP PAIR AT THE LINE (2026-09-26, detector only): two distinct
+            # closed-loop eigenvalues within 1e-3 of the line and 1e-2 of each other
+            # -- the closed-loop analogue of the compensator's double pole, which has
+            # no face-S treatment (per-eigenvalue rows + the 2x2 Hermite block).
+            # Never hit on GL; counted so that the cavity runs show it if it happens.
+            _nl = []
+            for _x in (_seen_c or []):
+                _x = complex(_x)
+                if abs(_x.real + a.eps) <= 1e-3 and all(abs(_x - _y) > 1e-9 for _y in _nl):
+                    _nl.append(_x)
+            if any(abs(_x - _y) < 1e-2 for _i, _x in enumerate(_nl) for _y in _nl[_i + 1:]):
+                n_clpair[0] += 1
+                print(f"    NOTE: closed-loop pair at the line: {[f'{_x:.5f}' for _x in _nl]}", flush=True)
+            if best.get('z') is not None and (best.get('clr') != bool(_clr_c)
+                                              or abs(float(best.get('al') or 0.0) - al_c) > 1e-6):
+                # the inner solve and the gate certified the SAME design and got
+                # different answers -- this must not happen silently
+                print(f"    CERTIFICATE DISAGREEMENT at the returned iterate: inner "
+                      f"alpha={best.get('al')} clear={best.get('clr')} vs gate "
+                      f"alpha={al_c:+.4f} clear={bool(_clr_c)}", flush=True)
+            # THE CERTIFICATE IS THE AUTHORITY, alpha_krylov is only an aid.
+            #
+            # This was wired the other way round and it was the wrong way: the gate
+            # consulted the certificate ONLY when alpha_krylov had already declared
+            # the point feasible, so a certificate could confirm a "yes" but never
+            # overturn a false "no".  alpha_krylov is a heuristic shift set with no
+            # residual verification, and it was measured returning +1.3529 for a
+            # design whose true alpha is -0.4862 -- rejecting a perfectly good warm
+            # start and, through the phase chain, discarding it.
+            #
+            # So: if the rectangle certificate proves the region
+            # Re in [-eps, s_far] free of eigenvalues, the design IS feasible,
+            # whatever alpha_krylov says.  alpha_krylov is consulted only when the
+            # certificate is unavailable.
+            feasible = None
+            if a.rect_cert and not _gate_reduced:
+                try:
+                    # the part of the line the (memoised) abscissa certificate of
+                    # this design already proved clear is not swept again
+                    # (reduced-oracle loop only; 2026-09-26, STAGE5 30)
+                    _skip = None
+                    if _ro is not None and bool(_clr_c) and int(getattr(D, 'cert_nseg', 1)) <= 1:
+                        _skip = csp.stability_region(D.A, D.M, ctl.A_of(*aa))[:2]
+                    okr, why, nsr = csp.stability_gate(
+                        D.A, D.M, bb, cc, ctl.A_of(*aa),
+                        ctl.Bc_of(aa, D.r, D.mc), nn, KK, eps=a.eps,
+                        shrink=a.cert_shrink, wlo=a.wlo, whi=a.whi,
+                        ctrl_max=a.ctrl_max, skip=_skip)
+                    if not okr and why.startswith('INCONCLUSIVE') and _wind_accept:
+                        # MIMO (STAGE6 6.5): with the loops at high gain the band follows a
+                        # closed-loop branch out to |Im| ~ 850 (the band grew to +-1269 at
+                        # ne=100 atoms) and the line sweep runs out of shifts on it (85
+                        # uncovered); the exact winding count, global in w, decides.
+                        _o = _wind_right_of_margin(bb, cc, aa, nn, KK, _seen_c)
+                        if _o is not None:
+                            _wind_done = _o
+                            if _o['ok'] and _o['count'] == 0:
+                                print(f"    gate: line sweep {why}; winding count right of Re=-eps is 0 "
+                                      f"({_o['npts']} pts): clear", flush=True)
+                                okr = True; n_gate_wind[0] += 1
+                    # BOTH must hold.  The certificate can only CONFIRM
+                    # feasibility, never overrule a positive abscissa: its region is
+                    # bounded and alpha is now trustworthy.
+                    feasible = bool(okr) and (al_c + a.eps <= 0.0)
+                    if okr and al_c + a.eps > 0.0:
+                        print(f"    REJECTED: alpha={al_c:+.4f} > -eps, although "
+                              f"the bounded region looks clear ({why})", flush=True)
+                    elif not okr:
+                        if why.startswith('INCONCLUSIVE'):
+                            n_inconcl[0] += 1
+                        else:
+                            n_located[0] += 1
+                        print(f"    gate REJECTS: {why}"
+                              f"  (certificate alpha {al_c:+.4f})", flush=True)
+                except Exception as e:
+                    print(f"    gate unavailable ({type(e).__name__}); "
+                          f"falling back to alpha_krylov", flush=True)
+            if feasible is None:
+                feasible = (al_c + a.eps <= 0.0)
+            # POLE CAP, enforced at acceptance and not only inside the inner solve.
+            # The inner |Im lambda(A_c)| <= wmax row is a soft constraint the
+            # solver can end in violation of: one sweep saved KSP+B+C with a
+            # controller pole at |Im| = 138 against a cap of 20, i.e. a resonance
+            # far outside every band any downstream tool certifies.  Exact and
+            # essentially free (r x r).
+            if feasible and a.ctrl_imcap == 'on' and flags['K'] and \
+                    flags.get('ctrl_mode', 'full') in ('full', 'sp'):
+                _polc = np.linalg.eigvals(ctl.A_of(*aa))
+                _imc = float(np.max(np.abs(_polc.imag))) if _polc.size else 0.0
+                if _imc > wmax * (1.0 + 1e-6):
+                    feasible = False
+                    n_located[0] += 1
+                    print(f"    gate REJECTS: controller pole |Im|={_imc:.2f} "
+                          f"beyond the cap {wmax:.2f} (soft inner constraint "
+                          f"ended violated)", flush=True)
+            # BAND FROM THE CLOSED LOOP (--ctrl-imcap off).  The |Im| cap on the
+            # compensator was never a design requirement; it kept the compensator's
+            # poles inside the band the exchange samples and the peak certificate
+            # scans, because a peak outside that band is invisible to both.  But
+            # controller poles are only a proxy for closed-loop poles -- the loop
+            # moves them -- so with the cap off the band is set from the thing
+            # that actually makes peaks: closed-loop eigenvalues near the axis.
+            # Dense at GL (n+r ~ 400, milliseconds); the analytic tail bound that
+            # makes this scale-free belongs to stage 5.  The band only grows.
+            if feasible and a.ctrl_imcap == 'off':
+                try:
+                    _hw = band_from_closedloop(aa, nn, KK, bb, cc, extra=_seen_c or [])
+                    if _hw > a.whi * (1.0 + 1e-9):
+                        print(f"    band widened to [{-_hw:.2f}, {_hw:.2f}] from "
+                              f"the closed-loop spectrum", flush=True)
+                        a.wlo, a.whi = -_hw, _hw
+                except Exception as _e:
+                    print(f"    band_from_closedloop unavailable "
+                          f"({type(_e).__name__}); band kept", flush=True)
         # CONTINUATION GATE: the candidate is reachable from the last accepted
         # iterate without any eigenvalue crossing the stability line.  This is
         # the matrix-free replacement for the small-steps assumption; see the
@@ -3514,6 +3617,9 @@ def main():
                 gbest_cert, zbest_cert = float(g), zc.copy()
         if improved:
             gbest, zbest, albest = g, zc.copy(), float(al_c)
+            _wind_best = (zbest.copy(), _wind_done) if (_wind_done is not None and _wind_done.get('ok') and _wind_done.get('count') == 0) else None
+            _aw = getattr(certified_norm, 'last_all_w', None)
+            _allw_best = (zbest.copy(), float(g), dict(_aw)) if (_aw and _aw.get('ok')) else None
             # CHECKPOINT: the best accepted design survives any interruption
             # (SLURM kill, node loss).  Verified state only -- this iterate
             # just passed the line certificate, the pole cap and the
@@ -3829,8 +3935,15 @@ def main():
         if not newf and not (_progress if a.converge else improved):
             # nothing new to add and no progress: enlarge Omega with the peaks
             # of the CURRENT best design instead, then stop if still nothing
-            _, _, _, pk2 = certified_norm(D, pk, zbest, a.wlo, a.whi,
-                                          gam_lb=gbest)
+            if _ro is not None:
+                # the best design was certified when it was accepted; its peak list
+                # (reduced fine sweep + full peak reference) is _peaks_of_best --
+                # a second full certificate only to list them (level set, all-w,
+                # ~17 full gains) was redundant (STAGE6 6.29)
+                pk2 = list(_peaks_of_best)
+            else:
+                _, _, _, pk2 = certified_norm(D, pk, zbest, a.wlo, a.whi,
+                                              gam_lb=gbest)
             extra = [x for x in pk2 if all(abs(x - q) > 1e-3 for q in Omega)]
             if not extra:
                 nostall += 1
@@ -3944,58 +4057,19 @@ def main():
     elif a.dense_check:
         print(f"dense save veto SKIPPED (n+r={D.n + D.r} > {a.dense_nmax}); "
               f"the saved alpha rests on the continuation chain", flush=True)
-    # WINDING CERTIFICATE -- the UNCONDITIONAL test.  Everything above is
-    # either conditional (line sweep + continuation) or dense (does not exist
-    # at cavity scale).  The argument principle on the scalar return
-    # difference f = 1 - k(s)G(s) counts closed-loop eigenvalues right of
-    # Re = -eps/2 exactly, matrix-free, with the near-line eigenvalues the
-    # sweep already harvested serving as resolution hints for the tracker.
-    wind_n = None
-    if a.wind:
-        try:
-            import winding_cert as _wc
-            _line = -0.5 * a.eps
-            if a.wind_pplant >= 0:
-                _pp, _hot = a.wind_pplant, []
-            else:
-                if not hasattr(D, '_wind_plant'):
-                    D._wind_plant = _wc.plant_pole_data(D.A, D.M, _line)   # sparse enclosure (STAGE6 6.13)
-                _pp, _hot = D._wind_plant
-            _out = _wc.winding_count(
-                D.A, D.M, b, c, arow, nvec, K, line=_line, mc=D.mc,
-                p_plant=_pp, hot=_hot,
-                zeros_hint=[z for z in (watch_cur or [])
-                            if z is not None],
-                ctrl_exact=(a.wind_ctrl == 'exact'))
-            wind_n = int(_out['count']) if _out['ok'] else None
-            if _out['ok'] and _out['count'] == 0:
-                print(f"winding certificate: 0 eigenvalues right of "
-                      f"Re={_line:+.4f} ({_out['npts']} pts) -- "
-                      f"UNCONDITIONALLY stable with eps/2 margin",
-                      flush=True)
-            elif _out['ok']:
-                print(f"winding certificate: *** {_out['count']} "
-                      f"eigenvalue(s) right of Re={_line:+.4f} ***",
-                      flush=True)
-                if a.wind_veto:
-                    print("NOT SAVING (winding veto).", flush=True)
-                    return
-            else:
-                print("winding certificate INCONCLUSIVE (f ~ 0 on the "
-                      "line: an eigenvalue sits at the eps/2 margin)",
-                      flush=True)
-        except Exception as _e:
-            print(f"winding certificate failed non-fatally: {_e!r}",
-                  flush=True)
     # FINAL BAND CHECK (STAGE6 6.13, sparse): the whole band tiled, the far
     # candidates refined, the located set compared with the winding count right
     # of -band_recut.  A resonance the loop's (edge-strip) band updates missed
-    # widens the band, and the design is certified again over it.
+    # widens the band, and the design is certified again over it.  Run BEFORE
+    # the winding certificate (STAGE6 6.29): a complete located set right of
+    # -band_recut with none right of -eps/2 is that certificate.
     band_check = {}
+    _band_lam_final = []                  # the located set of the final band check
     if a.ctrl_imcap == 'off':
         try:
             _hwf = band_from_closedloop(arow, nvec, K, b, c, count=True)
             band_check = {k_: v_ for k_, v_ in _band_last['info'].items() if k_ in ('located', 'count', 'complete')}
+            _band_lam_final = list(_band_last['lam'])
             if _hwf > a.whi * (1.0 + 1e-9):
                 a.wlo, a.whi = -_hwf, _hwf
                 _gw, _ww, _okw, _ = certified_norm(D, pk, zbest, a.wlo, a.whi, gam_lb=gbest)
@@ -4009,7 +4083,77 @@ def main():
                   f"{'COMPLETE' if band_check.get('complete') else 'NOT PROVEN COMPLETE'}", flush=True)
         except Exception as _e:
             print(f"final band check failed non-fatally: {_e!r}", flush=True)
-    gam, wst, res, clh, mem, nact = D.hinf(arow, nvec, K, b, c)
+    # WINDING CERTIFICATE -- the UNCONDITIONAL test.  Everything above is
+    # either conditional (line sweep + continuation) or dense (does not exist
+    # at cavity scale).  The argument principle on the scalar return
+    # difference f = 1 - k(s)G(s) counts closed-loop eigenvalues right of
+    # Re = -eps/2 exactly, matrix-free, with the near-line eigenvalues the
+    # sweep already harvested serving as resolution hints for the tracker.
+    wind_n = None
+    if a.wind:
+        # 0 right of -eps at acceptance (the same design) implies 0 right of
+        # -eps/2: the save-time count is then not repeated (STAGE6 6.29)
+        _implied = _wind_best is not None and np.array_equal(_wind_best[0], zbest)
+        # likewise the final band check: EVERY eigenvalue right of -band_recut
+        # located (their number equals the winding count there) and none of
+        # them right of -eps/2
+        _implied_band = (band_check.get('complete') and -a.band_recut <= -0.5 * a.eps
+                         and all(complex(z_).real < -0.5 * a.eps for z_ in _band_lam_final))
+        if _implied:
+            wind_n = 0
+            print(f"winding certificate: 0 eigenvalues right of Re={-0.5 * a.eps:+.4f} -- implied by the "
+                  f"acceptance-time count right of Re={-a.eps:+.4f} ({_wind_best[1]['npts']} pts) -- "
+                  f"UNCONDITIONALLY stable with eps/2 margin", flush=True)
+        elif _implied_band:
+            wind_n = 0
+            print(f"winding certificate: 0 eigenvalues right of Re={-0.5 * a.eps:+.4f} -- implied by the "
+                  f"final band check (all {band_check.get('count')} right of Re={-a.band_recut:g} located, "
+                  f"rightmost {max([complex(z_).real for z_ in _band_lam_final], default=-np.inf):+.4f}) -- "
+                  f"UNCONDITIONALLY stable with eps/2 margin", flush=True)
+        else:
+            try:
+                import winding_cert as _wc
+                _line = -0.5 * a.eps
+                if a.wind_pplant >= 0:
+                    _pp, _hot = a.wind_pplant, []
+                else:
+                    if not hasattr(D, '_wind_plant'):
+                        D._wind_plant = _wc.plant_pole_data(D.A, D.M, _line)   # sparse enclosure (STAGE6 6.13)
+                    _pp, _hot = D._wind_plant
+                _out = _wc.winding_count(
+                    D.A, D.M, b, c, arow, nvec, K, line=_line, mc=D.mc,
+                    p_plant=_pp, hot=_hot,
+                    zeros_hint=[z for z in (watch_cur or [])
+                                if z is not None],
+                    ctrl_exact=(a.wind_ctrl == 'exact'))
+                wind_n = int(_out['count']) if _out['ok'] else None
+                if _out['ok'] and _out['count'] == 0:
+                    print(f"winding certificate: 0 eigenvalues right of "
+                          f"Re={_line:+.4f} ({_out['npts']} pts) -- "
+                          f"UNCONDITIONALLY stable with eps/2 margin",
+                          flush=True)
+                elif _out['ok']:
+                    print(f"winding certificate: *** {_out['count']} "
+                          f"eigenvalue(s) right of Re={_line:+.4f} ***",
+                          flush=True)
+                    if a.wind_veto:
+                        print("NOT SAVING (winding veto).", flush=True)
+                        return
+                else:
+                    print("winding certificate INCONCLUSIVE (f ~ 0 on the "
+                          "line: an eigenvalue sits at the eps/2 margin)",
+                          flush=True)
+            except Exception as _e:
+                print(f"winding certificate failed non-fatally: {_e!r}",
+                      flush=True)
+    if _ro is not None and _ro.dim > 0:
+        # the record's value is the CERTIFIED gbest (and the all-w certificate
+        # below); D.hinf's seeded Newton with finite differences (tens of full
+        # factorisations) only fed max(gam, gbest) and the active count, which
+        # the reduced gain curve below gives (STAGE6 6.29)
+        gam, clh, nact = float(gbest), D.cl(b, c), None
+    else:
+        gam, _, _, clh, _, nact = D.hinf(arow, nvec, K, b, c)
     # store the gain curve over the RUN'S OWN certification band, at the same
     # ~0.01 resolution the old [-4, 4] x 801 grid had (capped at 4001 points).
     # A hand-typed narrow grid is how plots ended up unable to show the band
@@ -4031,8 +4175,11 @@ def main():
             _clg = _ro.make_cl(b, c, D.r, D.mc); _gain_model = 'reduced'
         except Exception:
             _clg = clh
-    gain = np.array([_clg.gain(w, arow, nvec, K, want_vectors=False)['sigma']
-                     for w in ws])
+    gain = _sigmas(_clg, ws, arow, nvec, K)
+    if nact is None:                          # local maxima within 2e-3 of the top (D.hinf's tol_active)
+        _i = np.arange(1, len(gain) - 1)
+        _loc = _i[(gain[_i] >= gain[_i - 1]) & (gain[_i] >= gain[_i + 1])]
+        nact = int(np.count_nonzero(gain[_loc] >= gain.max() * (1 - 2e-3))) if _loc.size else 1
     gam = max(gam, gbest)
     # DENSE ALL-FREQUENCY CHECK (STAGE6 6.7) -- check only, like the dense save
     # veto on alpha.  The loop certifies gamma over its band; the band follows the
@@ -4047,30 +4194,39 @@ def main():
     # bound), then the sparse level set proves nothing exceeds gamma on [-W, W].
     # Together: gamma over ALL w, at any n.
     all_w = {}
-    try:
-        import sparse_spectrum as _ss
-        _Wt, _ti = _ss.closed_loop_tail(D.A, D.M, b, c, ctl.A_of(*arow[:3]), ctl.Bc_of(arow, D.r, D.mc),
-                                        nvec, K, gam)
-        all_w = dict(tail_W=float(_Wt))
-        if np.isfinite(_Wt):
-            _sof = lambda w_: clh.gain(float(w_), arow, nvec, K, want_vectors=False)['sigma']
-            _ga, _wa, _nc, _oka = csp.hinf_certified_sparse(
-                D.A, D.M, b, c, ctl.A_of(*arow[:3]), ctl.Bc_of(arow, D.r, D.mc), nvec, K, _sof, gam,
-                wlo=-_Wt, whi=_Wt, rtol=1e-6)
-            all_w.update(gamma=float(_ga), certified=bool(_oka), calls=int(_nc))
-            if _oka and _ga > gam * (1.0 + 1e-6):
-                print(f"WARNING: sparse all-frequency certificate: gamma {_ga:.6f} at w = {_wa:+.4f} above the loop's "
-                      f"{gam:.6f}; the record stores it", flush=True)
-                gam = float(_ga)
-            print(f"sparse all-frequency certificate: tail bound W = {_Wt:.2f}, level set on [-W, W] "
-                  f"{'CERTIFIED' if _oka else 'NOT CERTIFIED'} at {_ga:.6f} ({_nc} calls) -- "
-                  f"{'gamma holds over ALL w' if _oka else 'all-w claim not proven'}", flush=True)
-        else:
-            print("sparse all-frequency certificate: no finite tail bound (gain too high for the "
-                  "numerical-range bound up to w = 1e9)", flush=True)
-    except Exception as _e:
-        all_w['error'] = f"{type(_e).__name__}: {str(_e)[:80]}"
-        print(f"sparse all-frequency certificate failed non-fatally: {_e!r}", flush=True)
+    if _allw_best is not None and np.array_equal(_allw_best[0], zbest) and gam <= _allw_best[1] * (1.0 + 1e-12):
+        # the best design's own all-w certificate, at acceptance, at this level:
+        # not repeated (STAGE6 6.29)
+        _aw = _allw_best[2]
+        all_w = dict(tail_W=float(_aw.get('W', np.nan)), gamma=float(_allw_best[1]), certified=True,
+                     calls=0, reused='acceptance')
+        print(f"sparse all-frequency certificate: from acceptance (tail bound W = {all_w['tail_W']:.2f}, "
+              f"CERTIFIED at {_allw_best[1]:.6f}) -- gamma holds over ALL w", flush=True)
+    if not all_w:
+        try:
+            import sparse_spectrum as _ss
+            _Wt, _ti = _ss.closed_loop_tail(D.A, D.M, b, c, ctl.A_of(*arow[:3]), ctl.Bc_of(arow, D.r, D.mc),
+                                            nvec, K, gam)
+            all_w = dict(tail_W=float(_Wt))
+            if np.isfinite(_Wt):
+                _sof = lambda w_: clh.gain(float(w_), arow, nvec, K, want_vectors=False)['sigma']
+                _ga, _wa, _nc, _oka = csp.hinf_certified_sparse(
+                    D.A, D.M, b, c, ctl.A_of(*arow[:3]), ctl.Bc_of(arow, D.r, D.mc), nvec, K, _sof, gam,
+                    wlo=-_Wt, whi=_Wt, rtol=1e-6)
+                all_w.update(gamma=float(_ga), certified=bool(_oka), calls=int(_nc))
+                if _oka and _ga > gam * (1.0 + 1e-6):
+                    print(f"WARNING: sparse all-frequency certificate: gamma {_ga:.6f} at w = {_wa:+.4f} above the loop's "
+                          f"{gam:.6f}; the record stores it", flush=True)
+                    gam = float(_ga)
+                print(f"sparse all-frequency certificate: tail bound W = {_Wt:.2f}, level set on [-W, W] "
+                      f"{'CERTIFIED' if _oka else 'NOT CERTIFIED'} at {_ga:.6f} ({_nc} calls) -- "
+                      f"{'gamma holds over ALL w' if _oka else 'all-w claim not proven'}", flush=True)
+            else:
+                print("sparse all-frequency certificate: no finite tail bound (gain too high for the "
+                      "numerical-range bound up to w = 1e9)", flush=True)
+        except Exception as _e:
+            all_w['error'] = f"{type(_e).__name__}: {str(_e)[:80]}"
+            print(f"sparse all-frequency certificate failed non-fatally: {_e!r}", flush=True)
     gam_dense_all = None
     if a.dense_check and (D.n + D.r) <= min(a.dense_nmax, 1000):
         try:

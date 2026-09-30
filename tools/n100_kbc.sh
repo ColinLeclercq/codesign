@@ -8,7 +8,7 @@ set -uo pipefail; cd "$(dirname "$0")/.."
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 LOOP="--ne 100 --wall 14400 --outer 80 --inner-budget iters --inner-maxit 10 --inner-maxit-adapt \
  --select-cons on --ctrl-imcap off --cont-anchor defer --sigma2 on --oracle reduced --oracle-inputs on \
- --ctrl-line eps --cert-sweep 0 --cert-disk strict --wind-ctrl exact --cert-rtol 1e-6 --alpha-argmax on --enroll-rel 0.05 --peak-follow on \
+ --ctrl-line eps --cert-sweep 0 --cert-disk strict --cert-near-k 2 --cert-climb slope --wind-ctrl exact --cert-rtol 1e-6 --alpha-argmax on --enroll-rel 0.05 --peak-follow on \
  --row-screen 0.05 --converge --inner sqp --sqp-carry --sqp-trust 0.01 --sqp-ctrl block --sqp-row-res-tol 1e-3 --sqp-refine 1e-4 --sqp-clblock on --cont-accept-winding --sigma2-active-gap 0.15 --follow-scan 0 --stop-progress 3:0.0015"
 # env OUT / EXTRA: another output directory and extra driver flags (2026-09-28: --cont-track reduced, algebra item 11)
 out=${OUT:-results_n100_kbc}; EXTRA=${EXTRA:-}; mkdir -p $out

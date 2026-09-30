@@ -4,6 +4,7 @@
 # between two trees (e.g. HEAD before and after a change).  Serial, deterministic.
 #   tools/ab_check.sh OUTDIR            run THIS tree's cases into OUTDIR
 #   tools/ab_check.sh --compare A B     compare two OUTDIRs
+#   AB_CASES="kbc5" tools/ab_check.sh OUTDIR   one case only
 # Cases: kbc5  K+B+C central order 5 from results_mimo_prod/start_kbc_cen5.npz, 4 rounds
 #        at    atoms central from the at_dec record, 2 rounds (static gains, wide band)
 set -uo pipefail; cd "$(dirname "$0")/.."
@@ -20,6 +21,8 @@ def load(d, case):
     t = open(f"{d}/{case}.time").read().split() if os.path.exists(f"{d}/{case}.time") else ['?']
     return rounds, r, lu, t[0]
 for case in ('kbc5', 'at'):
+    if not (os.path.isdir(f"{sys.argv[1]}/{case}") and os.path.isdir(f"{sys.argv[2]}/{case}")):
+        continue
     A, B = load(sys.argv[1], case), load(sys.argv[2], case)
     print(f"== {case}: wall {A[3]} s -> {B[3]} s")
     for a, b in zip(A[0], B[0]):
@@ -51,6 +54,7 @@ run() {  # name rounds args
       --lucount --outdir $od --dump $od/dump > $od/run.log 2>&1
   echo $(( $(date +%s) - t0 )) > $out/$1.time
 }
-run kbc5 4 --case K+B+C --ctrl-struct central --mimo-start results_mimo_prod/start_kbc_cen5.npz
-run at 2 --case KGC+FB+FC --ctrl-struct central --mimo-start results_mimo_prod/at_dec/KGC_FB_FC_s0_ne100_mimo2x2_decentral.npz $ATOMS
+case_on() { [[ " ${AB_CASES:-kbc5 at} " == *" $1 "* ]]; }
+case_on kbc5 && run kbc5 4 --case K+B+C --ctrl-struct central --mimo-start results_mimo_prod/start_kbc_cen5.npz
+case_on at && run at 2 --case KGC+FB+FC --ctrl-struct central --mimo-start results_mimo_prod/at_dec/KGC_FB_FC_s0_ne100_mimo2x2_decentral.npz $ATOMS
 echo "ab_check done: $out"

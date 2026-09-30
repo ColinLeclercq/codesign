@@ -303,3 +303,59 @@ eager Sobolev and pencil-M factorisations, the per-call M LUs, the silent
 exact identity -> agreement to 1e-7 (identity still reported).  Gated: the SISO
 warm-start search (`not MIMO`).
 
+
+## 14. 2026-09-30: the waste that grows with n (STAGE6 6.29)
+
+**Added.**
+- `massops.py`: `lu`, `lu_real`, `block_solve`, `warmup`.
+- `sparse_lu.py` (`factor`, `ORDER`; driver `--lu-order`).
+- Reduced-space rows (`_ProxyCL` / `_ProxyCLMIMO`):
+  - `_reduce`, `lift`, `placement`, `grads_reduced`, `_fields_reducible`,
+    `_field_row`;
+  - `ReducedOracle._full_residual` and the Gram matrices in `_project`;
+  - `Packer.field_jacobians`, `fieldbasis.atom_jacobian`.
+- `reduced._TriStack`, `reduced.ORTH` with `_orth_block` / `_orth_column`
+  (driver `--oracle-orth`).
+- `certify_sparse`:
+  - `_climb_slope`, `NEAR_K`, `CLIMB` (driver `--cert-near-k`, `--cert-climb`);
+  - `register_plant` / `_ship` / `_land`.
+- `sparse_spectrum`: `numrange_distance(..., line)`, the `memo` argument of
+  `closed_loop_right_of` / `closed_loop_set`.
+- Driver:
+  - `_sigmas`, `_pin_lus` / `PIN_MAX` / `D._lu_pin`, `_plant_warmup`;
+  - `_band_memo`, `_wind_best`, `_allw_best`, `_eig_done`;
+  - the gate guard `_acceptable`;
+  - the save-time winding implied by the acceptance count or the final band
+    check.
+- Tools:
+  - `tools/ab_check.sh` (A/B with LU counts by callee file; `AB_CASES`);
+  - `tools/check_reduced_pairs.py`, `tools/check_reduced_fields.py`.
+
+**Replaced.**
+- `sparse_spectrum._m_lu` / `_MLU_CACHE` (6.28) -> `massops`.
+- The per-site M LUs in `winding_cert`, `sqp_inner` and `fe_codesign`
+  (smooth_unmap, cert_region_mimo).
+- Every `spla.splu(...)` of a full-model matrix -> `sparse_lu.factor`.
+- The lifted row pairs -> reduced ones.
+- The full `_Tstack` array -> `_TriStack`.
+- Brent-only witness climb -> selectable.
+- The all-w level set on [-W, W] -> on the two outer intervals.
+- The 9-call sigma_2 block -> 6 calls.
+- The column-by-column `_orth` -> the block version by default (the column
+  version is kept as the reference for `check_siso_identity`).
+- In the save section, the final band check now runs before the winding
+  certificate.
+
+**Removed.**
+- The no-progress round's full certificate of the best (oracle path).
+- `D.hinf` at save (oracle path).
+- The start's second 241-point sweep.
+- The duplicate eigen-enrichment after a compaction.
+- The per-call `_Tstack` construction.
+- A and M in the pool task tuples.
+- The first blocked `_orth` with a pivoted QR (it decided differently at the
+  1e-8 deflation margin).
+
+**Fixed in the tools.**
+- `tools/check_siso_identity.sh`: the reference tree's loop drops the flags it
+  predates.

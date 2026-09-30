@@ -1045,6 +1045,242 @@ the full-model work is the round**, and today all of it is serial.
   round at ne = 100, its size does not grow with n, and it is an algorithm
   change.
 
+## 6.29 The waste that grows with n: fixed and validated (user, 2026-09-30 15:31)
+
+The user: fix and validate every item raised in 6.28 before any parallelisation,
+in particular the five items that grow with n; the mass matrix never changes, so
+factorise it once at warm-up and cache it. The backward-facing step (BFS)
+FEniCSx code was attached so the end goal's cost is known; the target stays
+Ginzburg-Landau until it is validated cleanly.
+
+### What was done
+
+Three commits and one batch:
+- `b6123df` massops;
+- `7e2c3d2` reduced-space rows;
+- this section's batch: every other item below.
+
+**Mass matrix (`massops.py`).**
+- It owns M's LU: one complex LU (plus a real one on first use for
+  smooth_unmap), keyed on the matrix object.
+- It is factorised at warm-up, right after the plant is assembled.
+- Seven call sites used to factorise M themselves, several on every call:
+  - the certificate region;
+  - the high-gain estimates;
+  - the all-w tail;
+  - the plant enclosure and pencils;
+  - the winding tail;
+  - the field rows;
+  - smooth_unmap.
+- Bit-identical (A/B `ab_m`: every round value equal).
+
+**1. Reduced-space rows (`7e2c3d2`).**
+- Rows carry the reduced pair x~ = [x~_p; x_c], z~ = [z~_p; z_c].
+- `gprime` = Im(z~^H Mt x~ + z_c^H x_c).
+- Port sides use W^H B and V^H C.
+- Placement terms use W^H M dpsi(x_a) and V^H M dpsi(x_s), once per design.
+- Field gradients (atoms, bases) use projected Jacobians:
+  - X = B^H M J, h = B^H M psi, y = Re(psi^H M J), once per design;
+  - packed row = [Re(conj(s) u^H X) - t y] / nv.
+- Near-line residuals use Gram matrices A V, M V (kd x kd products, no lift).
+- The closed-loop Hermite block runs on the reduced pencil.
+- The row pool sends each design once.
+- No length-n vector remains in the SQP.
+
+**2. Winding count.**
+- The tail frequency now comes from the smaller of two valid bounds:
+  - the old one, which uses ||M^-1 A|| ~ h^-2;
+  - the mesh-independent ||M^-1/2 B|| ||M^-1/2 C|| / dist(s, W(A, M)), using
+    the numerical-range heights of 6.19 at the counting line
+    (`numrange_distance(..., line)`).
+- K+B+C order 5: W_T 960 -> 480, 673 -> 633 points, same count.
+- Atoms at_dec: W_T 122880 -> 30720.
+- Still open:
+  - The segment farm is the parallel phase.
+  - The conjugate symmetry S(conj s) = conj S(s) does not apply at GL (complex
+    operator and complex controller). At the BFS it applies only with real
+    ports AND a real-coefficient controller (not the current packer).
+
+**3. LU ordering (`sparse_lu.py`).**
+- Every full-model factorisation calls `sparse_lu.factor`.
+- `--lu-order colamd` is scipy's default: the frozen path, bit-identical.
+- `--lu-order mmd_at_plus_a` is symmetric minimum degree with SymmetricMode, for
+  structurally symmetric FE matrices.
+  - Reviewer's 2-D model (n = 14,400): Hamiltonian LU 35.1 -> 3.4 s, resolvent
+    LU 0.51 -> 0.21 s.
+- MUMPS/PETSc goes in as another backend of `factor` (the callers only use
+  `.solve(b, trans)`).
+
+**4. Certificate.**
+- The all-w question is asked only on [-W, wlo] U [whi, W]: the band was just
+  proved at the same level.
+- `--cert-near-k`: eigenvalues per decision shift. The nominal scripts use 2
+  (only the nearest sizes the disk); 8 is the frozen value.
+- `--cert-climb slope`: the witness climb uses the analytic g'(w) (doubling steps
+  to a bracket, then a safeguarded secant on the slope). It takes ~10 full
+  evaluations where Brent to 1e-11 took 30-40, and reaches the top of the dense
+  sigma_1 exactly on the records tested.
+- The peak sweep's LUs are pinned (`D._lu_pin`, at most 24) until the next
+  round's enrichment consumes them. That enrichment now receives the exact
+  frequency, not a rounded one, so the cache can hit.
+
+**5. Enrichment.**
+- `_orth` (`--oracle-orth block`):
+  - two BLAS3 passes against the basis;
+  - the new columns against each other only;
+  - one final block pass.
+- The deflation decisions are those of the column version: the same basis
+  dimension on every test.
+- At n = 1e5, kd = 130, +12 columns: 0.72 s against 2.89 s.
+- A first blocked version with a pivoted QR decided differently at the 1e-8
+  margin (basis 43 instead of 45) and was replaced.
+- The input-basis images are one multi-RHS solve (bitwise the per-column
+  solves).
+
+**Moderate items.**
+
+| item | fix | exact? |
+|---|---|---|
+| a no-progress round re-certified the unchanged best only to list its peaks | the best's peak list is kept from its acceptance (`_peaks_of_best`) | yes |
+| band_from_closedloop twice per round on the same design | shift results memoised per design | yes |
+| the start's 241-point full sweep computed twice | reused from the start certificate | yes |
+| the pool pickled A and M into every task | `csp.register_plant` before the fork; tasks carry a tag | yes |
+| save repeated acceptance work | winding: 0 right of -eps at acceptance implies 0 right of -eps/2; all-w reused for the same design and level; `D.hinf` (tens of LUs) skipped on the oracle path; the active count comes from the reduced gain curve | yes |
+| reduced sweeps as per-frequency loops | `_sigmas`: one `gain_batch` call | rounding (2.4e-13) |
+| 9 G calls per sigma_2 block | 6: both consumers read only Re Gc[a, a] and Gc[0, 1] + conj Gc[1, 0], and Gc[0, 0] is sigma_1's row | bitwise |
+| the (i w BB - AA) stack rebuilt per call (331 MB at 1225 x 130^2) | `_TriStack`, built on access, Fortran order | bitwise |
+| the gate ran on candidates that cannot be accepted | skipped when the certified value is not below the best (or inconclusive) | yes (same decisions) |
+| plant enclosures tiled at three lines | the widest once at warm-up, the others filtered from it | same sets |
+| eigen-enrichment repeated after a compaction | the compaction's eigenvalues are not factorised again | yes |
+| the save-time winding count right of -eps/2 after a final band check that located every eigenvalue right of -band_recut | the band check runs first; complete with none right of -eps/2 implies the count 0 | yes |
+
+**Not done, with reasons.**
+- 4 G calls per sigma_2 block (6.28 said 4 suffice). With a real-valued
+  gradient, h12 needs two calls. The polarisation form
+  G(x0 + x1, z0 + z1) - G00 - G11 does give 4, but it is not bitwise. G no
+  longer depends on n.
+- The closed-loop Hermite block keeps 8 calls: it needs all four complex
+  entries of dB.
+
+### Validation
+
+- **Unit checks.**
+  - `tools/check_reduced_pairs.py` (MIMO): gradients reduced vs lifted 1.3e-14,
+    g' 1.6e-13, batch vs per-row sigma 2.4e-13, Gram residual = direct residual.
+  - `tools/check_reduced_fields.py` (atoms): 9.2e-13.
+  - SISO proxy (scratch): 5.8e-14, g' 6.9e-15, batch 1.7e-14.
+  - `_orth_column` is bitwise the old `_orth`. `_orth_block` spans the same
+    subspace (smallest principal cosine 1 - 1e-15) with the same dimensions.
+- **`tools/check_invariants.sh`: PASS.**
+  - Frozen path 10.23128516441147.
+  - Witness invariant 0 violations.
+  - hurwitz 0/200.
+- **`tools/check_siso_identity.sh`: PASS**, 8.754365072650645 vs
+  8.754365110002194 (4.3e-9), with `--oracle-orth column`.
+  - The script was fixed: the reference tree predates `--cert-near-k` and
+    `--cert-climb` and failed on them, so its loop is stripped.
+  - With the block orthogonalisation the same run gives 8.755548 (1.4e-4).
+  - Attribution by elimination: the committed 7e2c3d2 gives 3.4e-9. This batch
+    with the old `_orth` gives 4.3e-9, which holds every other change here,
+    including the gate skip in the no-progress round 3.
+- **A/B (`tools/ab_check.sh`, against 7e2c3d2), atoms case** (same trajectory,
+  3.2e-12):
+
+  | | 7e2c3d2 | this batch |
+  |---|---|---|
+  | full-model LUs | 2316 | 2105 |
+  | certificate | 144 | 36 |
+  | closed loop | 215 | 158 |
+  | spectrum | 8 | 0 |
+  | winding | 1949 | 1911 |
+  | wall | 193 s | 128 s (-34 %) |
+
+- **A/B, K+B+C order 5, 4 rounds:** the trajectory differs from round 0 at
+  2e-6 and by 1-3 % in rounds 1-3 (5.296 vs 5.342 after 4 rounds; LUs
+  5387 -> 4471).
+  - The same happens with the old `_orth` and the old certificate flags
+    (1.9e-7 in round 0). The remaining sources are rounding: the batched reduced
+    sweeps and the enclosure from a wider ARPACK run.
+  - 7e2c3d2 itself left f86d802 the same way: 9.5e-7 in round 0 from
+    1e-14 gradient differences, 3 % by round 1.
+  - This path (equalised plateau, degenerate QPs, homotopy splits) is not
+    reproducible below the percent level under rounding changes. Each round's
+    value is certified either way.
+  - The meaningful MIMO test is therefore the complete run: see below.
+- **Full order-5 run** (`tools/mimo_n100.sh kbc_cen5`, nominal flags, nothing
+  else running):
+  - Result: **3.985055** in 51 rounds, 7126 s. The 6.27 run gave 3.967890 in 46
+    rounds, 5293 s, so the new value is 0.43 % higher.
+  - The wall times are not comparable. The 6.27 run had `--row-workers 1`; this
+    one ran the rows in one process by mistake (6.26: 1.29x on the big round).
+    The paths differ too: |Omega| 659 vs 518 at the end (75 vs 92 sigma_2 blocks).
+  - `tools/check_mimo.py` passes on the record:
+    - sigma vs dense 7.1e-14;
+    - m = p = 1 vs SISO 1.1e-14;
+    - FD gradients 9.4e-6 of the largest;
+    - gamma vs the dense level set 4.7e-15;
+    - winding = dense;
+    - abscissa = dense;
+    - sparse all-w certified.
+  - **Path sensitivity, measured on the OLD code.** e34171e, which produced
+    3.967890, rerun from the same start with the static gain multiplied by
+    (1 + 1e-12): **3.996517** in 44 rounds, 4855 s (`--row-workers 1`, like 6.27).
+    - Round 1 is already 8.722 against 9.133.
+    - At round 21: original 3.993, perturbed 3.990, new code 4.080. At the stop:
+      3.967890 / 3.996517 / 3.985055 (spread 0.7 %). The new code's value lies
+      inside the old code's own spread.
+    - Per round: old 115 and 110 s with parallel rows, new 140 s with serial
+      rows (x 1/1.29 = ~108 s).
+    - Records: `results_mimo_prod/kbc_cen5_v629` (new code) and
+      `results_mimo_prod/kbc_cen5_e34171e_pert12` (old code, perturbed start),
+      without the dumps.
+  - The order-5 central problem's end value depends on the path at the
+    0.5 %-level, whatever the code. Comparing codes by one run each is
+    meaningless at this level: the tests above are the exact ones. Starts and
+    repeats belong on the cluster.
+- **The save-time winding implied by the final band check:** atoms case,
+  bitwise the same values, 2105 -> 1532 full-model LUs (the 573-point count at
+  -eps/2 is gone).
+
+### Where the LUs still go (for the parallel phase)
+
+At ne = 100 the winding counts are 90 % of the full-model LUs (atoms case, above):
+- at acceptance: 627;
+- in the save-time band check: 711;
+- at save: 573.
+
+Each count is a march over independent segments. That, the certificate's
+decision shifts and intervals, the enrichment anchors, the peak sweep, the band
+tiles and the plant heights are the process-parallel tasks. The reduced rows are
+already parallel (`--row-workers`) and do not grow with n.
+
+### The backward-facing step, for scale (attachment dsr_validation.zip)
+
+- Taylor-Hood P2-P2-P1 on ~60k triangles, the Dergham-Sipp-Robinet case.
+  - About 192k complex unknowns.
+  - J = -dF/dW is real.
+  - M is the VELOCITY mass: singular on the pressure block.
+- One MUMPS LU plus the gain eigenproblem: ~40 s per omega on 2 cores, ~1.5 GB.
+- Consequences:
+  1. The M-norm bounds (tail constants, beta of the winding tail, the
+     numerical range) must be taken on the velocity subspace. `massops`'s LU
+     does not exist for a singular M: open item, stage 7.
+  2. A winding count of ~600 points is ~600 such LUs: hours serial, minutes on
+     one 96-core node (a few GB each, 512 GB per node).
+  3. The real operators halve the frequencies only for real ports with a
+     real-coefficient controller.
+- On the cluster (44 x 96-core / 512 GB, 2 x 2 TB, 4 x Genoa 384 GB, OPA
+  100 Gb/s), the full-model tasks are independent LUs at different shifts: one
+  task per core (or a few MUMPS threads each), no communication but the
+  results.
+- GPUs:
+  - they do not help the dominant cost: sparse complex FE LUs at many
+    independent shifts, memory-bound;
+  - the reduced model's dense work (batched kd x kd triangular solves, QZ) is
+    small;
+  - a GPU sparse direct solver (cuDSS) could be timed on one BFS matrix later,
+    against 96 CPU cores doing 96 shifts at once.
+
 ## 6.23 Open items
 
 - the plant heights of the tail certificate: ~100 s at ne = 400 per process
@@ -1061,9 +1297,9 @@ the full-model work is the round**, and today all of it is serial.
 - ne >= 400 MIMO runs: on the cluster (user, 2026-09-28).
 - orders 10 and 15 of the central K+B+C compensator (user, 2026-09-30):
   `tools/mimo_n100.sh kbc_cen10` / `kbc_cen15` (weighted-truncation starts, 6.27);
-- before 2-D scale: the five items of 6.28 (reduced-space gradients, winding
-  in parallel segments and the mesh-independent tail, LU ordering / MUMPS,
-  certificate economies, blocked enrichment) and the parallel full-model tasks.
+- before 2-D scale: the five items of 6.28 are done (6.29); left: the parallel
+  full-model tasks, MUMPS as a `sparse_lu` backend, the singular-M (velocity
+  mass) versions of the M-norm bounds at the BFS.
 - K+B+C centralized: still -0.25 %/round when stopped (6.20); its start was the
   c4cf908 decentralized record (5.474), not the better 11c4073 one (5.339) -- both
   (the tail and the start) on the cluster; `--wall` as a hard stop would bound such

@@ -70,6 +70,7 @@ import argparse, glob, json, sys
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+import sparse_lu
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import controller as ctl
@@ -182,7 +183,7 @@ class _F:
         self.nsolve = 0
 
     def __call__(self, s):
-        lu = spla.splu((s * self.M - self.A).tocsc())
+        lu = sparse_lu.factor(s * self.M - self.A)
         x = lu.solve(self.b)                       # S^{-1} b
         y = lu.solve(self.M @ x)                   # S^{-1} M S^{-1} b
         self.nsolve += 2
@@ -232,7 +233,7 @@ class _FM:
         self.nsolve = 0
 
     def __call__(self, s):
-        lu = spla.splu((s * self.M - self.A).tocsc())
+        lu = sparse_lu.factor(s * self.M - self.A)
         X = lu.solve(self.b)                        # S^-1 B
         Y = lu.solve(np.asarray(self.M @ X))        # S^-1 M S^-1 B
         self.nsolve += 2 * self.m
@@ -311,6 +312,17 @@ def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
             hot.append((float(z.imag), max(1e-6, float(abs(z.real - line)))))
     nu, lam_min = tail if tail is not None else plant_tail_constants(A, M)
     nrm_bc = float(np.linalg.norm(F.b, 2 if mimo else None)) * float(np.linalg.norm(F.ch, 2 if mimo else None))
+    # MESH-INDEPENDENT tail bound (STAGE6 6.29): ||C^H (sM - A)^-1 B|| <=
+    # ||M^-1/2 B|| ||M^-1/2 C|| / dist(s, W(A, M)) with the numerical-range
+    # distance of the plant heights (sparse_spectrum, once per mesh).  The
+    # ||M^-1 A|| bound below grows like h^-2 (W_T = 960 at ne = 100, 194 of 673
+    # points beyond |w| = 30); the smaller of the two valid bounds is used.
+    from sparse_spectrum import plant_heights, numrange_distance
+    s_far_nr, Hd_nr = plant_heights(A, M)
+    Mlu_ = massops.lu(M)
+    _Bm = np.asarray(F.b, complex).reshape(A.shape[0], -1); _Cm = np.asarray(F.ch, complex).reshape(-1, A.shape[0]).conj().T
+    beta_nr = float(np.sqrt(max(np.linalg.eigvalsh(_Bm.conj().T @ Mlu_.solve(_Bm)).max(), 0.0)
+                            * max(np.linalg.eigvalsh(_Cm.conj().T @ Mlu_.solve(_Cm)).max(), 0.0)))
     # tail: |det(I - K G) - ...|: with ||K G||_2 <= q every eigenvalue mu of K G has
     # |mu| <= q, arg det = sum arg(1 - mu_i) stays within m arcsin(q) -- no winding
     # for m arcsin(q) < pi/2; SISO keeps q = 1/2 (m = 1), MIMO uses q = 1/(2m)
@@ -349,11 +361,12 @@ def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
 
     def tail_ok(w):
         s_abs = np.hypot(line, w)
-        if s_abs <= nu:
-            return False
-        gb = nrm_bc / (lam_min * (s_abs - nu))
+        gb = nrm_bc / (lam_min * (s_abs - nu)) if s_abs > nu else np.inf
+        dnr = numrange_distance(w, s_far_nr, Hd_nr, line=line)
+        if dnr > 0:
+            gb = min(gb, beta_nr / dnr)
         km = kmax_at(w)
-        return np.isfinite(km) and km * gb < q_tail
+        return np.isfinite(gb) and np.isfinite(km) and km * gb < q_tail
 
     # find the tail truncation W_T: start from w0, double until certified
     WT = max(w0, 1.0)

@@ -666,3 +666,17 @@ Start peaks on the reduced model: 9 within 5 % (-6.07 ... 8.41). Running
 | winding ~700 LUs/accepted round (83 %), certificate, enrichment, LU ordering | **open, must precede 2-D** (6.28 list) |
 | second QP per iteration | dropped (n-independent, algorithm change) |
 
+
+**2026-09-30 15:31 (user: fix and validate the 6.28 items before parallelising; M once at warm-up; BFS code and cluster nodes attached) -- STAGE6 6.29**
+
+| item | status |
+|---|---|
+| mass matrix factorised once (massops, warm-up) | done, bit-identical (b6123df) |
+| 1 reduced-space rows and gradients (no n-vector in the SQP) | done (7e2c3d2); unit checks 1e-13..1e-14 |
+| 2 winding tail from the numerical range (mesh-independent) | done: W_T 960 -> 480 / 122880 -> 30720, same counts; segments in parallel -> parallel phase |
+| 3 LU ordering in one place (`sparse_lu`, `--lu-order`) | done; MUMPS backend -> cavity |
+| 4 certificate: all-w outside the band only, near-k, slope climb, pinned LUs | done; atoms A/B certificate LUs 144 -> 36 |
+| 5 enrichment: block `_orth`, multi-RHS input solves | done; 4x at n = 1e5; column version kept for the SISO check |
+| moderate items (no-progress certificate, band memo, start sweep, pool pickling, save repeats, gain_batch sweeps, 9 -> 6 G calls, Ts stack, gate on unacceptable candidates, enclosures, eigen-enrichment repeat) | done |
+| save-time winding implied by a complete final band check | done |
+| validation | invariants PASS (frozen 10.23128516441147); SISO agreement 4.3e-9 (column orth); atoms A/B same trajectory, -34 % wall; K+B+C order 5 full run 3.985055 (check_mimo PASS) vs 3.967890; old code from a 1e-12-perturbed start 3.996517: path spread 0.7 % |

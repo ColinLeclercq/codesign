@@ -334,12 +334,18 @@ class Evaluator:
         def _block_set(i, P):
             # the sigma_2 (Clarke 2x2) block of row i from its two leading singular
             # pairs P: sigma_1's row, and the block's entry gradients
-            s[i] = P[0]['sigma']; Gs[i] = G(cl, P[0]['x'], P[0]['z'])
+            # Gc[a, b] = G(x_b, z_a) + i G(x_b, i z_a).  Both consumers (the
+            # subproblem's h11, h22, h12 and grad_L's Hermitian part) read only
+            # Re Gc[a, a] and Gc[0, 1] + conj Gc[1, 0], so the diagonal's
+            # imaginary part is never computed, and Gc[0, 0] is sigma_1's row:
+            # 6 gradient calls per block instead of 9 (STAGE6 6.29, exact)
+            s[i] = P[0]['sigma']
             Gc = np.zeros((2, 2, NZ), complex)
-            for a_ in range(2):
-                for b_ in range(2):
-                    Gc[a_, b_] = (G(cl, P[b_]['x'], P[a_]['z'])
-                                  + 1j * G(cl, P[b_]['x'], 1j * P[a_]['z']))
+            Gc[0, 0] = Gs[i] = G(cl, P[0]['x'], P[0]['z'])
+            Gc[1, 1] = G(cl, P[1]['x'], P[1]['z'])
+            for a_, b_ in ((0, 1), (1, 0)):
+                Gc[a_, b_] = (G(cl, P[b_]['x'], P[a_]['z'])
+                              + 1j * G(cl, P[b_]['x'], 1j * P[a_]['z']))
             blocks[i] = dict(sig=np.array([P[0]['sigma'], P[1]['sigma']]), Gc=Gc)
 
         def _block_at(i, wb):

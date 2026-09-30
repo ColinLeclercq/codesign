@@ -39,9 +39,12 @@ from __future__ import annotations
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+import sparse_lu
 from scipy.linalg import sqrtm, svd, solve
 
 from closedloop_sparse import ClosedLoopResolvent as ClosedLoop
+
+ORTH = 'block'          # basis orthogonalisation: 'block' or 'column' (driver --oracle-orth)
 
 
 class _ProxyCL:
@@ -217,7 +220,53 @@ class ReducedOracle:
 
     # ------------------------------------------------------------ basis
     def _orth(self, Q, X):
-        """Append columns X to orthonormal Q, twice Gram-Schmidt, drop near-null."""
+        """Append columns X to orthonormal Q (ORTH selects the implementation).
+        Deflation is RELATIVE in both: a column is kept while its remaining norm
+        exceeds 1e-8 of its original norm (resolvent images have norms ~1e6, and
+        an absolute 1e-10 let numerically dependent columns through: a basis of
+        738 > n = 399, a singular pencil)."""
+        return (self._orth_block if ORTH == 'block' else self._orth_column)(Q, X)
+
+    @staticmethod
+    def _orth_block(Q, X):
+        """Two BLOCK Gram-Schmidt passes against Q (BLAS3), then the new
+        columns one by one against the columns already kept from X only (CGS2),
+        then one more block pass against Q (STAGE6 6.29).  Same deflation
+        decisions as _orth_column (same test on the same remainder).  The
+        columns differ from _orth_column's by rounding -- up to 2e-8 on the
+        near-dependent ones, whose remainder is 1e-7 of the original norm: the
+        first projection leaves eps x (original norm) in the complement, in
+        either implementation."""
+        X = np.asarray(X, complex)
+        if X.shape[1] == 0:
+            return Q
+        n0 = np.linalg.norm(X, axis=0)
+        for _ in range(2):
+            if Q.shape[1]:
+                X = X - Q @ (Q.conj().T @ X)
+        U = np.zeros((X.shape[0], 0), complex)
+        for j in range(X.shape[1]):
+            x = X[:, j]
+            for _ in range(2):
+                if U.shape[1]:
+                    x = x - U @ (U.conj().T @ x)
+            nrm = np.linalg.norm(x)
+            if nrm > 1e-8 * max(n0[j], 1e-300):
+                U = np.column_stack([U, x / nrm])
+        if U.shape[1] == 0:
+            return Q
+        if Q.shape[1]:
+            U = U - Q @ (Q.conj().T @ U)
+            return np.hstack([Q, U])
+        return U
+
+    @staticmethod
+    def _orth_column(Q, X):
+        """The reference implementation (until STAGE6 6.29): every column
+        re-projected against the WHOLE basis, twice (BLAS2 with the full basis
+        per column: ~47 s per union step at n = 1e5, kd = 130; 4x the block
+        version at +12 columns).  Kept for the SISO agreement check against the
+        siso-v1 tree (tools/check_siso_identity.sh, --oracle-orth column)."""
         x0 = np.asarray(X, complex).copy()
         for _ in range(2):
             if Q.shape[1]:
@@ -225,16 +274,13 @@ class ReducedOracle:
         keep = []
         for j in range(X.shape[1]):
             x = X[:, j]
-            n0 = np.linalg.norm(x0[:, j]) if x0 is not None else np.linalg.norm(x)
+            n0 = np.linalg.norm(x0[:, j])
             for _ in range(2):
                 for q in keep:
                     x = x - q * np.vdot(q, x)
                 if Q.shape[1]:
                     x = x - Q @ (Q.conj().T @ x)
             nrm = np.linalg.norm(x)
-            # RELATIVE deflation: resolvent images have norms ~1e6, and an
-            # absolute 1e-10 let numerically dependent columns through (a basis
-            # of 738 > n = 399, a singular pencil)
             if nrm > 1e-8 * max(n0, 1e-300):
                 keep.append(x / nrm)
         if keep:
@@ -265,10 +311,10 @@ class ReducedOracle:
         # directions to the left (W).  (A first version added both to both
         # sides to force equal dimensions; the forced truncation cut
         # interpolating columns and the model was wrong even at its anchors.)
-        if Pb is not None:
-            cols_V += [lu.solve(np.ascontiguousarray(Pb[:, k], complex)) for k in range(Pb.shape[1])]
+        if Pb is not None:                              # all columns in one solve (STAGE6 6.29)
+            Yb = lu.solve(np.ascontiguousarray(Pb, complex)); cols_V += [Yb[:, k] for k in range(Yb.shape[1])]
         if Pc is not None:
-            cols_W += [lu.solve(np.ascontiguousarray(Pc[:, k], complex), trans='H') for k in range(Pc.shape[1])]
+            Yc = lu.solve(np.ascontiguousarray(Pc, complex), trans='H'); cols_W += [Yc[:, k] for k in range(Yc.shape[1])]
         self.V = self._orth(self.V, np.column_stack(cols_V))
         self.W = self._orth(self.W, np.column_stack(cols_W))
         # equal dimension is required for a square reduced pencil
@@ -327,7 +373,7 @@ class ReducedOracle:
         Mc = self.M.astype(complex); Ac = self.A.astype(complex)
         cv, cw = [], []
         for lam in lams:
-            lu = spla.splu((complex(lam) * Mc - Ac).tocsc())
+            lu = sparse_lu.factor(complex(lam) * Mc - Ac)
             if Pb is not None:
                 X = lu.solve(np.asarray(Pb, complex))
                 cv.append(X)
@@ -555,6 +601,15 @@ class _DenseLU:
         return lu_solve(self._lu, x, trans=(2 if trans == 'H' else 0))
 
 
+class _TriStack:
+    """Lazy stack of the QZ-form triangular matrices (i w BB - AA)."""
+    def __init__(self, om, AA, BB):
+        self.om, self.AA, self.BB = np.asarray(om, float), AA, BB
+
+    def __getitem__(self, i):
+        return np.asfortranarray((1j * self.om[i]) * self.BB - self.AA)
+
+
 class _TriLU:
     """(i w Mt - At) in QZ form: solve = two unitary products + one triangular
     solve, O(k^2).  Same interface as _DenseLU."""
@@ -666,8 +721,11 @@ class _ReducedCL:
 
     # -------- BATCHED rows (2026-09-25, user: evaluate all frequencies at once) --------
     def _Tstack(self, om):
-        AA, BB = self.P['qzAA'], self.P['qzBB']
-        return (1j * om)[:, None, None] * BB[None] - AA[None]
+        """(i w BB - AA) for each frequency of the batch, built on ACCESS in
+        Fortran order (STAGE6 6.29: the stacked array was nf x kd x kd -- 331 MB
+        at nf = 1225, kd = 130, 1 GB for the save curve -- rebuilt at every
+        call, and each C-ordered slice was copied again by ztrtrs)."""
+        return _TriStack(om, self.P['qzAA'], self.P['qzBB'])
 
     def _tri(self, om, Y, Ts=None, idx=None):
         """(i w BB - AA) X = Y for every frequency: one LAPACK ztrtrs per

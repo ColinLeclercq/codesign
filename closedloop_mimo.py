@@ -33,6 +33,7 @@ w.r.t. every controller entry: d sigma = Re(z^H dA_cl x):
 from __future__ import annotations
 import numpy as np
 import scipy.sparse.linalg as spla
+import sparse_lu
 from closedloop_sparse import ClosedLoopResolvent, _safe_solve
 
 
@@ -68,11 +69,14 @@ class ClosedLoopResolventMIMO(ClosedLoopResolvent):
     def setup(self, omega, arow, nvec, K):
         n, r, m, p = self.n, self.r, self.m, self.p
         cache = getattr(self, 'lu_cache', None)
+        pin = getattr(self, 'lu_pin', None)
         key = complex(omega)
         if cache is not None and key in cache:
             lu = cache[key]
+        elif pin is not None and key in pin:
+            lu = pin[key]                           # pinned anchor frequency (STAGE6 6.29)
         else:
-            lu = spla.splu(((1j * omega) * self.M - self.A).tocsc())
+            lu = sparse_lu.factor((1j * omega) * self.M - self.A)
             self.nfac += 1
             cmax = getattr(self, 'lu_cache_max', 8)
             if cache is not None and cmax > 0:

@@ -42,6 +42,7 @@ from __future__ import annotations
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+import sparse_lu
 import massops
 
 
@@ -109,7 +110,7 @@ class PlantPencil:
 
     def shift(self, sigma):
         if self._sig != sigma:
-            self._lu = spla.splu((self.A - sigma * self.M).tocsc()); self._sig = sigma
+            self._lu = sparse_lu.factor(self.A - sigma * self.M); self._sig = sigma
 
     def solve(self, x):                      # (A - sigma M)^-1 x
         return self._lu.solve(np.asarray(x, complex))
@@ -252,6 +253,17 @@ def plant_eigs_right(A, M, s0, cache=True):
     key = (id(A), id(M), A.shape, float(s0))
     if cache and key in _PLANT_CACHE:
         return _PLANT_CACHE[key]
+    if cache:
+        # a certified enclosure further LEFT contains this one: filter it
+        # (STAGE6 6.29: the enclosures right of -eps-0.6, -eps/2-0.6 and -1.6
+        # were three separate tilings; the warm-up computes the widest once)
+        wider = [(k_[3], v_) for k_, v_ in _PLANT_CACHE.items()
+                 if k_[:3] == key[:3] and k_[3] <= float(s0) and v_[1].get('ok')]
+        if wider:
+            s_w, (lam_w, info_w) = min(wider, key=lambda q: -q[0])       # the nearest wider line
+            out = (lam_w[lam_w.real >= s0], dict(info_w, from_line=s_w))
+            _PLANT_CACHE[key] = out
+            return out
     s_far, Wlo, Whi = plant_rectangle(A, M, s0)
     # Lanczos Ritz values approach lambda_max from BELOW: pad the edges so the
     # rectangle stays an enclosure (tolerance 1e-10 relative; the pad is 1e3 x)
@@ -292,7 +304,7 @@ def highgain_estimates(M, b, c, K, Mlu=None):
 
 
 def closed_loop_right_of(cl, arow, nvec, K, s0, plant_lam, Ac=None, extra=(), Mlu=None, k=4,
-                         res_tol=1e-8, band=None, x_right=0.5, tile=2.0, inner=0.0):
+                         res_tol=1e-8, band=None, x_right=0.5, tile=2.0, inner=0.0, memo=None):
     """Closed-loop eigenvalues with Re >= s0, LOCATED from candidates (no
     completeness claim by itself: compare with the winding count right of s0):
     the plant eigenvalues right of s0 - 0.6 (`plant_lam`), the compensator poles,
@@ -318,13 +330,18 @@ def closed_loop_right_of(cl, arow, nvec, K, s0, plant_lam, Ac=None, extra=(), Ml
             shifts.append(z)
     out = []; ns = 0
     for z in shifts:
-        try:
-            lam, res = nearest_k(P, z, k); ns += 1
-        except spla.ArpackNoConvergence:
+        if memo is not None and z in memo:          # this design, this shift: already solved (memo per design)
+            lam, res = memo[z]
+        else:
             try:
-                lam, res = nearest_k(P, z, 2 * k); ns += 1
+                lam, res = nearest_k(P, z, k); ns += 1
             except spla.ArpackNoConvergence:
-                continue
+                try:
+                    lam, res = nearest_k(P, z, 2 * k); ns += 1
+                except spla.ArpackNoConvergence:
+                    continue
+            if memo is not None:
+                memo[z] = (lam, res)
         for l_, r_ in zip(lam, res):
             if r_ <= res_tol and l_.real >= s0 and all(abs(l_ - q) > 1e-8 * max(1.0, abs(l_)) for q in out):
                 out.append(complex(l_))
@@ -349,7 +366,8 @@ def closed_loop_right_of(cl, arow, nvec, K, s0, plant_lam, Ac=None, extra=(), Ml
     return sorted(out, key=lambda z: -z.real), info
 
 
-def closed_loop_set(A, M, cl, arow, nvec, K, s0, band, mc=1.0, count=True, extra=(), ctrl_exact=True, inner=0.0):
+def closed_loop_set(A, M, cl, arow, nvec, K, s0, band, mc=1.0, count=True, extra=(), ctrl_exact=True, inner=0.0,
+                    memo=None):
     """Every closed-loop eigenvalue with Re >= s0: located (closed_loop_right_of,
     candidates + the band tiled) and, with count=True, COMPARED with the winding
     number right of s0 (argument principle, global in w).  info['complete'] is
@@ -358,7 +376,7 @@ def closed_loop_set(A, M, cl, arow, nvec, K, s0, band, mc=1.0, count=True, extra
     import controller as _ctl
     plant_lam, _ = plant_eigs_right(A, M, s0 - 0.6)
     loc, info = closed_loop_right_of(cl, arow, nvec, K, s0, plant_lam, Ac=_ctl.A_of(*arow[:3]),
-                                     extra=extra, band=band, inner=(0.0 if count else inner))
+                                     extra=extra, band=band, inner=(0.0 if count else inner), memo=memo)
     info['located'] = len(loc)
     if count:
         import winding_cert as _wc
@@ -391,12 +409,14 @@ def plant_heights(A, M, depths=(0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1e3, 2e
     return out
 
 
-def numrange_distance(w, s_far, Hd):
-    """A lower bound on dist(i w, W(A, M)): the part of W right of -d lies within
-    |Im| <= H(d) (distance >= |w| - H(d)), the part left of -d is >= d away."""
+def numrange_distance(w, s_far, Hd, line=0.0):
+    """A lower bound on dist(line + i w, W(A, M)): the part of W right of -d lies
+    within |Im| <= H(d) (distance >= |w| - H(d)), the part left of -d is at
+    least d + line away (depths d > -line only; line = 0: the imaginary axis)."""
     best = 0.0
     for d, h in Hd:
-        best = max(best, min(d, abs(w) - h))
+        if d + line > 0:
+            best = max(best, min(d + line, abs(w) - h))
     return best
 
 
