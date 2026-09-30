@@ -782,6 +782,140 @@ as `results_mimo_prod/kbc_cen_c4cf908_sisoscale` (5.070 after 20 rounds, stopped
   4. a time budget with the anytime numbers above;
   5. fewer design parameters (a lower-order compensator flattens less).
 
+## 6.26 Parallel rows, the QP, finite differences (user, 2026-09-30 10:07)
+
+**Terms.**
+- A ROW is one frequency of the working set Omega: sigma_1 there, a constraint
+  sigma_1(w) <= t of the epigraph QP.
+- The working set is everything the loop keeps (1225 frequencies late in the
+  K+B+C central run). The ACTIVE set is the rows that bind at the QP solution:
+  4 linear rows and 57 sigma_2 blocks (dual > 1e-3 max) of the dumped QP below.
+- On the plateau 909 working-set rows lie within 5 % of the maximum and 316
+  below. "Well below" (6.25) meant those 316, which still cost an evaluation
+  each.
+- "Batched" = all rows of one kind computed together in one vectorised subspace
+  iteration (numpy / LAPACK over a stack of frequencies), instead of a Python
+  loop that calls the reduced model once per frequency.
+
+**Finite differences.**
+- Design gradients are analytic: the adjoint formula from the singular pair,
+  checked against FD by check_mimo check 3. The SQP Hessian is BFGS. No FD in
+  either.
+- The only FD is the CURVATURE d2 sigma / d w2 in peak following: two
+  evaluations at w +- 1e-5 when no secant value is carried. It costs 5.7 % of a
+  big round (profile lines peakfollow.py:118-119). An analytic second derivative
+  in w needs the full singular spectrum of the reduced operator; not worth it at
+  5.7 %.
+
+**Parallel rows (`--row-workers N`, reduced._RowPool).**
+- N processes are FORKED from the driver when the reduced basis changes (a
+  version counter in `_project`), so each holds the oracle without pickling it.
+- A gain_batch call sends each worker the design (ports, compensator,
+  frequencies); the worker rebuilds the per-design reduced loop (make_cl) and runs
+  the serial gain_batch on its share while the driver does its own.
+- Frequencies are assigned by w-block (0.064), so each process keeps warm
+  subspace caches for its frequencies. Batches under 32 rows stay in the driver.
+- Validation: same trajectory as serial (2 rounds: 3.71471179 / 3.71358191
+  against 3.71471178 / 3.71358190; big round 3.7135748 against 3.7135729, both
+  certified).
+
+**Timing: the big synthetic round (1225 rows), each run ALONE on the 2-core
+container.**
+- Machine check: two independent single-thread LAPACK loops run in 2.68 s side
+  by side against 2.56 s alone, so the two cores scale 1.9x.
+
+| code | 1 core (inner / round) | 2 cores, `--row-workers 1` | speed-up |
+|---|---|---|---|
+| d2e77e2 minus cache/QP thread (first test) | 761.7 / 855 s | 604.0 / 694 s | 1.26 / 1.23 |
+| d2e77e2 (placement derivative memoised, QP one thread) | 626.1 / 718 s | 467.8 / 555 s | **1.34 / 1.29** |
+
+- Amdahl: the parallel part is the reduced rows (~45 % of the round); the QP
+  (~22 %), the gradient assembly (~8 %), peak-following logic and the
+  certificates stay serial. Ideal with that split: 1.29. So the 2-core figure
+  is what the split allows, not a scaling defect.
+- To approach 2x the serial part must shrink or go parallel:
+  - gradient assembly in the workers (they would need the packer's state);
+  - the second QP per SQP iteration: it is solved at the new iterate only for
+    the BFGS multipliers; the textbook update uses the old QP's multipliers, which
+    would halve the QP time. That is an algorithm change, to be A/B tested.
+
+**QP (Clarabel, the dumped big-round QPs).**
+- Size: 214 variables, 2716 rows (1308 linear, 347 SOC(4), 2 small PSD); A 70 %
+  dense (411k non-zeros). 26-30 interior-point iterations, 2.2-2.7 s.
+- Levers tried:
+  - `max_threads = 1`: Clarabel's default uses all cores and was 28 % SLOWER
+    than one thread on these QPs (median 2.44 against 1.76 s), with bitwise the
+    same solution. Adopted everywhere (bit-identical; the SISO identity and the
+    frozen path pass).
+  - KKT solver: the default 'auto' is already faer; qdldl was 45 % slower.
+  - Constraint generation (solve with the previously active and the 40 nearest
+    rows, add violated rows, repeat): exact, but on the plateau a subset's step
+    overshoots hundreds of rows that are slack at the full solution. It ended
+    with ~1500 of 2716 rows and was slower cold (10-12 s) and only 25 % faster
+    warm. Removed.
+  - Looser gap tolerance: the solve stops on AlmostSolved at a gap ~1e-7 either
+    way; no gain.
+
+## 6.27 K+B+C centralized with an order-5 compensator (user, 2026-09-30)
+
+**Start: reduced order-5 compensators.** `tools/reduce_compensator.py`.
+- Plain balanced truncation of the compensator destabilised the loop at every
+  order <= 8. From kbc_dec 5.339 the closed-loop max Re was +1.52 at order 5,
+  +0.33 at order 8; from kbc_cen, +0.38 at order 5. Its error sits in the band,
+  where the loop gain matters.
+- CLOSED-LOOP WEIGHTED truncation (Enns) instead:
+  - the error K - K_r enters the loop through M = (I - G K)^-1 G;
+  - reachability gramian of the compensator states taken in the cascade M -> K,
+    observability gramian from K;
+  - A_r written in modal (diagonal) form, D_c kept.
+- Order-5 closed-loop max Re from four sources:
+
+| source | max Re at order 5 |
+|---|---|
+| kbc_dec 11c4073 (5.339) | +0.265 |
+| kbc_cen (3.715) | +0.381 |
+| first-pass kbc_cen | +0.078 |
+| first-pass kbc_dec (5.566) | **-0.161**, grid gamma 14.38 |
+| c4cf908 kbc_dec | -0.109, grid gamma 20.58 |
+
+- The start is the first-pass decentralized design reduced to order 5
+  (`results_mimo_prod/start_kbc_cen5.npz`; `tools/mimo_n100.sh kbc_cenR` builds
+  order R the same way). Certified start 14.432880, anchor alpha -0.161.
+- 5 compensator states, 32 free complex controller entries (the order-16 run
+  had 98).
+
+**Run.**
+- Code d2e77e2, `EXTRA="--row-workers 1" tools/mimo_n100.sh kbc_cen5`, alone on
+  the 2 cores.
+- **3.967890** after 46 rounds, 88 min, progress stop (0.145 % over 8 rounds).
+- Checks (check_mimo):
+  - dense all-w level set 3.967890 (rel 2.9e-8: the certificate's rtol is 1e-6;
+    the earlier records' witnesses sat on the exact top);
+  - winding counts equal to dense; abscissa -0.4681 equal to dense;
+  - FD at the witness 1.5e-9;
+  - sparse all-w certificate W = 249.2, 5.2 s.
+
+| | order 5 (d2e77e2, 2 cores) | order 16 (11c4073, 1 core) |
+|---|---|---|
+| final gamma | 3.967890 (stopped by the rule) | 3.715450 (stopped by hand, still -0.25 %/round) |
+| vs SISO 6.399134 | -38.0 % | -41.9 % |
+| vs decentralized 5.339317 | -25.7 % | -30.4 % |
+| within 10 % of its final | 10 min (round 7) | 99 min (round 17) |
+| within 2 % | 13.5 min (round 9) | 212 min (round 27) |
+| within 1 % | 23 min (round 14) | 236 min (round 29) |
+| per round, late | ~2 min at |Omega| ~ 500 | 13-15 min at |Omega| ~ 1000 |
+| rows within 1 % of gamma (late) | 202 of 516 | 788 of 1225 |
+| sigma_2 blocks (late) | 92 | 347 |
+
+- The order-5 optimum is less equalised: a quarter of the rows are near the
+  level, against two thirds at order 16. Rounds are cheaper (half the rows,
+  a quarter of the blocks) and more productive.
+- The parallel rows and the single-thread QP are worth ~1.5x of the ~7x per
+  round.
+- Cost of the lower order: 6.8 % in gamma (3.968 against 3.715; 3.793 in the
+  first pass at order 16).
+- Result record: `results_mimo_prod/kbc_cen5/`.
+
 ## 6.23 Open items
 
 - the plant heights of the tail certificate: ~100 s at ne = 400 per process
@@ -796,6 +930,10 @@ as `results_mimo_prod/kbc_cen_c4cf908_sisoscale` (5.070 after 20 rounds, stopped
 - winding count at cavity scale: P_plant from the sparse enclosure now (6.13);
   its cost at 3-D sizes still to measure;
 - ne >= 400 MIMO runs: on the cluster (user, 2026-09-28).
+- orders 10 and 15 of the central K+B+C compensator (user, 2026-09-30):
+  `tools/mimo_n100.sh kbc_cen10` / `kbc_cen15` (weighted-truncation starts, 6.27);
+- the second QP per SQP iteration (BFGS multipliers at the new iterate; 6.26):
+  A/B against the old-multiplier update; gradient assembly in the row workers.
 - K+B+C centralized: still -0.25 %/round when stopped (6.20); its start was the
   c4cf908 decentralized record (5.474), not the better 11c4073 one (5.339) -- both
   (the tail and the start) on the cluster; `--wall` as a hard stop would bound such

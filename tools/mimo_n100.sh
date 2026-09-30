@@ -24,6 +24,10 @@ case "$1" in
   kbc_dec) [ -f $out/start_kbc_p4.npz ] || python tools/mimo_start.py --siso results_n100_kbc/K_B_C_s0_ne100.npz --pair2=-4,4 --out $out/start_kbc_p4.npz
            args="--case K+B+C --ctrl-struct decentral --mimo-start $out/start_kbc_p4.npz"; od=$out/kbc_dec ;;
   kbc_cen) args="--case K+B+C --ctrl-struct central --mimo-start $out/kbc_dec/K_B_C_s0_ne100_mimo2x2_decentral.npz"; od=$out/kbc_cen ;;
+  kbc_cen[0-9]*)   # central compensator of order R (STAGE6 6.27): closed-loop weighted BT of the first-pass decentral design
+           R=${1#kbc_cen}
+           [ -f $out/start_kbc_cen$R.npz ] || python tools/reduce_compensator.py $out/prev_0e7f1c1/kbc_dec/K_B_C_s0_ne100_mimo2x2_decentral.npz --order $R --out $out/start_kbc_cen$R.npz
+           args="--case K+B+C --ctrl-struct central --mimo-start $out/start_kbc_cen$R.npz"; od=$out/kbc_cen$R ;;
   at_dec)  [ -f $out/start_atoms.npz ] || python tools/mimo_start.py --siso results_fb_atoms_n200_long/K_FB_FC_s0_ne200.npz --atoms --out $out/start_atoms.npz
            args="--case KGC+FB+FC --ctrl-struct decentral --mimo-start $out/start_atoms.npz $ATOMS"; od=$out/at_dec ;;
   at_dec_p) [ -f $out/start_proto_atoms_dec.npz ] || python tools/mimo_start.py --proto results_mimo/atoms_dec.npz --out $out/start_proto_atoms_dec.npz

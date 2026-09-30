@@ -641,3 +641,14 @@ Start peaks on the reduced model: 9 within 5 % (-6.07 ... 8.41). Running
 | false best 41.64 at w = 409.65 inside the final band (at_dec_p, c4cf908) | all-w certificate of every accepted design (tail bound + level set on [-W, W]), band widened to the peak (528be56); fired again in kbc_cen (6.21) |
 | final MIMO runs | atoms 2.3835333 x3 (the floor); K+B+C dec 5.339317 (11c4073), cen 3.715450 (11c4073, stopped by hand); all checks pass (6.20) |
 | `check_mimo` FD step too coarse for one huge entry | per-entry step; all final records re-checked (6.20) |
+
+**2026-09-30 (user: parallelise and test on 2 cores; speed up the QP; FD?; order-5 compensator) -- STAGE6 6.25-6.27**
+
+| item | status |
+|---|---|
+| profile of a K+B+C central round | reduced rows 44 %, QP 24 %, gradient assembly 14 %; the equalised plateau (788 rows within 1 %) (6.25) |
+| sigma_2 blocks batched; lu_counter frame walk; placement derivative memoised | done, bit-identical / same trajectory (6.25, 6.26) |
+| frequency-parallel rows (`--row-workers`) | done; big round 1 core 718 s, 2 cores 555 s (1.29x; Amdahl limit 1.29 with 45 % parallel); machine scales 1.9x (6.26) |
+| QP | one thread: -28 %, bitwise same; constraint generation tried, not a win on the plateau, removed; second QP per iteration: to A/B (6.26) |
+| finite differences | only the peak curvature d2 sigma/d w2 (5.7 %); gradients analytic, Hessian BFGS (6.26) |
+| order-5 central compensator | closed-loop weighted truncation start (plain BT destabilises); 3.967890 in 88 min, within 1 % in 23 min; order 16: 3.715450 in 5.3 h (6.27) |

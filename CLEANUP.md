@@ -278,3 +278,19 @@ Later in the pass: the MIMO packer's per-group scale floor restored for m + p > 
 (11c4073, 6.22); `tools/check_mimo.py` check 3 per-entry FD step (replaces the
 per-block step); the run directories superseded by the final records kept as
 named diagnostics (`*_c4cf908_*`, `*_diag*`, `prev_0e7f1c1`), no unnamed leftovers.
+
+## 12. 2026-09-30: parallel rows, QP, order-5 start (STAGE6 6.25-6.27)
+
+Added: `reduced._RowPool` / `_row_pool` / `_row_worker` and `--row-workers`
+(forked workers per basis version), `reduced.gain_batch(..., k)` +
+`_batch_pairs`, `FECoDesign.Mdpsi_dx` (memoised), `tools/reduce_compensator.py`
+(closed-loop weighted balanced truncation), `mimo_n100.sh kbc_cenR`.
+Replaced: `lu_counter._caller` (frame walk; same site strings), the per-row
+sigma_2 blocks and their per-row peak following (batched; the per-row path stays
+for unbatched evaluators).  QP: `max_threads = 1`.
+Tried and removed (6.26): constraint generation in the QP subproblem
+(`_solve_generated`), a `--qp-linsolve` flag (Clarabel's default is already
+faer).  Removed from the first version of reduce_compensator: plain balanced
+truncation (destabilised every order <= 8).  Scratch only: the QP dump hook,
+the synthetic checkpoint builder (`mkck.py`), benchmarks.
+
