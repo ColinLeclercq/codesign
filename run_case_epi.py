@@ -1498,6 +1498,9 @@ def main():
     ap.add_argument('--inner-adapt-tol', dest='inner_adapt_tol', type=float, default=0.05)
     ap.add_argument('--inner-maxit-min', dest='inner_maxit_min', type=int, default=5)
     ap.add_argument('--inner-maxit-max', dest='inner_maxit_max', type=int, default=40)
+    ap.add_argument('--row-workers', dest='row_workers', type=int, default=0,
+                    help='reduced-model rows (gain_batch) evaluated in this many FORKED processes besides this one, '
+                         'frequencies split by w-blocks (reduced._RowPool; STAGE6 6.26). 0 = serial')
     ap.add_argument('--oracle', choices=['full', 'reduced'], default='full',
                     help='STAGE 5: sigma rows of the inner solve on the full oracle '
                          '(frozen) or on the projected one (reduced.py).')
@@ -2706,6 +2709,10 @@ def main():
     _ro = None
     if a.oracle == 'reduced':
         from reduced import ReducedOracle
+        import reduced as _red_mod
+        _red_mod.ROW_WORKERS = max(0, int(a.row_workers))
+        if _red_mod.ROW_WORKERS:
+            print(f"rows: gain_batch in {_red_mod.ROW_WORKERS} forked worker(s) + this process", flush=True)
         _ro = ReducedOracle(D)
         certified_norm.oracle = _ro          # fine reduced sweep for the peaks list
         if a.oracle_inputs == 'on':

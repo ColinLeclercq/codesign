@@ -149,6 +149,19 @@ class FECoDesign:
         g = self.gauss(x0)
         return ((self.xn - x0) / SIGMA ** 2) * g
 
+    def Mdpsi_dx(self, x0):
+        """M @ dpsi_dx(x0), memoised on x0 (2026-09-30): the gradient of every
+        row at a design needs the same placement derivative, and recomputing it
+        per row was 8 % of a MIMO round.  Exact: a pure function of x0."""
+        c = self.__dict__.setdefault('_Mdpsi_cache', {})
+        key = float(x0)
+        v = c.get(key)
+        if v is None:
+            if len(c) >= 16:
+                c.pop(next(iter(c)))
+            v = c[key] = self.M @ self.dpsi_dx(key)
+        return v
+
     def dpsi_dx(self, x0):
         """d/dx0 of the UNIT-L2 profile psi = g(x0)/||g(x0)||_M.
 
@@ -513,10 +526,10 @@ class FECoDesign:
         # companion gauge B_c = mc*e_r it was just the last one.
         Sc = np.vdot(zp, b) * Kfb + self.mc * np.sum(np.conj(zc))
         if flags['B']:
-            ba = self.M @ self.dpsi_dx(xa)
+            ba = self.Mdpsi_dx(xa)
             out['xa'] = float(np.real(np.vdot(zp, ba) * Sa / eta))
         if flags['C']:
-            cs = self.M @ self.dpsi_dx(xs)
+            cs = self.Mdpsi_dx(xs)
             out['xs'] = float(np.real(Sc * np.vdot(cs, xp) / eta))
         if flags['FB']:
             Ga = np.conj(self.M @ zp) * Sa / eta
@@ -542,10 +555,10 @@ class FECoDesign:
                 out[k_] = np.asarray(g[k_]) / eta
         act, sen = cl.port_sides(res, arow, nvec, Kfb)
         if flags['B']:
-            out['xa'] = np.array([float(np.real(np.vdot(zp, self.M @ self.dpsi_dx(float(xa[i]))) * act[i] / eta))
+            out['xa'] = np.array([float(np.real(np.vdot(zp, self.Mdpsi_dx(float(xa[i]))) * act[i] / eta))
                                   for i in range(cl.m)])
         if flags['C']:
-            out['xs'] = np.array([float(np.real(sen[j] * np.vdot(self.M @ self.dpsi_dx(float(xs[j])), xp) / eta))
+            out['xs'] = np.array([float(np.real(sen[j] * np.vdot(self.Mdpsi_dx(float(xs[j])), xp) / eta))
                                   for j in range(cl.p)])
         if flags['FB']:
             Mz = self.M @ zp

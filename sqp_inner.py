@@ -875,6 +875,10 @@ def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, di
         q[ih + kh] = 1e3                                      # block-Hermite slacks, expensive
     st = clarabel.DefaultSettings(); st.verbose = False
     st.max_iter = 200; st.tol_gap_abs = 1e-10; st.tol_gap_rel = 1e-10; st.tol_feas = 1e-10
+    # ONE thread (2026-09-30): Clarabel's default (max_threads = 0: all cores)
+    # made the K+B+C central QPs 28 % slower on 2 cores than one thread, with
+    # bitwise the same solution, and competed with the row workers
+    st.max_threads = 1
     sol = clarabel.DefaultSolver(P, q, A, bvec, cones, st).solve()
     status = str(sol.status)
     if 'Solved' not in status:

@@ -229,6 +229,7 @@ class ReducedOracle:
 
     def _project(self):
         V, W = self.V, self.W
+        self._proj_ver = getattr(self, '_proj_ver', 0) + 1     # the parallel row pool follows the basis
         At = W.conj().T @ (self.A @ V)
         Mt = W.conj().T @ (self.M @ V)
         GV = V.conj().T @ (self.M @ V); GV = 0.5 * (GV + GV.conj().T)
@@ -277,10 +278,112 @@ class ReducedOracle:
             B, C = as_ports(b, c)
             rcl = ClosedLoopResolventMIMO(sp.csc_matrix(P['Mt']), sp.csc_matrix(P['At']),
                                           self.W.conj().T @ B, self.V.conj().T @ C, r, mc=mc)
-            return _ReducedCL(self, rcl, B, C)
-        rcl = ClosedLoop(sp.csc_matrix(P['Mt']), sp.csc_matrix(P['At']),
-                         self.W.conj().T @ b, self.V.conj().T @ c, r, mc=mc)
-        return _ReducedCL(self, rcl, b, c)
+            out = _ReducedCL(self, rcl, B, C)
+        else:
+            rcl = ClosedLoop(sp.csc_matrix(P['Mt']), sp.csc_matrix(P['At']),
+                             self.W.conj().T @ b, self.V.conj().T @ c, r, mc=mc)
+            out = _ReducedCL(self, rcl, b, c)
+        out._mk = (r, mc, getattr(self, '_proj_ver', 0))
+        return out
+
+
+ROW_WORKERS = 0           # forked processes evaluating rows besides this one (--row-workers; 0 = serial)
+PAR_MIN_ROWS = 32         # smaller batches stay in this process (a round trip costs ~1 ms)
+
+
+class _RowPool:
+    """Frequency-parallel gain_batch (2026-09-29, user: parallelise the rows).
+    ROW_WORKERS processes are FORKED from this one, so each holds the reduced
+    oracle as it is at that moment (basis, projection, QZ form) without pickling
+    it; they are re-forked whenever the basis changes (_project increments
+    _proj_ver).  A call sends each worker the design (ports B, C, compensator,
+    frequencies) -- O(n m) numbers -- and the worker rebuilds the per-design
+    reduced closed loop with make_cl and runs the serial gain_batch on its
+    share; this process does its own share meanwhile.  A frequency always goes
+    to the same process (blocks of 0.064 in w), so each keeps warm subspace
+    caches for its frequencies, as the serial path does for all of them."""
+    BLOCK = 64                           # w-block of 0.064 per slot (key = round(1000 w))
+
+    def __init__(self, ro, ver, nw):
+        import multiprocessing as mp
+        ctx = mp.get_context('fork')
+        self.ro_id, self.ver, self.procs, self.conns = id(ro), ver, [], []
+        for _ in range(nw):
+            a, b = ctx.Pipe()
+            pr = ctx.Process(target=_row_worker, args=(ro, b), daemon=True)
+            pr.start(); b.close()
+            self.procs.append(pr); self.conns.append(a)
+
+    def alive(self):
+        return all(p.is_alive() for p in self.procs)
+
+    def close(self):
+        for c in self.conns:
+            try:
+                c.send(None); c.close()
+            except Exception:
+                pass
+        for p in self.procs:
+            p.join(timeout=5)
+            if p.is_alive():
+                p.terminate()
+
+    def gain_batch(self, cl, om, arow, nvec, K, wv, maxit, k):
+        ns = len(self.procs) + 1
+        slot = (np.round(om * 1000.0).astype(np.int64) // self.BLOCK) % ns
+        r, mc, _ = cl._mk
+        for j, c in enumerate(self.conns):
+            idx = np.where(slot == j + 1)[0]
+            c.send((cl.b, cl.c, r, mc, om[idx], arow, nvec, K, wv[idx], maxit, k))
+        out = [None] * len(om)
+        own = np.where(slot == 0)[0]
+        for i, o in zip(own, cl.gain_batch(om[own], arow, nvec, K, wv[own], maxit=maxit, k=k, par=False)):
+            out[i] = o
+        for j, c in enumerate(self.conns):
+            ok, res, nc = c.recv()
+            if not ok:
+                raise RuntimeError(f"row worker {j + 1}: {res}")
+            cl.ncalls += nc
+            for i, o in zip(np.where(slot == j + 1)[0], res):
+                out[i] = o
+        return out
+
+
+_POOL = [None]
+
+
+def _row_pool(cl):
+    """The pool for cl's oracle and basis version, forked if needed; None when
+    cl was built on an older basis than the oracle's current one (a worker would
+    rebuild it on the wrong basis) -- the caller then stays serial."""
+    if cl._mk is None or cl._mk[2] != getattr(cl.ro, '_proj_ver', 0):
+        return None
+    p = _POOL[0]
+    if p is not None and p.ro_id == id(cl.ro) and p.ver == cl._mk[2] and p.alive():
+        return p
+    if p is not None:
+        p.close()
+    _POOL[0] = _RowPool(cl.ro, cl._mk[2], ROW_WORKERS)
+    return _POOL[0]
+
+
+def _row_worker(ro, conn):
+    global ROW_WORKERS
+    ROW_WORKERS = 0                      # no pools inside a worker
+    while True:
+        try:
+            msg = conn.recv()
+        except EOFError:
+            break
+        if msg is None:
+            break
+        B, C, r, mc, om, arow, nvec, K, wv, maxit, k = msg
+        try:
+            cl = ro.make_cl(B, C, r, mc)
+            out = cl.gain_batch(om, arow, nvec, K, wv, maxit=maxit, k=k, par=False) if len(om) else []
+            conn.send((True, out, cl.ncalls))
+        except Exception as e:           # reported to the caller, which raises
+            conn.send((False, repr(e), 0))
 
 
 LANCZOS_MIN_DIM = 40      # below this a dense SVD is cheaper than Lanczos
@@ -339,6 +442,7 @@ class _ReducedCL:
             self.b, self.c = np.asarray(b, complex).ravel(), np.asarray(c, complex).ravel()
             self.proxy = _ProxyCL(self.b, self.c, rcl, self.V, self.W, self.n)
         self.ncalls = 0
+        self._mk = None                     # (r, mc, basis version): set by make_cl
 
     def gain_k(self, omega, arow, nvec, K, k=2, want_vectors=True):
         rcl = self.rcl
@@ -511,7 +615,7 @@ class _ReducedCL:
         bRX = np.einsum('km,fkq->fmq', np.conj(bs['bt']), RX)
         return RX + np.matmul(bs['RHc'][idx], np.matmul(np.conj(np.transpose(bs['Gam'][idx], (0, 2, 1))), bRX))
 
-    def gain_batch(self, omegas, arow, nvec, K, want_vectors, maxit=40, k=1):
+    def gain_batch(self, omegas, arow, nvec, K, want_vectors, maxit=40, k=1, par=True):
         """sigma_1 at every frequency of `omegas` in one batched subspace
         iteration (warm-started from the same per-frequency cache as
         _leading_svd), and the singular pairs (x, z, gprime) in gain()'s
@@ -524,6 +628,10 @@ class _ReducedCL:
         om = np.asarray(omegas, float); m = len(om); wv = np.asarray(want_vectors, bool)
         if m == 0:
             return []
+        if par and ROW_WORKERS > 0 and m >= PAR_MIN_ROWS:
+            pool = _row_pool(self)
+            if pool is not None:
+                return pool.gain_batch(self, om, arow, nvec, K, wv, maxit, k)
         P = self.P; GVh, GWh = P['GV_h'], P['GW_h']; kd = GVh.shape[0]
         GVhH, GWhH = np.conj(GVh.T), np.conj(GWh.T)
         if self.mimo:
