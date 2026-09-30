@@ -2056,6 +2056,7 @@ def main():
     except Exception:
         pass
     D = FECoDesign(ne=a.ne, r=a.r, sob_len=a.sob_len)
+    import massops; massops.warmup(D.M)          # the mass matrix, factorised ONCE (STAGE6 6.29)
     D.alpha_argmax = (a.alpha_argmax == 'on')     # eigenvector of the eigenvalue ATTAINING alpha (2026-09-22)
     D.alpha_warm = bool(a.alpha_warm)
     D.alpha_warm_maxstep = a.alpha_maxstep

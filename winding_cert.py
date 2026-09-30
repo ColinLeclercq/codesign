@@ -73,6 +73,7 @@ import scipy.sparse.linalg as spla
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import controller as ctl
+import massops
 
 
 # ---------------------------------------------------------------- plant data
@@ -97,7 +98,7 @@ def _plant_tail_constants(A, M):
     dense SVD of M^-1 A at n <= 3000 and a power iteration x 1.3 above it --
     same value to 1e-15 at ne=100 and 200), and lam_min(M)."""
     n = A.shape[0]
-    Mlu = spla.splu(M.tocsc().astype(complex))
+    Mlu = massops.lu(M)                                   # the run's one factor of M
     As = A.tocsc().astype(complex)
     OP = spla.LinearOperator((n, n), dtype=complex,
                              matvec=lambda x: As.conj().T @ Mlu.solve(Mlu.solve(As @ x), trans='H'))

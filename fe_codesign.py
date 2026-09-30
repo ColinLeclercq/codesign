@@ -138,11 +138,10 @@ class FECoDesign:
         """
         if self._Hlu is None:
             return psi
-        if getattr(self, '_Mlu', None) is None:
-            import scipy.sparse.linalg as _spla
-            self._Mlu = _spla.splu(self.M.tocsc())
+        import massops
+        Mlu = massops.lu_real(self.M)
         t = (self.M + (self.sob_len ** 2) * self.Kstiff) @ psi
-        return self._Mlu.solve(t.real) + 1j * self._Mlu.solve(t.imag)
+        return Mlu.solve(t.real) + 1j * Mlu.solve(t.imag)
 
     def smooth_map_adj(self, g):
         """Adjoint P^T = M (M + l^2 K)^{-1} (M,H symmetric) for the chain rule."""
@@ -372,10 +371,8 @@ class FECoDesign:
         solve with the cached LU of M per call; M only as a factorised product."""
         import certify_sparse as _csp
         w0, w1, _ = _csp.stability_region(self.A, self.M, Ac)
-        if getattr(self, '_MluC', None) is None:
-            import scipy.sparse.linalg as _spla
-            self._MluC = _spla.splu(self.M.tocsc().astype(complex))
-        G0 = np.asarray(c, complex).conj().T @ self._MluC.solve(np.asarray(b, complex))
+        import massops
+        G0 = np.asarray(c, complex).conj().T @ massops.lu(self.M).solve(np.asarray(b, complex))
         m_, p_ = G0.shape[1], G0.shape[0]
         hg = np.linalg.eigvals(np.asarray(Kfb, complex).reshape(m_, p_) @ G0)
         for l_ in hg:

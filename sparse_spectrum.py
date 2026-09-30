@@ -42,6 +42,7 @@ from __future__ import annotations
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+import massops
 
 
 def _v0(n, seed=12345):
@@ -59,28 +60,13 @@ def _lmax(Hop, M, Mlu=None, tol=1e-10):
     return float(np.max(lam.real))
 
 
-_MLU_CACHE = {}
-
-
-def _m_lu(M):
-    """The complex sparse LU of the mass matrix M, ONCE per matrix object
-    (2026-09-30 review: highgain_estimates, closed_loop_tail, plant_rectangle
-    and PlantPencil each refactorised the same M on every call -- five per
-    round, 20 per plant_heights).  Keyed on the object, which is kept alive by
-    the cache so the key cannot be reused."""
-    e = _MLU_CACHE.get(id(M))
-    if e is None or e[0] is not M:
-        e = _MLU_CACHE[id(M)] = (M, spla.splu(sp.csc_matrix(M, dtype=complex)))
-    return e[1]
-
-
 _SFAR_CACHE = {}
 
 
 def plant_rectangle(A, M, s0, taus=(0.0, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0)):
     """(s_far, W_lo, W_hi): every eigenvalue of (A, M) with Re >= s0 lies in
     [s0, s_far] x [-W_lo, W_hi].  Sparse Lanczos only."""
-    Mlu = _m_lu(M); key = (id(A), id(M))
+    Mlu = massops.lu(M); key = (id(A), id(M))
     A0, M0 = A, M
     A = sp.csc_matrix(A, dtype=complex); M = sp.csc_matrix(M, dtype=complex)
     H = ((A + A.conj().T) * 0.5).tocsc()
@@ -113,7 +99,7 @@ def plant_rectangle(A, M, s0, taus=(0.0, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0))
 class PlantPencil:
     """(A, M) sparse: shift solves by a sparse LU."""
     def __init__(self, A, M):
-        self._Mlu = _m_lu(M)
+        self._Mlu = massops.lu(M)
         self.A = sp.csc_matrix(A, dtype=complex); self.M = sp.csc_matrix(M, dtype=complex)
         self.n = self.A.shape[0]; self._sig = None; self._lu = None
         self.Mmat = self.M
@@ -146,12 +132,10 @@ class ClosedLoopPencil:
         self.n = cl.n + cl.r; self._sig = None
         r = cl.r
         self.Mmat = sp.block_diag([sp.csc_matrix(cl.M, dtype=complex), sp.identity(r, dtype=complex, format='csc')]).tocsc()
-        self._Mlu = None                     # factorised on first use: only the tiling needs it (2026-09-30)
+        self._M = cl.M; self._r = r
 
-    def Minv(self, x):
-        if self._Mlu is None:
-            self._Mlu = spla.splu(self.Mmat)
-        return self._Mlu.solve(np.asarray(x, complex))
+    def Minv(self, x):                       # blockdiag(M, I)^-1: the run's one factor of M (massops)
+        return massops.block_solve(self._M, self._r, x)
 
     def shift(self, sigma):
         if self._sig != sigma:
@@ -301,7 +285,7 @@ def highgain_estimates(M, b, c, K, Mlu=None):
     B = np.asarray(b, complex); C = np.asarray(c, complex)
     B = B[:, None] if B.ndim == 1 else B; C = C[:, None] if C.ndim == 1 else C
     if Mlu is None:
-        Mlu = _m_lu(M)
+        Mlu = massops.lu(M)
     G0 = C.conj().T @ Mlu.solve(B)
     Kc = np.asarray(K, complex).reshape(B.shape[1], C.shape[1])
     return np.linalg.eigvals(Kc @ G0)
@@ -474,7 +458,7 @@ def closed_loop_tail(A, M, b, c, Ac, Bc, Cc, Dc, gamma, Mlu=None):
     B = np.asarray(b, complex); C = np.asarray(c, complex)
     B = B[:, None] if B.ndim == 1 else B; C = C[:, None] if C.ndim == 1 else C
     if Mlu is None:
-        Mlu = _m_lu(M)
+        Mlu = massops.lu(M)
     bn = float(np.sqrt(np.linalg.eigvalsh(B.conj().T @ Mlu.solve(B)).max()))
     cn = float(np.sqrt(np.linalg.eigvalsh(C.conj().T @ Mlu.solve(C)).max()))
     s_far, Hd = plant_heights(A, M)

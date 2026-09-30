@@ -172,10 +172,8 @@ class Evaluator:
             v = np.asarray(v, complex)
             Kv = D.Kstiff @ v; Mv = D.M @ v
             if FIELD_ORDER == 2:                              # S v = K M^-1 K v (M factored once per mesh)
-                if getattr(D, '_field_Mlu', None) is None:
-                    import scipy.sparse.linalg as _spla
-                    D._field_Mlu = _spla.splu(D.M.tocsc().astype(complex))
-                Kv = D.Kstiff @ D._field_Mlu.solve(np.asarray(Kv, complex))
+                import massops
+                Kv = D.Kstiff @ massops.lu(D.M).solve(np.asarray(Kv, complex))
             kk = FIELD_KMAX2 ** FIELD_ORDER
             vMv = float(np.real(np.vdot(v, Mv))); R = float(np.real(np.vdot(v, Kv))) / vMv
             gv = 2.0 * (Kv - R * Mv) / vMv / kk               # d(R/kmax^2p)/dRe v + i d/dIm v
