@@ -1520,6 +1520,55 @@ These are 3-round values: a check of the guarantee, not optima. The roots are sh
 
 The full lattice's field runs should be budgeted at 1-2 h each, not 1 h.
 
+## 6.32 How many atoms do the earlier high-dimensional fields need? (user, 2026-10-01 09:33)
+
+The question: instead of asking how well Laplacian modes cover an atom, ask how many atoms are needed to represent the optimal FB/FC fields found earlier with high-dimensional parametrisations.
+
+Two roles, kept apart:
+- **Design parametrisation.** The atoms (5 real parameters each, 20 per field at 4 atoms) are what the optimiser moves. The 160 Laplacian modes are not design parameters.
+- **Reduced model's input basis.** Every reduced-model gamma needs the plant's responses to the fields being tried. The 160 modes make it exact for any field in their span; that is the kd ~ 300 of 6.31. A smaller alternative is the current atom fields plus their 20 parameter derivatives (21 columns per field), which covers the fields within a round's steps to first order. This changes cost only, not what the optimiser can reach.
+
+**Fit study** (`tools/atom_count.py`, new; `results_atom_count/atom_count.md`, `.json`).
+- `fieldbasis.fit_atoms`, N = 1..8 atoms, width >= 0.4 or >= 1.0, |wavenumber| <= 0.7071.
+- Relative M-norm error, complex amplitudes free (phase and scale invariant).
+- The fit is greedy and non-convex, so the errors are upper bounds.
+- 16 minutes on 1 core; a first try with N up to 10 hit the 10-minute shell limit.
+
+| reference (gamma) | width >= | N=1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|---|
+| H^2 kmax=1, 160 modes, ne=400 (3.914071), actuator | 0.4 | 0.294 | 0.244 | 0.217 | 0.199 | 0.162 | 0.146 | 0.130 | 0.124 |
+| same | 1.0 | 0.294 | 0.244 | 0.218 | 0.201 | 0.164 | 0.157 | 0.148 | 0.130 |
+| H^2 kmax=1, 160 modes, ne=200 (3.911740), actuator | 0.4 | 0.311 | 0.286 | 0.266 | 0.210 | 0.191 | 0.151 | 0.130 | 0.120 |
+| unconstrained, 160 modes, ne=200 (3.888738; artefact, 4.605 on ne=400), actuator | 0.4 | 0.425 | 0.420 | 0.388 | 0.372 | 0.300 | 0.265 | 0.250 | 0.195 |
+| same | 1.0 | 0.425 | 0.425 | 0.418 | 0.417 | 0.414 | 0.406 | 0.401 | 0.395 |
+| frozen report design, ne=200 (3.925389), actuator | 0.4 | 0.260 | 0.199 | 0.178 | 0.140 | 0.123 | 0.106 | 0.092 | 0.064 |
+| 4 atoms width >= 1 (A2'', 3.876296), actuator (check) | 0.4 | 0.193 | 0.121 | 0.035 | 0.000 | 0 | 0 | 0 | 0 |
+
+The sensor fields give the same numbers to within 0.03; all rows are in the .md.
+
+**Why the H^2 fields need many atoms.** The fields' content, measured with an FFT of the nodal values (actuator):
+
+| field | energy at abs(k) > 1 | energy at abs(k) > 2 | spatial spread (RMS) |
+|---|---|---|---|
+| H^2 ne=400 | 0.036 | 0.019 | 6.3 |
+| H^2 ne=200 | 0.049 | 0.019 | 7.8 |
+| unconstrained ne=200 | 0.144 | 0.133 | 13.8 |
+| frozen | 0.022 | 0.006 | 3.8 |
+| 4 atoms (A2'') | 0.012 | 1e-4 | 2.4 |
+
+- The H^2 fields have long, low-amplitude tails, with a spread of 6-8 against 2.4 for the atom design.
+- About 2 % of their energy sits in the k ~ 2-2.6 wiggles (32.6). This alone is an error of sqrt(0.019) = 0.14.
+- 8 atoms reach 0.12: the main part, and some of the wiggles through the width-0.4 atoms' broad spectra.
+- The unconstrained fields carry 13 % of their energy at abs(k) > 2. They are not representable at width 1 (0.40 at 8 atoms), which is consistent with their being mesh artefacts (STAGE5 32.7).
+
+**The fit error is not the yardstick for gamma.**
+- The 4-atom optimum (3.876296; 3.879283 on ne=800) is below the H^2 optimum (3.914071 at ne=400; 3.915962 on ne=800). It is 0.16-0.24 away from the H^2 fields (STAGE5 32.6).
+- So the high-dimensional fields are not an optimum for the atoms to copy.
+- Gamma is very sensitive to the fields with the controller held (a 0.18 fit error took gamma 3.93 -> 6.83, 32.6). The value of an N-atom fit is therefore known only after re-optimising.
+- The number of atoms is set by the optimised gamma against N: one K+FB+FC run per N at ne=200, width >= 0.4. Starts:
+  - for N <= 4, the fit to A2'';
+  - for N > 4, extra atoms with nonzero amplitude. An atom of zero amplitude has zero gradient in its centre, width and wavenumber.
+
 ## 6.23 Open items
 
 - the plant heights of the tail certificate: ~100 s at ne = 400 per process
@@ -1537,7 +1586,8 @@ The full lattice's field runs should be budgeted at 1-2 h each, not 1 h.
 - orders 10 and 15 of the central K+B+C compensator (user, 2026-09-30):
   `tools/mimo_n100.sh kbc_cen10` / `kbc_cen15` (weighted-truncation starts, 6.27);
 - field cases at ne=200: reduced basis ~300 with two 160-mode input bases (6.31);
-  fewer modes or support-restricted input bases before the full lattice;
+  fewer modes, support-restricted or atom-tangent input bases before the full lattice;
+- number of atoms (6.32): optimised K+FB+FC gamma against N at ne=200, width >= 0.4;
 - before 2-D scale: the five items of 6.28 are done (6.29), the parallel
   full-model tasks too (6.30); left: MUMPS as a `sparse_lu` backend, the
   singular-M (velocity mass) versions of the M-norm bounds at the BFS.
