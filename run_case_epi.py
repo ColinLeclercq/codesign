@@ -1441,6 +1441,23 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
     return float(g), float(w), bool(ok), peaks
 
 
+def _atoms_record_keys(D, apa, aps):
+    """The atoms in natural form (Re a, Im a, c, width, wavenumber) and the
+    bounds they were made with, for a record (STAGE6 6.35): its (rho, tau)
+    alone mean different fields under different bounds."""
+    import fieldbasis as _fb
+    out = {}
+    for side, P in (('a', apa), ('s', aps)):
+        A = getattr(D, 'atoms_' + side, None)
+        if P is None or A is None:
+            continue
+        rows = [np.asarray(r, float) for r in (P if isinstance(P, (list, tuple)) else [P])]
+        Q = np.array([_fb.atoms_to_natural(r, A['n'], A['smin'], A['kmax']) for r in rows])
+        out[f'atoms_{side}_nat'] = Q if isinstance(P, (list, tuple)) else Q[0]
+        out[f'atoms_{side}_bounds'] = np.array([A['smin'], A['kmax']])
+    return out
+
+
 def _mimo_setup(a, D, flags, tag):
     """MIMO start (STAGE6): the design from --mimo-start (or this run's own
     checkpoint when it is better), the controller order from it, the flags the
@@ -1492,13 +1509,12 @@ def _mimo_setup(a, D, flags, tag):
         for key, fk, v0_, cnt in (('a', 'FB', va0, m), ('s', 'FC', vs0, p)):
             if not flags.get(fk):
                 continue
-            P = np.asarray(z[f'atoms_{key}_p']) if f'atoms_{key}_p' in z.files else np.zeros(0)
-            npar = _fb.NATOM_PAR * a.field_atoms
-            if P.size == cnt * npar:
-                p0 = [np.asarray(row, float) for row in P.reshape(cnt, npar)]; how = 'from the record'
+            P, how = _fb.atoms_from_record(z, key, a.field_atoms, a.atom_smin, a.atom_kmax, D.xn)
+            if P is not None and len(P) == cnt:
+                p0 = [np.asarray(row, float) for row in P]; how = 'from the record, ' + how
             else:
                 p0 = [_fb.fit_atoms(D.xn, v_, D.M, a.field_atoms, a.atom_smin, a.atom_kmax)[0] for v_ in v0_]
-                how = 'fitted to the start fields'
+                how = 'fitted to the start fields' + (f' ({how})' if P is None and how != 'no atoms in the record' else '')
             setattr(D, 'atoms_' + key, dict(n=int(a.field_atoms), smin=float(a.atom_smin), kmax=float(a.atom_kmax), p0=p0))
             print(f"field atoms ({'actuators' if key == 'a' else 'sensors'}): {cnt} x {a.field_atoms} Gabor atoms; {how}",
                   flush=True)
@@ -2495,14 +2511,16 @@ def main():
         for key, fk, v0_ in (('a', 'FB', pk_args[5]), ('s', 'FC', pk_args[6])):
             if not flags.get(fk) or v0_ is None:
                 continue
-            if _srcz is not None and f'atoms_{key}_p' in _srcz.files and \
-                    len(_srcz[f'atoms_{key}_p']) == _fb.NATOM_PAR * a.field_atoms:
-                p0 = np.asarray(_srcz[f'atoms_{key}_p'], float); how = 'from the record'
+            _P0, _how0 = (_fb.atoms_from_record(_srcz, key, a.field_atoms, a.atom_smin, a.atom_kmax, D.xn)
+                          if _srcz is not None else (None, ''))
+            if _P0 is not None and len(_P0) == 1:
+                p0 = _P0[0]; how = 'from the record, ' + _how0
             else:
                 v0n = D.smooth_map(v0_) if getattr(D, 'field_basis_' + key, None) is None and \
                     getattr(D, 'field_input_' + key, None) is None else v0_
                 p0, err = _fb.fit_atoms(D.xn, v0n, D.M, a.field_atoms, a.atom_smin, a.atom_kmax)
-                how = f'fitted to the start field (M-norm error {err:.3f})'
+                how = f'fitted to the start field (M-norm error {err:.3f})' + \
+                    (f'; {_how0}' if _P0 is None and _how0 not in ('', 'no atoms in the record') else '')
             setattr(D, 'atoms_' + key, dict(n=int(a.field_atoms), smin=float(a.atom_smin), kmax=float(a.atom_kmax), p0=p0))
             print(f"field atoms ({'actuator' if key == 'a' else 'sensor'}): {a.field_atoms} Gabor atoms, width >= {a.atom_smin}, "
                   f"|wavenumber| <= {a.atom_kmax}; {how}", flush=True)
@@ -3762,6 +3780,7 @@ def main():
                          **(dict(Bc=np.asarray(aa[3]), loop_orders=np.array(flags['loop_orders'])) if MIMO else {}),
                          atoms_a_p=(_apa if _apa is not None else np.zeros(0)),
                          atoms_s_p=(_aps if _aps is not None else np.zeros(0)),
+                         **_atoms_record_keys(D, _apa, _aps),
                          va=(va_ if va_ is not None else np.zeros(0)),
                          vs=(vs_ if vs_ is not None else np.zeros(0)),
                          gamma=g, alpha=float(al_c), wlo=float(a.wlo), whi=float(a.whi),
@@ -4425,6 +4444,7 @@ def main():
              xa=xa, xs=xs, xi_a=xia, xi_s=xis,
              atoms_a_p=(_apa if _apa is not None else np.zeros(0)),
              atoms_s_p=(_aps if _aps is not None else np.zeros(0)),
+             **_atoms_record_keys(D, _apa, _aps),
              va=(va if va is not None else np.zeros(0)),
              vs=(vs if vs is not None else np.zeros(0)),
              psi_a=pa, psi_s=ps, gamma=gam, alpha=al,

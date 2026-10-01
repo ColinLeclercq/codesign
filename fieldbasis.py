@@ -160,6 +160,93 @@ def split_atoms(p, n):
     return p[:n] + 1j * p[n:2 * n], p[2 * n:3 * n], p[3 * n:4 * n], p[4 * n:5 * n]
 
 
+# ------------------------------------------------ atoms in records (STAGE6 6.35)
+# The optimiser's parameters (rho, tau) mean a width smin (1 + rho^2) and a
+# wavenumber kmax tanh(tau): the SAME vector is a different field under other
+# bounds.  Records therefore also carry the atoms in NATURAL form, q = (Re a,
+# Im a, c, s, kappa), and the bounds they were made with; a reader converts to
+# its own bounds (exactly while the atoms satisfy them).
+LEGACY_BOUNDS = ((1.0, 0.7071), (0.4, 0.7071))     # every bound pair used before 6.35
+
+
+def atoms_to_natural(p, n, smin, kmax):
+    a, c, rho, tau = split_atoms(np.asarray(p, float), n)
+    return np.concatenate([a.real, a.imag, c, atom_widths(rho, smin), atom_wavenumbers(tau, kmax)])
+
+
+def atoms_from_natural(q, n, smin, kmax):
+    """(p, clipped): the parameter vector for the bounds (smin, kmax) of the
+    natural atoms q; clipped lists the atoms moved onto a bound (width below
+    smin, or abs(wavenumber) at or above kmax -- the field then changes)."""
+    q = np.asarray(q, float)
+    a_re, a_im, c, s, k = q[:n], q[n:2 * n], q[2 * n:3 * n], q[3 * n:4 * n], q[4 * n:5 * n]
+    kcap = kmax * (1.0 - 1e-12)
+    clipped = [j for j in range(n) if s[j] < smin * (1.0 - 1e-9) or abs(k[j]) > kmax * (1.0 + 1e-9)]
+    rho = np.sqrt(np.maximum(s / smin - 1.0, 0.0))
+    tau = np.arctanh(np.clip(k, -kcap, kcap) / kmax)
+    return np.concatenate([a_re, a_im, c, rho, tau]), clipped
+
+
+def atoms_from_record(z, side, n, smin, kmax, x):
+    """The atom parameter rows of field side 'a' / 's' of a record, for the
+    bounds (smin, kmax): from the natural form when the record has it, else the
+    stored (rho, tau) under the bounds that reproduce the record's own nodal
+    field (va / vs on the nodes x) -- a legacy record does not say which bounds
+    it was made with.  Returns (rows (k x 5 n) or None, message); None when the
+    record has no such atoms or they cannot be identified -- the caller then
+    fits atoms to the record's field."""
+    key_p, key_q, key_v = f'atoms_{side}_p', f'atoms_{side}_nat', ('va' if side == 'a' else 'vs')
+    npar = NATOM_PAR * n
+    if key_q in z.files and np.asarray(z[key_q]).size:
+        Q = np.asarray(z[key_q], float)
+        if Q.shape[-1] != npar:
+            return None, f'the record has {Q.shape[-1] // NATOM_PAR} atoms per field, not {n}'
+        Q = Q.reshape(-1, npar)
+        b0 = tuple(float(v) for v in z[f'atoms_{side}_bounds']) if f'atoms_{side}_bounds' in z.files else None
+        how = 'natural form' + (f' (made with width >= {b0[0]:g}, |k| <= {b0[1]:g})' if b0 else '')
+    elif key_p not in z.files or np.asarray(z[key_p]).size == 0:
+        return None, 'no atoms in the record'
+    else:
+        P = np.asarray(z[key_p], float).ravel()
+        V = np.asarray(z[key_v], complex).ravel() if key_v in z.files else np.zeros(0)
+        x = np.asarray(x, float)
+        if V.size == 0 or V.size % len(x):
+            return None, (f'legacy atom record whose {key_v} is not on these nodes: its bounds cannot be '
+                          f'identified, so its atoms are not used')
+        k = V.size // len(x)
+        if P.size != k * npar:
+            return None, f'the record has {P.size // (NATOM_PAR * k)} atoms per field, not {n}'
+        P, V = P.reshape(k, npar), V.reshape(k, len(x))
+        found = None
+        for b0 in [(float(smin), float(kmax))] + [b for b in LEGACY_BOUNDS if b != (float(smin), float(kmax))]:
+            ok = True
+            for prow, v in zip(P, V):
+                f = atom_field(x, *split_atoms(prow, n), b0[0], b0[1])
+                cos = abs(np.vdot(f, v)) / max(np.linalg.norm(f) * np.linalg.norm(v), 1e-300)
+                ok &= cos > 1.0 - 1e-9
+            if ok:
+                found = b0
+                break
+        if found is None:
+            return None, (f'legacy atom record: no known bounds {LEGACY_BOUNDS} with {n} atoms per field '
+                          f'reproduce its {key_v}, so its atoms are not used')
+        Q = np.array([atoms_to_natural(prow, n, *found) for prow in P])
+        how = f'legacy (rho, tau), identified as width >= {found[0]:g}, |k| <= {found[1]:g} by its own field'
+    same = (b0 if key_q in z.files and np.asarray(z[key_q]).size else found) == (float(smin), float(kmax))
+    if same and key_p in z.files and np.asarray(z[key_p]).size == Q.size:
+        # made with these very bounds: the stored vector itself (bit for bit as
+        # before 6.35; the round trip through the natural form loses rho's sign
+        # and rounds tau)
+        return np.asarray(z[key_p], float).reshape(Q.shape), how
+    rows, clip = [], []
+    for j, qrow in enumerate(Q):
+        prow, cl = atoms_from_natural(qrow, n, smin, kmax)
+        rows.append(prow); clip += [(j, i) for i in cl]
+    if clip:
+        how += f'; {len(clip)} atom(s) outside width >= {smin:g}, |k| <= {kmax:g} moved onto the bound (field changed)'
+    return np.array(rows), how
+
+
 def _rho_from_halfwidth(x, av, i0, smin):
     """Initial width parameter of a new atom from the half-maximum width of |v|
     around its peak (Gaussian: FWHM = 2 sqrt(2 ln 2) s), s = smin (1 + rho^2).

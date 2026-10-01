@@ -9,7 +9,9 @@ from packer import PackerMIMO
 import fieldbasis as FB
 rec=sys.argv[1] if len(sys.argv) > 1 else 'results_mimo_prod/at_dec/KGC_FB_FC_s0_ne100_mimo2x2_decentral.npz'
 z,D,b,c,arow,Cc,Dc=load(rec)
-na_=4; pa_=np.asarray(z['atoms_a_p'],float); ps_=np.asarray(z['atoms_s_p'],float)
+na_=4  # the record's atoms in this check's bounds (width >= 1, |k| <= 0.7071; STAGE6 6.35)
+pa_,how_a=FB.atoms_from_record(z,'a',na_,1.0,0.7071,D.xn); ps_,how_s=FB.atoms_from_record(z,'s',na_,1.0,0.7071,D.xn)
+print('atoms:',how_a,'/',how_s)
 D.atoms_a=dict(n=na_,smin=1.0,kmax=0.7071,p0=list(pa_)); D.atoms_s=dict(n=na_,smin=1.0,kmax=0.7071,p0=list(ps_))
 flags=dict(K=True,B=False,C=False,FB=True,FC=True,m=2,p=2,struct='central',loop_orders=[4,4])
 va=[FB.atom_field(D.xn,*FB.split_atoms(q,na_),1.0,0.7071) for q in pa_]; vs=[FB.atom_field(D.xn,*FB.split_atoms(q,na_),1.0,0.7071) for q in ps_]

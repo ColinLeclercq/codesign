@@ -49,7 +49,13 @@ def from_siso(a):
         Bc = np.zeros((R, p), complex); Bc[:, 0] = 1.0
         nvec = np.zeros((m, R), complex)
         K = np.array([[complex(z['K']), 0], [0, 0]], complex)
-        pa = np.asarray(z['atoms_a_p'], float); ps = np.asarray(z['atoms_s_p'], float); na = len(pa) // FB.NATOM_PAR
+        # the record's atoms in THIS tool's bounds (width >= 1, |k| <= 0.7071): exact when
+        # they satisfy them, reported when not (STAGE6 6.35: (rho, tau) alone is ambiguous)
+        na = np.asarray(z['atoms_a_nat'] if 'atoms_a_nat' in z.files else z['atoms_a_p']).size // FB.NATOM_PAR
+        xr = FECoDesign(ne=(np.asarray(z['va']).size + 1) // 2, r=1).xn
+        (pa,), how_a = FB.atoms_from_record(z, 'a', na, 1.0, 0.7071, xr)
+        (ps,), how_s = FB.atoms_from_record(z, 's', na, 1.0, 0.7071, xr)
+        print(f"atoms: actuator {how_a}; sensor {how_s}")
         pa2, ps2 = pa.copy(), ps.copy(); pa2[2 * na:3 * na] -= a.shift; ps2[2 * na:3 * na] += a.shift
         A = np.array([pa, pa2]); S = np.array([ps, ps2])
         va = np.array([FB.atom_field(D.xn, *FB.split_atoms(q, na), 1.0, 0.7071) for q in A])

@@ -1660,6 +1660,51 @@ User: try without constraints on the atoms first and see what happens.
 - 5, 6: A2'' plus new atoms at small amplitude;
 - 3, 2: A2'' minus its weakest atoms.
 
+## 6.35 Atom records carry their bounds; which atoms a mesh resolves (user, 2026-10-01 14:43)
+
+**The record issue (fixed).** A record stored only the optimiser's atom parameters (rho, tau), meaning a width smin (1 + rho^2) and a wavenumber kmax tanh(tau). The same vector is a different field under other bounds.
+- Read at width >= 0.4, the A2'' record (made at width >= 1) was a different design: a gauge-free field distance of 0.56 / 0.57.
+- Nothing flagged it; the start guard fires only at 10x gamma.
+
+The fix:
+- **Writing.** Records (the final record and the checkpoint) now also store the atoms in natural form, `atoms_{a,s}_nat` = (Re a, Im a, c, width, wavenumber), and the bounds `atoms_{a,s}_bounds` = (smin, kmax).
+- **Reading** (`fieldbasis.atoms_from_record`, used by the driver at both resume sites, SISO and MIMO, and by `tools/cross_eval.py`, `mimo_start.py`, `mimo_proto.py`, `check_reduced_fields.py`):
+  - from the natural form when present;
+  - else (legacy record) the stored (rho, tau) under whichever known bound pair, (1, 0.7071) or (0.4, 0.7071), reproduces the record's own nodal field to 1e-9;
+  - then expressed in the reader's bounds: exact while the atoms satisfy them; an atom outside is moved onto the bound and the message says the field changed;
+  - a record made with the reader's own bounds returns its stored vector bit for bit, so earlier resumes are unchanged;
+  - an unidentifiable record, or one with another atom count, returns nothing, and the driver fits atoms to its field and says why.
+- **Checked:**
+  - A2'' read at width >= 0.4 starts at 3.876296, its own value (K+FB+FC, ne=200, 1 round: 3.876187); the written record carries the natural form and the bounds (0.4, 0.7071);
+  - the identification is right on A2'' (1), the 6.34 runs (0.4) and the MIMO at_dec record (1, 2 ports);
+  - an 8-atom record read for 4 atoms is refused;
+  - `cross_eval` reproduces its earlier A2'' -> ne=400 value 3.879101;
+  - `check_reduced_fields` unchanged (8.3e-13);
+  - invariants pass (frozen 10.23128516441147).
+
+**Which atoms a mesh resolves** (`tools/atom_resolution.py`, new; `results_atom_count/atom_resolution.{json,log}`).
+- What the optimiser sees of a field is the plant's response to it.
+- The test: the plant transfer between an actuator atom at -2 and a sensor atom at +2 with the same width s and wavenumber kappa, ne = 100 / 200 / 400 against ne = 1600, max over w in [-4, 4], relative to its peak.
+- Selected values:
+
+| s, kappa | ne=100 | ne=200 | ne=400 |
+|---|---|---|---|
+| 2, 0 (the plant's own discretisation error) | 5.1e-3 | 3.3e-4 | 2.1e-5 |
+| 1, 0.7071 (STAGE5 bounds) | 1.1e-2 | 7.5e-4 | 4.8e-5 |
+| 0.4, 0.7071 (current bounds) | 5.1e-2 | 3.7e-3 | 4.7e-4 |
+| 0.4, 2 | 2.0e-1 | 1.5e-2 | 1.4e-3 |
+| 0.2, 0.7071 | 5.4e-1 | 7.1e-3 | 7.3e-3 |
+| 1, 4 | 8.3e+1 | 9.8e-2 | 7.3e-3 |
+
+- At ne=100 the width-0.4 atoms are not resolved (5 %).
+- At ne=200 they are resolved to 4e-3, against the plant's own 3e-4.
+
+**Atom coherence** (normalised M-inner product of two atoms):
+- the 6.34 N = 8 pair: 0.9972;
+- same centre and wavenumber, width ratio 1.2 / 1.5 / 2 / 3: 0.992 / 0.961 / 0.894 / 0.775;
+- same width 1, centres 0.5 / 1 / 2 apart: 0.939 / 0.779 / 0.368;
+- same centre and width 1, wavenumbers 0.25 / 0.5 / 1 apart: 0.985 / 0.940 / 0.779.
+
 ## 6.23 Open items
 
 - the plant heights of the tail certificate: ~100 s at ne = 400 per process
@@ -1682,7 +1727,6 @@ User: try without constraints on the atoms first and see what happens.
   (with `--field-input tangent`: ~15-25 min per run);
 - atom well-posedness (6.33, 6.34): explicit width/wavenumber bounds instead of the flat
   reparametrisation at the floor; dead, edge and overlapping atoms (all seen in 6.34);
-- atom records: store smin/kmax and convert on resume (6.34, latent);
 - atom count: nested study from A2'' (6.34);
 - before 2-D scale: the five items of 6.28 are done (6.29), the parallel
   full-model tasks too (6.30); left: MUMPS as a `sparse_lu` backend, the

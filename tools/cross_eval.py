@@ -25,21 +25,30 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--src', required=True); ap.add_argument('--ne-src', type=int, required=True)
     ap.add_argument('--ne-dst', type=int, required=True); ap.add_argument('--out', required=True)
-    ap.add_argument('--atom-smin', type=float, default=1.0); ap.add_argument('--atom-kmax', type=float, default=0.7071)
+    # the bounds the written atoms are expressed in (STAGE6 6.35: the record's own
+    # bounds are read from it, or identified from its field for a legacy record;
+    # the defaults contain every legacy bound pair, so the conversion is exact)
+    ap.add_argument('--atom-smin', type=float, default=0.4); ap.add_argument('--atom-kmax', type=float, default=0.7071)
     a = ap.parse_args()
     z = np.load(a.src, allow_pickle=True); out = {k: z[k] for k in z.files}
     r = len(z['d'])
     Ds = FECoDesign(ne=a.ne_src, r=r); Dd = FECoDesign(ne=a.ne_dst, r=r); x = np.asarray(Dd.xn, float)
-    for key, pkey in (('va', 'atoms_a_p'), ('vs', 'atoms_s_p')):
-        if pkey in z.files and np.asarray(z[pkey]).size:
-            p = np.asarray(z[pkey], float); n = p.size // FB.NATOM_PAR
-            ac, c, rho, tau = FB.split_atoms(p, n)
-            v = FB.atom_field(x, ac, c, rho, tau, a.atom_smin, a.atom_kmax); how = 'atoms (exact)'
+    for key, side in (('va', 'a'), ('vs', 's')):
+        pkey = f'atoms_{side}_p'
+        n = (np.asarray(z[f'atoms_{side}_nat']).size if f'atoms_{side}_nat' in z.files
+             else np.asarray(z[pkey]).size if pkey in z.files else 0) // FB.NATOM_PAR
+        P, how = FB.atoms_from_record(z, side, n, a.atom_smin, a.atom_kmax, Ds.xn) if n else (None, '')
+        if P is not None:
+            ac, c, rho, tau = FB.split_atoms(P[0], n)
+            v = FB.atom_field(x, ac, c, rho, tau, a.atom_smin, a.atom_kmax); how = f'atoms (exact; {how})'
             # consistency: the source record's field is the same function
             vs_ = FB.atom_field(np.asarray(Ds.xn), ac, c, rho, tau, a.atom_smin, a.atom_kmax)
             vsrc = np.asarray(z[key], complex)
             err = abs(abs(np.vdot(vs_, Ds.M @ vsrc)) / (Ds.norm_M(vs_) * Ds.norm_M(vsrc)) - 1)
             how += f', source field reproduced to {err:.1e}'
+            out[pkey] = P[0]
+            out[f'atoms_{side}_nat'] = FB.atoms_to_natural(P[0], n, a.atom_smin, a.atom_kmax)
+            out[f'atoms_{side}_bounds'] = np.array([a.atom_smin, a.atom_kmax])
         else:
             v = FB.p2_eval(Ds, z[key], x); how = 'P2 evaluation'
         out[key] = v / Dd.norm_M(v)

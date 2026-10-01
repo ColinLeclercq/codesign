@@ -341,9 +341,13 @@ def run(a):
         # design (atoms are functions of x: exact on any mesh), loop 2 switched off
         # (K_2 = 0) with copies of the loop-1 fields shifted by -4 (actuator) / +4 (sensor)
         z = np.load(a.siso_atoms, allow_pickle=True)
-        R = 0; na = len(np.asarray(z['atoms_a_p'])) // FB.NATOM_PAR
+        R = 0; na = np.asarray(z['atoms_a_nat'] if 'atoms_a_nat' in z.files else z['atoms_a_p']).size // FB.NATOM_PAR
         th0 = np.array([complex(z['K']), 0, 0, 0], complex)
-        pa = np.asarray(z['atoms_a_p'], float); ps = np.asarray(z['atoms_s_p'], float)
+        # in this prototype's bounds (width >= 1, |k| <= 0.7071; STAGE6 6.35)
+        xr = FECoDesign(ne=(np.asarray(z['va']).size + 1) // 2, r=1).xn
+        (pa,), how_a = FB.atoms_from_record(z, 'a', na, 1.0, 0.7071, xr)
+        (ps,), how_s = FB.atoms_from_record(z, 's', na, 1.0, 0.7071, xr)
+        print(f"atoms: actuator {how_a}; sensor {how_s}")
         pa2 = pa.copy(); pa2[2 * na:3 * na] -= 4.0
         ps2 = ps.copy(); ps2[2 * na:3 * na] += 4.0
         pos = np.concatenate([pa, pa2, ps, ps2])
