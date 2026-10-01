@@ -1,0 +1,4 @@
+N=6: {"case": "K+FB+FC", "gamma": 3.8922862813224963, "alpha": -0.21073055467955298, "n_active": 8, "outer": 13, "nOmega": 244, "calls": 850, "seconds": 1339.8}
+N=8: {"case": "K+FB+FC", "gamma": 3.887178096287401, "alpha": -0.21482226212003996, "n_active": 9, "outer": 15, "nOmega": 246, "calls": 784, "seconds": 1524.6}
+N=2: {"case": "K+FB+FC", "gamma": 4.914215379918911, "alpha": -0.21792484646373972, "n_active": 2, "outer": 24, "nOmega": 157, "calls": 550, "seconds": 601.8}
+N=4: {"case": "K+FB+FC", "gamma": 3.969140628322215, "alpha": -0.21466711480731887, "n_active": 7, "outer": 41, "nOmega": 241, "calls": 902, "seconds": 1530.8}

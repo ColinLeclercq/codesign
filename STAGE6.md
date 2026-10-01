@@ -1613,6 +1613,53 @@ That is about 1 min per round. Earlier atom runs converged in 12-21 rounds (STAG
 - Amplitude: a vanishing atom loses its centre, width and wavenumber gradients (dead atom). This is not prevented.
 - Overlap: not prevented. Two atoms with the same centre, width and wavenumber are one atom: the Jacobian loses rank and the parametrisation is not identifiable. A separation penalty or merge-and-reseed rule would be the fix. So far it has not occurred (STAGE5 32.6).
 
+## 6.34 Optimised gamma against the number of atoms, no extra constraints (user, 2026-10-01 11:59)
+
+User: try without constraints on the atoms first and see what happens.
+
+**Protocol** (`tools/atom_count_runs.sh`, new; `results_atom_count/runs/`):
+- K+FB+FC at ne=200, the nominal loop, N Gabor atoms per field (width >= 0.4, abs(wavenumber) <= 0.7071), `--field-input tangent` (6.33).
+- The same start for every N: the H^2 ne=200 record (3.911740), its controller held and its fields fitted by N atoms (the 6.32 fits).
+- Progress stop 0.05 % over 3 rounds (the nominal 0.15 % stopped atom runs early, STAGE5 32.6), at most 60 rounds, 2 runs at a time on 1 core each.
+- `--resume-guard 0`: the start guard (a resumed start 10x above its record is a failed transplant) refused N = 4, whose fitted start is 81.86 with the controller held. New option, default 10 as before.
+
+**A stability escape, found by the first set of runs** (`results_atom_count/runs_v1_escape/`).
+- The N = 2 run reached a certified 3.823106, but the dense save veto refused it: an eigenvalue at +1.134 - 0.656i.
+- A replay with `--dense-audit` (new: a dense eigensolve of every round's candidate, printed with the gate's decision; check only) located it at round 0. That round accepted a design with an eigenvalue at +51.94 - 20.14i, while the chain's abscissa read -0.209.
+- The continuation gate watches the near-line eigenvalues. An eigenvalue arriving from far left in one step is not among them. This is the mechanism of the MIMO escape (STAGE6, `--wind-accept`), whose global winding count at acceptance was on for MIMO only.
+- Fix: `--wind-accept auto` now also covers every case with a free field (FB/FC). The replay refuses that round ("winding check at acceptance: 1 eigenvalue(s) right of Re=-eps: REFUSED").
+- Frozen path 10.23128516441147, witness invariant 0, Hurwitz selftest 0/200 (`tools/check_invariants.sh`).
+- The lattice check's field cases (6.31) and the STAGE5 field records all passed the dense save veto, so their final designs are stable.
+
+**Results** (rerun with the fix and `--dense-audit`: no candidate the chain accepted had alpha_dense > -0.158):
+
+| N atoms per field | start (fields fitted, controller held) | final gamma | rounds | wall |
+|---|---|---|---|---|
+| 2 | 28.918332 | 4.914215 | 24 (progress stop) | 10 min |
+| 4 | 81.858469 | 3.969141 | 41 (progress stop) | 26 min |
+| 6 | 5.137328 | 3.892286 | 13 (progress stop) | 22 min |
+| 8 | 6.196054 | 3.887178 | 15 (progress stop) | 25 min |
+| references | H^2 160 modes, ne=200: 3.911740 | 4 atoms width >= 1 (A2''): **3.876296** | | |
+
+- N = 6 is the v1 run bit for bit (3.8922862813224963): it had no escape. N = 8 differs from v1 (3.888885) at the 1e-4 level.
+- 6 and 8 atoms, started from the H^2 fields, end below the H^2 optimum.
+- No run reaches the 4-atom A2'' value. A2'' is admissible here: width >= 1 atoms are width >= 0.4 atoms. So the N = 4 run (3.969) ended in a worse local minimum from a worse start.
+- From a common start, the final value measures the start and the path more than the capacity of N atoms. The low-N starts are poor with the controller held (81.9 at N = 4), and those runs spend most rounds recovering in small steps.
+
+**What the atoms did without constraints.**
+- **Edge atoms.** The H^2 fields carry 4 % of their energy at abs(x) > 30, the edges of the 160-mode region [-38.9, 39.2]. The greedy fit places atoms there first (N = 2: one per field, at -36.9 / +37.3), and they stay: in every run they carry about 2 % of the field energy. At N = 8 four of the eight sensor atoms sit at abs(c) > 34.
+- **Dead atoms.** Amplitudes 0.004-0.008 at the ends (N = 8). Their centre, width and wavenumber gradients scale with the amplitude.
+- **Overlap.** At N = 8 the actuator has two nearly identical atoms (c 1.59 / 1.95, s 4.21 / 3.99, kappa 0.237 / 0.242) with amplitudes 21.6 and 20.7 of opposite sign; they cancel to a difference shape. The start fit already had it (amplitudes 118 / 113 / 73). The sum of the atoms' energies is 7700x the field's.
+- **Floors.** Widths and wavenumbers on their bounds: many edge atoms at abs(kappa) = 0.707 and s ~ 0.5.
+- **Adjoint symmetry** persists: at N = 2 and 4 the sensor atoms mirror the actuator atoms (c -> -c, same widths and wavenumbers), as in STAGE5 32.6.
+
+**Latent issue (not fixed).** Records store the atom parameters (rho, tau), not smin and kmax. A record resumed with a different `--atom-smin` / `--atom-kmax` and the same atom count is read with the new bounds, so the fields change silently. A2'' (smin 1) resumed at smin 0.4 would be wrong; the start guard catches it only if gamma rises 10x.
+
+**Next (proposed).** Nested in N from the best design, so that a child starts at its parent:
+- 4 atoms: A2'' converted to smin 0.4 (exact: rho' = sqrt((1 + rho^2)/0.4 - 1));
+- 5, 6: A2'' plus new atoms at small amplitude;
+- 3, 2: A2'' minus its weakest atoms.
+
 ## 6.23 Open items
 
 - the plant heights of the tail certificate: ~100 s at ne = 400 per process
@@ -1633,8 +1680,10 @@ That is about 1 min per round. Earlier atom runs converged in 12-21 rounds (STAG
   `--field-input tangent` (6.33): 12 + 12 columns, kd ~120, 4.2x faster, same path;
 - number of atoms (6.32): optimised K+FB+FC gamma against N at ne=200, width >= 0.4
   (with `--field-input tangent`: ~15-25 min per run);
-- atom well-posedness (6.33): explicit width/wavenumber bounds instead of the flat
-  reparametrisation at the floor; dead and overlapping atoms;
+- atom well-posedness (6.33, 6.34): explicit width/wavenumber bounds instead of the flat
+  reparametrisation at the floor; dead, edge and overlapping atoms (all seen in 6.34);
+- atom records: store smin/kmax and convert on resume (6.34, latent);
+- atom count: nested study from A2'' (6.34);
 - before 2-D scale: the five items of 6.28 are done (6.29), the parallel
   full-model tasks too (6.30); left: MUMPS as a `sparse_lu` backend, the
   singular-M (velocity mass) versions of the M-norm bounds at the BFS.

@@ -1554,6 +1554,10 @@ def main():
                     help='column ordering of every full-model sparse LU (sparse_lu.py): colamd = scipy default '
                          '(bit-identical frozen path); mmd_at_plus_a = symmetric minimum degree for 2-D/3-D FE '
                          'matrices (STAGE6 6.29)')
+    ap.add_argument('--resume-guard', dest='resume_guard', type=float, default=10.0,
+                    help='refuse a resumed start whose certified gamma exceeds this multiple of the source '
+                         'record\'s (a failed transplant); 0 = off -- for starts that are poor by construction, '
+                         'e.g. fields fitted by few atoms with the controller held (STAGE6 6.34)')
     ap.add_argument('--field-input', dest='field_input', choices=['modes', 'tangent'], default='modes',
                     help='atom fields (--field-atoms) with --oracle-inputs on: the reduced model\'s input basis for '
                          'the fields.  modes = the --field-basis modes (exact for any field in their span; 160 per '
@@ -1900,7 +1904,7 @@ def main():
                          'seen by the closed-loop check.')
     ap.add_argument('--wind-accept', dest='wind_accept', choices=['auto', 'on', 'off'], default='auto',
                     help='winding count (global in w) on every candidate the continuation gate accepts; '
-                         'auto = on for MIMO, off for SISO (STAGE6)')
+                         'auto = on for MIMO and for cases with a free field (FB/FC), off otherwise (STAGE6 6.34)')
     ap.add_argument('--n-act', dest='n_act', type=int, default=1,
                     help='MIMO (STAGE6): number of actuators (with --n-sens > 1 or > 1 itself: the MIMO path)')
     ap.add_argument('--n-sens', dest='n_sens', type=int, default=1, help='MIMO: number of sensors')
@@ -1959,6 +1963,10 @@ def main():
                          'feeds the optimiser; automatically skipped above '
                          '--dense_nmax, where the continuation gate is the '
                          'protection.')
+    ap.add_argument('--dense-audit', dest='dense_audit', action='store_true',
+                    help='DIAGNOSTIC (STAGE6 6.34): a dense eigensolve of every round\'s candidate, printed with '
+                         'the gate\'s decision -- to locate where a design escaped the matrix-free chain.  '
+                         'Check only: never gates and never feeds the optimiser')
     ap.add_argument('--dense_nmax', type=int, default=3000,
                     help='largest n + r for which the check-only dense '
                          'eigensolve is used; beyond it a loud message is '
@@ -2095,7 +2103,12 @@ def main():
             # candidate with a peak of 12.25 at w = -700.5 was accepted as 2.5877
             a.band_first = True
             print("MIMO: --band-first on (the candidate's band before its certificate)", flush=True)
-    _wind_accept = (a.wind_accept == 'on') or (a.wind_accept == 'auto' and MIMO)
+    # 'auto': MIMO (STAGE6), and every case with a free field (6.34: SISO
+    # K+FB+FC with 2 atoms, ne=200 -- round 0 accepted a design with an
+    # eigenvalue at +51.9 - 20.1i, the gate's watch list never saw it, and the
+    # whole chain after it was unstable; caught only by the dense save veto)
+    _wind_accept = (a.wind_accept == 'on') or (a.wind_accept == 'auto' and
+                                                (MIMO or 'FB' in a.case.split('+') or 'FC' in a.case.split('+')))
     n_wind_accept, n_wind_refused, n_gate_wind = [0], [0], [0]
 
     def _wind_right_of_margin(bb_, cc_, aa_, nn_, KK_, seen_):
@@ -2778,7 +2791,7 @@ def main():
     _omega_log = []
     t0 = g0
     print(f"start gamma={g0:.6f}, |Omega|={len(Omega)}", flush=True)
-    if a.resume and _resume_gamma is not None and g0 > 10.0 * _resume_gamma:
+    if a.resume and _resume_gamma is not None and a.resume_guard > 0 and g0 > a.resume_guard * _resume_gamma:
         # A resumed start an order of magnitude above the record it came from
         # is a failed transplant (a controller-carrying donor into a
         # static-gain case lands on the open loop, 882.88), not a start.  Job
@@ -3661,6 +3674,14 @@ def main():
             print(f"    certificate INCONCLUSIVE at {g:.6f} (a higher level set exists, not located; "
                   f"witness {w:+.4f}): round not accepted", flush=True)
         improved = feasible and bool(ok) and g < gbest * (1 - 1e-12)
+        if a.dense_audit and (D.n + D.r) <= a.dense_nmax:
+            try:
+                _ada, _adl = D.alpha_dense(aa, nn, KK, bb, cc)[:2]
+                print(f"    dense audit: candidate alpha_dense {_ada:+.6f} at {complex(_adl):.5g} "
+                      f"(chain's alpha {float(al_c):+.6f}); {'ACCEPTED' if improved else 'not accepted'}"
+                      + ('  <-- ESCAPE' if improved and _ada + a.eps > 0.0 else ''), flush=True)
+            except Exception as _e:
+                print(f"    dense audit failed: {type(_e).__name__}", flush=True)
         # PROGRESS for the fixed-point test (2026-09-25): an improvement below
         # the certificate's own tolerance is not progress.  The ne=100 K+B+C
         # continuation repeated 7.657552 for five rounds (gains ~1e-9) and
