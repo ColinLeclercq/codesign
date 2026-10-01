@@ -160,7 +160,42 @@ def split_atoms(p, n):
     return p[:n] + 1j * p[n:2 * n], p[2 * n:3 * n], p[3 * n:4 * n], p[4 * n:5 * n]
 
 
+def _rho_from_halfwidth(x, av, i0, smin):
+    """Initial width parameter of a new atom from the half-maximum width of |v|
+    around its peak (Gaussian: FWHM = 2 sqrt(2 ln 2) s), s = smin (1 + rho^2).
+    At the width floor rho starts at 1e-3, not 0 (ds/drho = 0 there): a field
+    that IS an atom of the floor width -- a placed actuator's Gaussian when
+    smin is its width -- is then fitted to ~1e-6, where rho = 1 (s = 2 smin)
+    left the quasi-Newton stuck at an error of 2e-3 (STAGE6 6.31).  The
+    previous start (rho = 1) is kept when no half-maximum crossing exists."""
+    half = 0.5 * av[i0]
+    lo = i0
+    while lo > 0 and av[lo] > half:
+        lo -= 1
+    hi = i0
+    while hi < len(av) - 1 and av[hi] > half:
+        hi += 1
+    if av[lo] > half or av[hi] > half:
+        return 1.0
+    xl = x[lo] + (half - av[lo]) * (x[lo + 1] - x[lo]) / (av[lo + 1] - av[lo])
+    xr = x[hi - 1] + (half - av[hi - 1]) * (x[hi] - x[hi - 1]) / (av[hi] - av[hi - 1])
+    s = (xr - xl) / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+    return float(np.sqrt(max(s / smin - 1.0, 1e-6)))
+
+
 def fit_atoms(x, v, M, n_atoms, smin, kmax):
+    """Least-squares fit (M-norm) of n_atoms Gabor atoms to a nodal field v; the
+    better of two greedy starts for each new atom's width: rho = 1 (s = 2 smin,
+    the original) and the half-maximum width of the residual (_rho_from_halfwidth,
+    STAGE6 6.31: exact, 1e-12, when v is an atom of the floor width -- a parent's
+    actuator Gaussian with --atom-smin 0.4; the original start stalled at 2e-3).
+    Returns (p, relative M-norm error) of the better fit, the original on a tie."""
+    p1, e1 = _fit_atoms(x, v, M, n_atoms, smin, kmax, halfwidth=False)
+    p2, e2 = _fit_atoms(x, v, M, n_atoms, smin, kmax, halfwidth=True)
+    return (p2, e2) if e2 < e1 else (p1, e1)
+
+
+def _fit_atoms(x, v, M, n_atoms, smin, kmax, halfwidth=False):
     """Least-squares fit (M-norm) of n_atoms Gabor atoms to a nodal field v:
     greedy (one atom at a time, placed at the residual's maximum), each stage a
     joint quasi-Newton refinement of all atoms so far.  Returns the parameter
@@ -186,6 +221,8 @@ def fit_atoms(x, v, M, n_atoms, smin, kmax):
         if j:
             a0[:j], c0[:j], r0[:j], t0[:j] = split_atoms(p, j)
         i_ = int(np.argmax(np.abs(res))); a0[j] = res[i_]; c0[j] = x[i_]
+        if halfwidth:
+            r0[j] = _rho_from_halfwidth(x, np.abs(res), i_, smin)
         q0 = np.concatenate([a0.real, a0.imag, c0, r0, t0])
         p = minimize(lambda q: fg(q, k), q0, jac=True, method='BFGS',
                      options=dict(gtol=1e-12, maxiter=20000)).x

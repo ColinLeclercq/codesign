@@ -1,0 +1,748 @@
+{
+ "C | cold seed lqgbt": {
+  "case": "C",
+  "label": "cold seed lqgbt",
+  "parent": null,
+  "start": 10.758915,
+  "end": 10.010604479037703,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 179.0,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/C_s0_ne200__cold_seed_lqgbt"
+ },
+ "C | FINAL": {
+  "gamma": 10.010604479037703,
+  "from_": "cold seed lqgbt"
+ },
+ "B | cold seed lqgbt": {
+  "case": "B",
+  "label": "cold seed lqgbt",
+  "parent": null,
+  "start": 10.758915,
+  "end": 10.13736708593013,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 186.2,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/B_s0_ne200__cold_seed_lqgbt"
+ },
+ "B | FINAL": {
+  "gamma": 10.13736708593013,
+  "from_": "cold seed lqgbt"
+ },
+ "KGC | cold": {
+  "case": "KGC",
+  "label": "cold",
+  "parent": null,
+  "start": 882.880765,
+  "end": 42.948630068033175,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 92.3,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KGC_s0_ne200__cold"
+ },
+ "KGC | FINAL": {
+  "gamma": 42.948630068033175,
+  "from_": "cold"
+ },
+ "KSP | cold seed lqgbt": {
+  "case": "KSP",
+  "label": "cold seed lqgbt",
+  "parent": null,
+  "start": 10.758915,
+  "end": 10.009940025365951,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 170.9,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KSP_s0_ne200__cold_seed_lqgbt"
+ },
+ "KSP | FINAL": {
+  "gamma": 10.009940025365951,
+  "from_": "cold seed lqgbt"
+ },
+ "B+C | from B": {
+  "case": "B+C",
+  "label": "from B",
+  "parent": "B",
+  "start": 10.137367,
+  "end": 9.67445064276381,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 179.5,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/B_C_s0_ne200__from_B"
+ },
+ "B+C | from C": {
+  "case": "B+C",
+  "label": "from C",
+  "parent": "C",
+  "start": 10.010606,
+  "end": 9.674450642827706,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 179.3,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/B_C_s0_ne200__from_C"
+ },
+ "B+C | FINAL": {
+  "gamma": 9.67445064276381,
+  "from_": "from B"
+ },
+ "KSP+B | from KSP": {
+  "case": "KSP+B",
+  "label": "from KSP",
+  "parent": "KSP",
+  "start": 10.00994,
+  "end": 9.84416638683848,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 145.0,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KSP_B_s0_ne200__from_KSP"
+ },
+ "KSP+B | from B": {
+  "case": "KSP+B",
+  "label": "from B",
+  "parent": "B",
+  "start": 10.137367,
+  "end": 9.835678312073727,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 169.8,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KSP_B_s0_ne200__from_B"
+ },
+ "KSP+B | FINAL": {
+  "gamma": 9.835678312073727,
+  "from_": "from B"
+ },
+ "KSP+C | from KSP": {
+  "case": "KSP+C",
+  "label": "from KSP",
+  "parent": "KSP",
+  "start": 10.00994,
+  "end": 9.861208173075154,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 153.8,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KSP_C_s0_ne200__from_KSP"
+ },
+ "KSP+C | from C": {
+  "case": "KSP+C",
+  "label": "from C",
+  "parent": "C",
+  "start": 10.010606,
+  "end": 9.684161665327487,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 176.0,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KSP_C_s0_ne200__from_C"
+ },
+ "KSP+C | FINAL": {
+  "gamma": 9.684161665327487,
+  "from_": "from C"
+ },
+ "KGC+B | from KGC": {
+  "case": "KGC+B",
+  "label": "from KGC",
+  "parent": "KGC",
+  "start": 42.94863,
+  "end": 13.25006497433355,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 148.9,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KGC_B_s0_ne200__from_KGC"
+ },
+ "KGC+B | FINAL": {
+  "gamma": 13.25006497433355,
+  "from_": "from KGC"
+ },
+ "KGC+C | from KGC": {
+  "case": "KGC+C",
+  "label": "from KGC",
+  "parent": "KGC",
+  "start": 42.94863,
+  "end": 12.872117133521382,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 128.9,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KGC_C_s0_ne200__from_KGC"
+ },
+ "KGC+C | FINAL": {
+  "gamma": 12.872117133521382,
+  "from_": "from KGC"
+ },
+ "K | from KGC": {
+  "case": "K",
+  "label": "from KGC",
+  "parent": "KGC",
+  "start": 42.94863,
+  "end": 18.831323865171864,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 110.6,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_s0_ne200__from_KGC"
+ },
+ "K | from KSP": {
+  "case": "K",
+  "label": "from KSP",
+  "parent": "KSP",
+  "start": 10.00994,
+  "end": 9.86139826042798,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 126.1,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_s0_ne200__from_KSP"
+ },
+ "K | FINAL": {
+  "gamma": 9.86139826042798,
+  "from_": "from KSP"
+ },
+ "FC | from C": {
+  "case": "FC",
+  "label": "from C",
+  "parent": "C",
+  "start": 10.010606,
+  "end": 9.660144411790537,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 257.3,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/FC_s0_ne200__from_C"
+ },
+ "FC | FINAL": {
+  "gamma": 9.660144411790537,
+  "from_": "from C"
+ },
+ "FB | from B": {
+  "case": "FB",
+  "label": "from B",
+  "parent": "B",
+  "start": 10.137367,
+  "end": 9.869399915299839,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 317.8,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/FB_s0_ne200__from_B"
+ },
+ "FB | FINAL": {
+  "gamma": 9.869399915299839,
+  "from_": "from B"
+ },
+ "KGC+B+C | from KGC+B": {
+  "case": "KGC+B+C",
+  "label": "from KGC+B",
+  "parent": "KGC+B",
+  "start": 13.250065,
+  "end": 12.202119203795506,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 125.6,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KGC_B_C_s0_ne200__from_KGC+B"
+ },
+ "FB+FC | from FB": {
+  "case": "FB+FC",
+  "label": "from FB",
+  "parent": "FB",
+  "start": 9.8694,
+  "end": 6.861271736312081,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 471.0,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/FB_FC_s0_ne200__from_FB"
+ },
+ "FB+FC | from B+C": {
+  "case": "FB+FC",
+  "label": "from B+C",
+  "parent": "B+C",
+  "start": 9.674451,
+  "end": 4.635395574387164,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 888.2,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/FB_FC_s0_ne200__from_B+C"
+ },
+ "KGC+B+C | from KGC+C": {
+  "case": "KGC+B+C",
+  "label": "from KGC+C",
+  "parent": "KGC+C",
+  "start": 12.872117,
+  "end": 11.547840081208605,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 87.8,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KGC_B_C_s0_ne200__from_KGC+C"
+ },
+ "KGC+B+C | FINAL": {
+  "gamma": 11.547840081208605,
+  "from_": "from KGC+C"
+ },
+ "KGC+FB | from KGC+B": {
+  "case": "KGC+FB",
+  "label": "from KGC+B",
+  "parent": "KGC+B",
+  "start": 13.250065,
+  "end": 9.83187649665314,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 246.2,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KGC_FB_s0_ne200__from_KGC+B"
+ },
+ "KGC+FB | FINAL": {
+  "gamma": 9.83187649665314,
+  "from_": "from KGC+B"
+ },
+ "KGC+FC | from KGC+C": {
+  "case": "KGC+FC",
+  "label": "from KGC+C",
+  "parent": "KGC+C",
+  "start": 12.872117,
+  "end": 9.660144411790757,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 109.4,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KGC_FC_s0_ne200__from_KGC+C"
+ },
+ "KGC+FC | FINAL": {
+  "gamma": 9.660144411790757,
+  "from_": "from KGC+C"
+ },
+ "KSP+B+C | from B+C": {
+  "case": "KSP+B+C",
+  "label": "from B+C",
+  "parent": "B+C",
+  "start": 9.674451,
+  "end": 9.372716841590279,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 147.0,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KSP_B_C_s0_ne200__from_B+C"
+ },
+ "KSP+B+C | from KSP+B": {
+  "case": "KSP+B+C",
+  "label": "from KSP+B",
+  "parent": "KSP+B",
+  "start": 9.835678,
+  "end": 9.828734049799415,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 168.5,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KSP_B_C_s0_ne200__from_KSP+B"
+ },
+ "KSP+B+C | from KSP+C": {
+  "case": "KSP+B+C",
+  "label": "from KSP+C",
+  "parent": "KSP+C",
+  "start": 9.684162,
+  "end": 9.651226015739848,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 140.1,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KSP_B_C_s0_ne200__from_KSP+C"
+ },
+ "KSP+B+C | FINAL": {
+  "gamma": 9.372716841590279,
+  "from_": "from B+C"
+ },
+ "FB+FC | from FC": {
+  "case": "FB+FC",
+  "label": "from FC",
+  "parent": "FC",
+  "start": 9.660144,
+  "end": 4.566533341307671,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 948.2,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/FB_FC_s0_ne200__from_FC"
+ },
+ "FB+FC | FINAL": {
+  "gamma": 4.566533341307671,
+  "from_": "from FC"
+ },
+ "KSP+FB | from FB": {
+  "case": "KSP+FB",
+  "label": "from FB",
+  "parent": "FB",
+  "start": 9.8694,
+  "end": 9.83193509355126,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 430.9,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KSP_FB_s0_ne200__from_FB"
+ },
+ "KSP+FB | from KSP+B": {
+  "case": "KSP+FB",
+  "label": "from KSP+B",
+  "parent": "KSP+B",
+  "start": 9.835678,
+  "end": 9.831876496651942,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 497.3,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KSP_FB_s0_ne200__from_KSP+B"
+ },
+ "KSP+FB | FINAL": {
+  "gamma": 9.831876496651942,
+  "from_": "from KSP+B"
+ },
+ "KSP+FC | from FC": {
+  "case": "KSP+FC",
+  "label": "from FC",
+  "parent": "FC",
+  "start": 9.660144,
+  "end": 9.660144411790531,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 317.1,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KSP_FC_s0_ne200__from_FC"
+ },
+ "K+B | from K": {
+  "case": "K+B",
+  "label": "from K",
+  "parent": "K",
+  "start": 9.861398,
+  "end": 9.853814196860087,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 142.6,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_B_s0_ne200__from_K"
+ },
+ "K+B | from KGC+B": {
+  "case": "K+B",
+  "label": "from KGC+B",
+  "parent": "KGC+B",
+  "start": 13.250065,
+  "end": 10.126094441578166,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 119.4,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_B_s0_ne200__from_KGC+B"
+ },
+ "KSP+FC | from KSP+C": {
+  "case": "KSP+FC",
+  "label": "from KSP+C",
+  "parent": "KSP+C",
+  "start": 9.684162,
+  "end": 9.66016285488768,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 424.4,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KSP_FC_s0_ne200__from_KSP+C"
+ },
+ "KSP+FC | FINAL": {
+  "gamma": 9.660144411790531,
+  "from_": "from FC"
+ },
+ "K+B | from KSP+B": {
+  "case": "K+B",
+  "label": "from KSP+B",
+  "parent": "KSP+B",
+  "start": 9.835678,
+  "end": 9.832953751372292,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 124.3,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_B_s0_ne200__from_KSP+B"
+ },
+ "K+B | FINAL": {
+  "gamma": 9.832953751372292,
+  "from_": "from KSP+B"
+ },
+ "K+C | from K": {
+  "case": "K+C",
+  "label": "from K",
+  "parent": "K",
+  "start": 9.861398,
+  "end": 9.749279331938084,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 146.8,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_C_s0_ne200__from_K"
+ },
+ "K+C | from KGC+C": {
+  "case": "K+C",
+  "label": "from KGC+C",
+  "parent": "KGC+C",
+  "start": 12.872117,
+  "end": 11.217089288298116,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 87.6,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_C_s0_ne200__from_KGC+C"
+ },
+ "K+C | from KSP+C": {
+  "case": "K+C",
+  "label": "from KSP+C",
+  "parent": "KSP+C",
+  "start": 9.684162,
+  "end": 9.666269628890312,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 127.7,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_C_s0_ne200__from_KSP+C"
+ },
+ "K+C | FINAL": {
+  "gamma": 9.666269628890312,
+  "from_": "from KSP+C"
+ },
+ "KGC+FB+FC | from KGC+B+C": {
+  "case": "KGC+FB+FC",
+  "label": "from KGC+B+C",
+  "parent": "KGC+B+C",
+  "start": 11.54784,
+  "end": 8.016958926319177,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 250.8,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KGC_FB_FC_s0_ne200__from_KGC+B+C"
+ },
+ "KGC+FB+FC | from KGC+FB": {
+  "case": "KGC+FB+FC",
+  "label": "from KGC+FB",
+  "parent": "KGC+FB",
+  "start": 9.831876,
+  "end": 4.8008502939248805,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 690.8,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KGC_FB_FC_s0_ne200__from_KGC+FB"
+ },
+ "KGC+FB+FC | from KGC+FC": {
+  "case": "KGC+FB+FC",
+  "label": "from KGC+FC",
+  "parent": "KGC+FC",
+  "start": 9.660144,
+  "end": 4.142350269011272,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 570.9,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KGC_FB_FC_s0_ne200__from_KGC+FC"
+ },
+ "KGC+FB+FC | FINAL": {
+  "gamma": 4.142350269011272,
+  "from_": "from KGC+FC"
+ },
+ "KSP+FB+FC | from KSP+B+C": {
+  "case": "KSP+FB+FC",
+  "label": "from KSP+B+C",
+  "parent": "KSP+B+C",
+  "start": 9.372717,
+  "end": 9.1560978656377,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 536.4,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KSP_FB_FC_s0_ne200__from_KSP+B+C"
+ },
+ "KSP+FB+FC | from KSP+FB": {
+  "case": "KSP+FB+FC",
+  "label": "from KSP+FB",
+  "parent": "KSP+FB",
+  "start": 9.831876,
+  "end": 9.717903570644367,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 444.3,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KSP_FB_FC_s0_ne200__from_KSP+FB"
+ },
+ "KSP+FB+FC | from FB+FC": {
+  "case": "KSP+FB+FC",
+  "label": "from FB+FC",
+  "parent": "FB+FC",
+  "start": 4.566533,
+  "end": 4.15654336352911,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 1107.1,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KSP_FB_FC_s0_ne200__from_FB+FC"
+ },
+ "K+B+C | from K+B": {
+  "case": "K+B+C",
+  "label": "from K+B",
+  "parent": "K+B",
+  "start": 9.832954,
+  "end": 9.82887281466917,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 146.5,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_B_C_s0_ne200__from_K+B"
+ },
+ "K+B+C | from K+C": {
+  "case": "K+B+C",
+  "label": "from K+C",
+  "parent": "K+C",
+  "start": 9.66627,
+  "end": 9.654924437298968,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 192.5,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_B_C_s0_ne200__from_K+C"
+ },
+ "KSP+FB+FC | from KSP+FC": {
+  "case": "KSP+FB+FC",
+  "label": "from KSP+FC",
+  "parent": "KSP+FC",
+  "start": 9.660144,
+  "end": 9.32433896282092,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 506.0,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/KSP_FB_FC_s0_ne200__from_KSP+FC"
+ },
+ "KSP+FB+FC | FINAL": {
+  "gamma": 4.15654336352911,
+  "from_": "from FB+FC"
+ },
+ "K+B+C | from KGC+B+C": {
+  "case": "K+B+C",
+  "label": "from KGC+B+C",
+  "parent": "KGC+B+C",
+  "start": 11.54784,
+  "end": 10.77500447903768,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 86.8,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_B_C_s0_ne200__from_KGC+B+C"
+ },
+ "K+B+C | from KSP+B+C": {
+  "case": "K+B+C",
+  "label": "from KSP+B+C",
+  "parent": "KSP+B+C",
+  "start": 9.372717,
+  "end": 8.838091871117468,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 201.6,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_B_C_s0_ne200__from_KSP+B+C"
+ },
+ "K+B+C | FINAL": {
+  "gamma": 8.838091871117468,
+  "from_": "from KSP+B+C"
+ },
+ "K+FB | from KGC+FB": {
+  "case": "K+FB",
+  "label": "from KGC+FB",
+  "parent": "KGC+FB",
+  "start": 9.831876,
+  "end": 9.831876495357987,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 117.1,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_FB_s0_ne200__from_KGC+FB"
+ },
+ "K+FB | from K+B": {
+  "case": "K+FB",
+  "label": "from K+B",
+  "parent": "K+B",
+  "start": 9.832954,
+  "end": 9.831876496652583,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 551.9,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_FB_s0_ne200__from_K+B"
+ },
+ "K+FB | from KSP+FB": {
+  "case": "K+FB",
+  "label": "from KSP+FB",
+  "parent": "KSP+FB",
+  "start": 9.831876,
+  "end": 9.831876496641803,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 515.0,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_FB_s0_ne200__from_KSP+FB"
+ },
+ "K+FB | FINAL": {
+  "gamma": 9.831876495357987,
+  "from_": "from KGC+FB"
+ },
+ "K+FC | from KGC+FC": {
+  "case": "K+FC",
+  "label": "from KGC+FC",
+  "parent": "KGC+FC",
+  "start": 9.660144,
+  "end": 9.660144411790476,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 82.6,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_FC_s0_ne200__from_KGC+FC"
+ },
+ "K+FC | from K+C": {
+  "case": "K+FC",
+  "label": "from K+C",
+  "parent": "K+C",
+  "start": 9.66627,
+  "end": 9.66014441179094,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 587.0,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_FC_s0_ne200__from_K+C"
+ },
+ "K+FC | from KSP+FC": {
+  "case": "K+FC",
+  "label": "from KSP+FC",
+  "parent": "KSP+FC",
+  "start": 9.660144,
+  "end": 9.660144411790531,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 320.3,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_FC_s0_ne200__from_KSP+FC"
+ },
+ "K+FC | FINAL": {
+  "gamma": 9.660144411790476,
+  "from_": "from KGC+FC"
+ },
+ "K+FB+FC | from K+FB": {
+  "case": "K+FB+FC",
+  "label": "from K+FB",
+  "parent": "K+FB",
+  "start": 9.831876,
+  "end": 4.165433563995504,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 630.7,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_FB_FC_s0_ne200__from_K+FB"
+ },
+ "K+FB+FC | from K+B+C": {
+  "case": "K+FB+FC",
+  "label": "from K+B+C",
+  "parent": "K+B+C",
+  "start": 8.838092,
+  "end": 8.399123428233157,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 1084.5,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_FB_FC_s0_ne200__from_K+B+C"
+ },
+ "K+FB+FC | from K+FC": {
+  "case": "K+FB+FC",
+  "label": "from K+FC",
+  "parent": "K+FC",
+  "start": 9.660144,
+  "end": 4.891708832060214,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 796.7,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_FB_FC_s0_ne200__from_K+FC"
+ },
+ "K+FB+FC | from KGC+FB+FC": {
+  "case": "K+FB+FC",
+  "label": "from KGC+FB+FC",
+  "parent": "KGC+FB+FC",
+  "start": 4.14235,
+  "end": 3.96453913471769,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 809.4,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_FB_FC_s0_ne200__from_KGC+FB+FC"
+ },
+ "K+FB+FC | from KSP+FB+FC": {
+  "case": "K+FB+FC",
+  "label": "from KSP+FB+FC",
+  "parent": "KSP+FB+FC",
+  "start": 4.156543,
+  "end": 4.122185528655251,
+  "fatal": null,
+  "rc": 0,
+  "seconds": 5465.0,
+  "dir": "/tmp/claude-0/-home-claude/8593162b-77ec-57f3-ab36-fdb20bf1d181/scratchpad/snap_lat2/results_lattice_check_ne200/attempts/K_FB_FC_s0_ne200__from_KSP+FB+FC"
+ },
+ "K+FB+FC | FINAL": {
+  "gamma": 3.96453913471769,
+  "from_": "from KGC+FB+FC"
+ }
+}

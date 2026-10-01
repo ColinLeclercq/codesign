@@ -106,6 +106,7 @@ class SparsePencil:
         Mcl = sp.block_diag((M.tocsc(), sp.identity(self.r, format='csc')),
                             format='csc')
         self.Ap, self.MP, self.Mcl = Ap, MP, Mcl
+        self._M_plant = M                     # the mass matrix object (its one LU: massops)
         # A_H^base and E_H (sparse)
         self.AHb = sp.bmat([[Ap, g2inv * MP], [MP, Ap.conj().T.tocsc()]],
                            format='csc')
@@ -184,6 +185,39 @@ class SparsePencil:
         th = th[np.abs(th) > 1e-14]
         return s + 1.0 / th
 
+    # ---------- a provably eigenvalue-free disk without the eigenvalues ----------
+    def free_radius(self, s, safety=1.01, tol=1e-6):
+        """Radius of a disk around s PROVABLY free of eigenvalues of the pencil,
+        from a norm instead of the nearest eigenvalues (STAGE6 6.31): an eigenpair
+        A v = lam E v gives v = (lam - s) X v with X = (A - s E)^-1 E, so
+        |lam - s| >= 1 / ||X||_W for any norm; W = blockdiag(M_cl, M_cl) (= |E_H|,
+        positive definite) and ||X||_W^2 = lambda_max(X^H W X, W), Hermitian
+        Lanczos on the factors of the shift already held.  Far from the
+        spectrum the nearest eigenvalues of the even pencil are many and at
+        similar distances and shift-invert Arnoldi does not converge (GL ne=200,
+        |w| = 60-250: the disks of the all-w question were left uncovered); a
+        Hermitian largest eigenvalue converges regardless.  The Ritz value
+        approaches lambda_max from below: `safety` covers the tolerance."""
+        import massops
+        self.factor(s)
+        n2 = 2 * self.N
+        W = sp.block_diag((self.Mcl, self.Mcl), format='csc')
+        Mp = self._M_plant
+
+        def XHWX(v):
+            x = self.solve(self.EH @ v)
+            return self.EH @ self.solveH(W @ x)
+
+        def Winv(v):
+            v = np.asarray(v, complex)
+            return np.concatenate([massops.block_solve(Mp, self.r, v[:self.N]),
+                                   massops.block_solve(Mp, self.r, v[self.N:])])
+        Hop = spla.LinearOperator((n2, n2), dtype=complex, matvec=XHWX)
+        Wi = spla.LinearOperator((n2, n2), dtype=complex, matvec=Winv)
+        lam = spla.eigsh(Hop, k=1, M=spla.aslinearoperator(W), Minv=Wi, which='LA', tol=tol,
+                         maxiter=3000, v0=_v0(n2).astype(complex), return_eigenvectors=False)
+        return 1.0 / (safety * np.sqrt(max(float(lam[0].real), 1e-300)))
+
     # ---------- contour-integral eigenvalue COUNT (completeness certificate) --
 
 
@@ -239,6 +273,11 @@ def certify_greater(A, M, b, c, Ac, Bc, nvec, Kfb, gam, sigma_of_w,
     par = _par_ok(A, M)
     P = None if par else SparsePencil(A, M, b, c, Ac, Bc, nvec, Kfb, gam)
     key = _pencil_key(b, c, Ac, Bc, nvec, Kfb, gam) if par else None
+    # strict disks: a shift whose nearest eigenvalues do not converge in 300
+    # Arnoldi iterations gets the retry and the free disk instead of 800
+    # iterations (far from the spectrum they never converge: 3 s each at
+    # ne = 200; STAGE6 6.31).  The frozen path keeps 800.
+    eig_kw = dict(maxiter=300) if DISK_STRICT else {}
     # CERT_SPLIT > 1 starts the queue with that many equal intervals: a first
     # generation as wide as the pool (the default 1 is the serial algorithm;
     # other shifts, the same rigorous cover and decision)
@@ -252,12 +291,12 @@ def certify_greater(A, M, b, c, Ac, Bc, nvec, Kfb, gam, sigma_of_w,
     def merge(lo, hi, theta, res):
         # one shift's outcome, exactly the serial loop body: None to go on,
         # or the return value
-        global N_DISK_UNTRUSTED, N_DISK_RETRIED, N_DISK_BISECTED, N_DISK_OVERSIZED, N_DISK_UNCOVERED, LAST_INCOMPLETE
+        global N_DISK_UNTRUSTED, N_DISK_RETRIED, N_DISK_BISECTED, N_DISK_OVERSIZED, N_DISK_UNCOVERED, N_DISK_FREE, LAST_INCOMPLETE
         if res[0] == 'err':
             if theta - lo > eps_eigs: CI.append((lo, theta))
             if hi - theta > eps_eigs: CI.append((theta, hi))
             return None
-        _, lam, conv, lam1, conv1 = res
+        _, lam, conv, lam1, conv1, rf = res
         if not conv:
             # 2026-09-25: the eigenvalue set is PARTIAL (ARPACK did not converge),
             # so the disk below is sized from eigenvalues that need not be the
@@ -275,6 +314,16 @@ def certify_greater(A, M, b, c, Ac, Bc, nvec, Kfb, gam, sigma_of_w,
                 # k = 4: the even pencil's eigenvalues come in pairs (lambda,
                 # -conj(lambda)) mirrored across the imaginary axis, at EQUAL
                 # distance from every shift on it.
+                if rf is not None:
+                    # no eigenvalue converged: the norm-based disk, provably
+                    # empty, no witness inside (STAGE6 6.31; ~0.02 s where the
+                    # retry cost ~1.5 s and mostly failed far from the spectrum)
+                    N_DISK_FREE += 1
+                    if theta - rf - lo > eps_eigs:
+                        CI.append((lo, theta - rf))
+                    if hi - (theta + rf) > eps_eigs:
+                        CI.append((theta + rf, hi))
+                    return None
                 if not (st['n_bisect'] < DISK_BISECT_MAX and lam1 is not None):
                     lam1, conv1 = np.array([]), False
                 if conv1 and lam1.size:
@@ -325,7 +374,8 @@ def certify_greater(A, M, b, c, Ac, Bc, nvec, Kfb, gam, sigma_of_w,
                 continue
             theta = 0.5 * (lo + hi)
             st['nshift'] += 1
-            out = merge(lo, hi, theta, _shift_eval(P, theta, k, DISK_STRICT and st['n_bisect'] < DISK_BISECT_MAX))
+            out = merge(lo, hi, theta, _shift_eval(P, theta, k, DISK_STRICT and st['n_bisect'] < DISK_BISECT_MAX,
+                                                   eig_kw, free=DISK_STRICT))
             if out is not None:
                 return out
             continue
@@ -334,8 +384,8 @@ def certify_greater(A, M, b, c, Ac, Bc, nvec, Kfb, gam, sigma_of_w,
         rest = gen[len(batch):]
         CI[:] = rest
         import fullpar
-        res = fullpar.pmap(_shift_task, [(key, (b, c, Ac, Bc, nvec, Kfb, gam), 0.5 * (lo + hi), k, DISK_STRICT, {})
-                                         for lo, hi in batch])
+        res = fullpar.pmap(_shift_task, [(key, (b, c, Ac, Bc, nvec, Kfb, gam), 0.5 * (lo + hi), k, DISK_STRICT, eig_kw,
+                                          DISK_STRICT) for lo, hi in batch])
         for (lo, hi), r_ in zip(batch, res):
             st['nshift'] += 1
             out = merge(lo, hi, 0.5 * (lo + hi), r_)
@@ -344,24 +394,32 @@ def certify_greater(A, M, b, c, Ac, Bc, nvec, Kfb, gam, sigma_of_w,
     return False, st['nshift'], float('nan')
 
 
-def _shift_eval(P, theta, k, retry, eig_kw=None):
+def _shift_eval(P, theta, k, retry, eig_kw=None, free=False):
     """The pencil's eigenvalues nearest i theta: ('err',) if the solver raised,
-    else ('ok', lam, converged, lam1, converged1) with the strict retry (k = 4,
-    larger subspace) on the same factors when the first set is partial and
-    `retry` is set."""
+    else ('ok', lam, converged, lam1, converged1, rfree) with the strict retry
+    (k = 4, larger subspace) on the same factors when the first set is partial
+    and `retry` is set, and -- `free`, partial set -- the norm-based
+    eigenvalue-free radius (SparsePencil.free_radius; None otherwise)."""
     try:
         lam = P.eigs_near(1j * theta, k=k, **(eig_kw or {}))
     except Exception:
         return ('err',)
     conv = getattr(P, 'last_converged', True)
-    lam1 = conv1 = None
-    if not conv and retry:
+    lam1 = conv1 = rf = None
+    if not conv and free:
+        try:
+            rf = float(P.free_radius(1j * theta))
+            if not (np.isfinite(rf) and rf > 0.0):
+                rf = None
+        except Exception:
+            rf = None
+    if not conv and retry and rf is None:
         try:
             lam1 = P.eigs_near(1j * theta, k=4, maxiter=300, ncv=40)
             conv1 = getattr(P, 'last_converged', True)
         except Exception:
             lam1, conv1 = np.array([]), False
-    return ('ok', lam, conv, lam1, conv1)
+    return ('ok', lam, conv, lam1, conv1, rf)
 
 
 def _par_ok(A, M):
@@ -383,7 +441,7 @@ _WPENCIL = {}          # worker side: the last pencils, by design and level
 def _shift_task(t):
     """One decision or location shift in a worker (fullpar)."""
     import fullpar
-    key, (b, c, Ac, Bc, nvec, Kfb, gam), theta, k, retry, eig_kw = t
+    key, (b, c, Ac, Bc, nvec, Kfb, gam), theta, k, retry, eig_kw, free = t
     P = _WPENCIL.get(key)
     if P is None:
         D = fullpar.CTX['D']
@@ -391,7 +449,7 @@ def _shift_task(t):
         while len(_WPENCIL) >= 2:
             _WPENCIL.pop(next(iter(_WPENCIL)))
         _WPENCIL[key] = P
-    return _shift_eval(P, theta, k, retry, eig_kw)
+    return _shift_eval(P, theta, k, retry, eig_kw, free)
 
 
 N_DISK_UNTRUSTED = 0  # shifts whose eigenvalue set was PARTIAL (ARPACK did not converge)
@@ -399,6 +457,7 @@ N_DISK_RETRIED = 0    # ... of which the nearest eigenvalue alone converged on a
 N_DISK_OVERSIZED = 0  # ... retried, and the partial set's disk would have been LARGER than the true one
 N_DISK_BISECTED = 0   # ... of which not even that: no disk, interval bisected (DISK_STRICT)
 N_DISK_UNCOVERED = 0  # ... retry failed and the bisection budget was spent: decision INCONCLUSIVE (strict)
+N_DISK_FREE = 0       # ... retry failed: the norm-based free disk used instead (strict; STAGE6 6.31)
 LAST_INCOMPLETE = False  # the last certify_greater left an interval uncovered (strict)
 DISK_BISECT_MAX = 16  # bisections per certify_greater call in strict mode
 DISK_STRICT = False   # driver --cert-disk strict (the nominal scripts); False = the frozen behaviour
@@ -497,7 +556,7 @@ def hinf_certified_sparse(A, M, b, c, Ac, Bc, nvec, Kfb, sigma_of_w, gam_lb,
         if par:                               # the 9 location shifts in the full-model pool (STAGE6 6.30)
             import fullpar
             key = _pencil_key(b, c, Ac, Bc, nvec, Kfb, gtest)
-            locs = fullpar.pmap(_shift_task, [(key, (b, c, Ac, Bc, nvec, Kfb, gtest), float(th), max(k, 12), False, {})
+            locs = fullpar.pmap(_shift_task, [(key, (b, c, Ac, Bc, nvec, Kfb, gtest), float(th), max(k, 12), False, {}, False)
                                               for th in ths])
         else:
             locs = [_shift_eval(P, float(th), max(k, 12), False) for th in ths]

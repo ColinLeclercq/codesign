@@ -1228,7 +1228,14 @@ def _sigmas(cl_, ws, arow, nvec, K):
     loops of single-frequency calls)."""
     ws = np.asarray(ws, float)
     if hasattr(cl_, 'gain_batch'):
-        return np.array([r_['sigma'] for r_ in cl_.gain_batch(ws, arow, nvec, K, np.zeros(len(ws), bool))], float)
+        # maxit 200 (gain_batch's default 40): a row the batched subspace
+        # iteration has not converged falls back to a per-row ARPACK svds, ~1 s
+        # at kd ~ 300; near-equal sigma_1, sigma_2 (two optimised fields, high
+        # gain) converge slowly, and the 4001-point save curve of K+FB+FC at
+        # ne = 200 spent > 20 min in fallbacks.  Rows that converge within 40
+        # iterations are unaffected (STAGE6 6.31)
+        return np.array([r_['sigma'] for r_ in cl_.gain_batch(ws, arow, nvec, K, np.zeros(len(ws), bool), maxit=200)],
+                        float)
     return np.array([cl_.gain(float(w), arow, nvec, K, want_vectors=False)['sigma'] for w in ws], float)
 
 
@@ -2278,6 +2285,14 @@ def main():
             arow0 = (ck['d'], ck['e'], ck['f'])
             nvec0, K0 = ck['nvec'], complex(ck['K'])
         elif flags['K']:
+            # The parent's controller, fixed there, is part of the parent's
+            # design: it is this child's default start (STAGE6 6.31: the
+            # nesting guarantee needs the parent's design among the starts;
+            # the seed default only coincided with it when the parent had
+            # started from the same seed)
+            if all(k_ in ck.files for k_ in ('d', 'e', 'f', 'nvec', 'K')) and len(np.atleast_1d(ck['d'])) == D.r:
+                arow0 = (ck['d'], ck['e'], ck['f'])
+                nvec0, K0 = ck['nvec'], complex(ck['K'])
             # This case frees a controller but the SOURCE had none, so pf['K']
             # is False and the controller keeps its seed default -- which for a
             # static-gain case means Dc = 0, i.e. an OPEN LOOP.  Resuming
@@ -2319,6 +2334,25 @@ def main():
         if pf['FC']:
             vs0 = ck['xi_s'] if ('xi_s' in ck.files and ck['xi_s'].size) \
                 else D.smooth_unmap(ck['vs'])
+        # A child that frees a FIELD its parent did not free (B -> FB, C -> FC,
+        # B+C -> FB+FC, K+B -> K+FB, FB -> FB+FC for the sensor, ...): the
+        # parent's actuator / sensor IS a field -- its Gaussian at the parent's
+        # optimised or fixed position -- and the child must start from it.  The
+        # groups rule above inherited nothing for it and the child started from
+        # the default field: FB from B at 9.9949 against B's 10.1374, FB+FC from
+        # FB at 8.6106 against 9.8694 -- not the parent's design, so no nesting
+        # guarantee (STAGE6 6.31, lattice check at ne = 200).
+        for _fk, _pk_, _key in (('FB', 'B', 'a'), ('FC', 'C', 's')):
+            if flags.get(_fk) and not pf0.get(_fk):
+                _psi = (np.asarray(ck[f'psi_{_key}'], complex) if f'psi_{_key}' in ck.files and ck[f'psi_{_key}'].size
+                        else np.asarray(D.bc(float(ck['xa']), float(ck['xs']), None, None)[2 if _key == 'a' else 3], complex))
+                if _key == 'a':
+                    va0 = D.smooth_unmap(_psi)
+                else:
+                    vs0 = D.smooth_unmap(_psi)
+                print(f"  {_fk} starts from the parent's {'actuator' if _key == 'a' else 'sensor'} field "
+                      f"(its Gaussian at x = {float(ck['xa' if _key == 'a' else 'xs']):+.4f}, "
+                      f"{'optimised' if pf0.get(_pk_) else 'fixed'} there)", flush=True)
         print(f"warm start from {src}", flush=True)
     if a.start > 0:
         rng = np.random.default_rng(1000 + a.start)
@@ -2639,6 +2673,16 @@ def main():
     # instead with every local maximum plus a grid covering the band wherever
     # sigma_1 is within `seed_frac` of the peak.  Each extra frequency costs one
     # resolvent solve per oracle call, so a few tens are cheap.
+    # THE CERTIFICATE'S SETTINGS BEFORE THE START IS CERTIFIED (STAGE6 6.31):
+    # they were applied after it, so the start of every run was certified with
+    # the frozen disks, tolerance 1e-4 and no all-w question while the rounds
+    # used the strict ones -- a child resumed from its parent's record started
+    # 4e-4 BELOW the parent's certified value (K+FB+FC from KSP+FB+FC, ne=200:
+    # 4.154741 against 4.156543), the same design measured less rigorously
+    csp.DISK_STRICT = (a.cert_disk == 'strict')
+    csp.NEAR_K = int(a.cert_near_k); csp.CLIMB = a.cert_climb; csp.CERT_SPLIT = int(a.cert_split)
+    certified_norm.rtol = float(a.cert_rtol)
+    certified_norm.all_w = (a.cert_all_w == 'on')
     g0, w0, ok0, peaks0 = certified_norm(D, pk, z, a.wlo, a.whi, gam_lb=0.0)
     if _ctrl_borrowed:
         # The parent guarantee -- "a child started from a parent cannot finish
@@ -2843,9 +2887,6 @@ def main():
                   f"{', input basis b %d' % _Pb.shape[1] if _Pb is not None else ''}"
                   f"{', c %d' % _Pc.shape[1] if _Pc is not None else ''})", flush=True)
     certified_norm.sweep_n = int(a.cert_sweep)
-    csp.DISK_STRICT = (a.cert_disk == 'strict')
-    csp.NEAR_K = int(a.cert_near_k); csp.CLIMB = a.cert_climb; csp.CERT_SPLIT = int(a.cert_split)
-    certified_norm.rtol = float(a.cert_rtol)
     if fullpar.active():
         # re-fork the full-model pool now that the counters, the certificate
         # settings and the reduced oracle's input bases exist (the enrichment
@@ -2880,7 +2921,6 @@ def main():
             return out
         D.alpha_certified = _ac_cached
     certified_norm.band_check = bool(a.band_check)
-    certified_norm.all_w = (a.cert_all_w == 'on')
     _anchored = {}                       # freq -> (xa, xs) it was last anchored with
     _last_peaks = [float(w0)] + [float(x) for x in peaks0]
     _oracle_log = []

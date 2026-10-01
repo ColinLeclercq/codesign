@@ -1394,6 +1394,132 @@ Levers beyond this pass, if needed:
 - fewer points per winding count;
 - the widened certificate queue.
 
+## 6.31 Children against parents: the lattice check at ne = 200 (user, 2026-09-30 23:59)
+
+The user asked:
+- run the 3-round check of every child against its parents in the sandbox, at ne = 200;
+- fix the minimum atom width to 0.4.
+
+### The check (`tools/lattice_check.py`, new)
+
+**Protocol.** A child resumed from a parent's record starts at that parent's design and its best value never rises, so it ends at or below the parent. Convergence is not needed to test this, so each run is short:
+- **Roots** (B, C, KGC, KSP): one cold run each. KSP uses the first usable seed (`lqgbt`).
+- **Children:** one run from EVERY parent's record, each in its own directory. The case's record is its best attempt.
+- No donors, no polish, 3 rounds.
+- 2 attempts run at a time, each with `--nproc 1`.
+
+**Checks, per (child, parent):**
+- *inclusion*: the start value equals the parent's value;
+- *descent*: the end value is at most the start value;
+- *nesting*: the child's best is at most the parent's value.
+
+**Flags.**
+- The nominal loop (`tools/n100_kbc.sh`) at ne = 200.
+- Field cases add 4 Gabor atoms of width >= 0.4 and the H^1 row at 1.8. The Laplacian modes (160) are only the reduced model's input basis.
+- Width 0.4 is the actuator's own width, so a parent's Gaussian is an admissible field: fit error 1e-12, against 0.17 at width 1.0.
+- The row has to go from 1.0 to 1.8 because the Gaussian's RMS wavenumber is 1.759; at 1.0 the row would still exclude the parent.
+
+### What it found, and the fixes (each found by the check, fixed, the check rerun)
+
+1. **The certificate's far band.** The roots B and C never moved: end = start = 10.7589, every improved candidate (10.14-10.18) refused as INCONCLUSIVE.
+   - Cause: the all-frequency question on [30, W = 608]. Far from the spectrum, shift-invert Arnoldi on the even pencil does not converge (18 of the shifts), and strict disks left the interval uncovered. This is the far-band hole of STAGE5 30.5. SISO designs at ne = 200 have W ~ 600, the MIMO ones ~200.
+   - Fix: `SparsePencil.free_radius`. When no eigenvalue converges, the disk comes from a norm: |lam - s| >= 1/||(A - sE)^-1 E||_W with W = |E_H| = blockdiag(M_cl, M_cl).
+     - It is a Hermitian Lanczos on the factors already held: 0.02 s, and it always converges.
+     - It is provably eigenvalue-free, though smaller than the true distance.
+     - It is used before the k = 4 retry, which cost ~1.5 s and mostly failed out there.
+   - In strict mode the first Arnoldi is capped at 300 iterations instead of 800. A failing shift cost 3 s.
+   - The far band now certifies in 30 s (it never did before). Serial and 2 tasks agree bit for bit.
+2. **Shifts on a compensator pole.** A static gain (KGC) leaves A_c's poles in the closed loop, decoupled. Three solves hit them exactly and crashed with "Singular matrix":
+   - the save-time band refinement (`_near_eval`);
+   - the eigen-anchor (`eigvecs_at`);
+   - the reduced Rayleigh-quotient tracking (`_pencil_solve`).
+   
+   Each now moves the shift by 1e-7 / 1e-10 relative. The solve is then a large multiple of the eigenvector, which is what the iterations need.
+3. **The child did not start from the parent's design.**
+   - Fields: the resume rule inherits only groups both cases free. A child freeing a field its parent did not free (B -> FB, FB -> FB+FC for the sensor, K+B -> K+FB, ...) started from the DEFAULT field. FB from B started at 9.9949 against B's 10.1374; FB+FC from FB at 8.6106 against 9.8694. Now the child starts from the parent's field: its Gaussian at the parent's optimised or fixed position.
+   - Controller: a child freeing a controller its parent kept fixed now takes the parent's controller as the default start. It is still compared with the borrowed one, and the lower is kept.
+4. **The start was certified less rigorously than the rounds.**
+   - The certificate's settings (strict disks, near-k, climb, cert-rtol 1e-6, all-w) were applied AFTER the start certificate. Every run's start was therefore certified with the frozen disks, rtol 1e-4 and no all-w question.
+   - Effect: K+FB+FC from KSP+FB+FC started at 4.154741 against the parent's 4.156543, the same design measured less rigorously.
+   - The settings now come first. Frozen path, SISO check and the ne=100 A/B are unchanged bit for bit; their starts were not affected.
+5. **Atom fit.** The greedy fit started each atom at width 2 smin and stalled at a 2e-3 error on a Gaussian of the floor width, because ds/drho vanishes at the floor.
+   - The width is now also tried from the residual's half-maximum width, and the better of the two fits is kept.
+   - The parent's Gaussian is fitted to 1e-12. The old start is kept wherever it is better: width-1.0 fits are unchanged (0.17).
+6. **Memory.**
+   - The batched rows' warm-start cache stored a VIEW of each batch array, so every entry kept the whole batch alive. K+FB+FC at kd ~ 300 reached 5.6 GB at save and was killed (SIGKILL) twice. The cache now stores copies, bounded at 20,000 frequencies.
+   - Batches above 512 MB are split into chunks: 4001 frequencies at kd = 307 now peak at 430 MB. GL ne=100 batches are below the threshold and unchanged.
+   - Rerun: under 1 GB throughout.
+7. **Slow sweeps at a large basis.** With two optimised fields at high gain, sigma_1 ~ sigma_2 and the batched subspace iteration needed more than 40 iterations. Each unconverged row fell back to a per-row ARPACK svds (~1 s at kd ~ 300): over 20 min for the save curve and ~10 min per round. The value sweeps (`_sigmas`) now allow 200 batched iterations; rows that converge within 40 are unaffected.
+
+**Validation of the fixes.**
+- Frozen path 10.23128516441147, witness invariant, hurwitz: PASS.
+- SISO check: 8.754365072650645, unchanged.
+- ne=100 A/B at 1 task: kbc5 and atoms bitwise equal to before, same LU counts.
+- The free disk, serial vs 2 tasks: bitwise equal.
+
+### Result
+
+**All 54 (child, parent) pairs pass inclusion, descent and nesting** (`results_lattice_check_ne200/check_report.md`; 0 failed checks).
+- Every child started exactly at each parent's certified value, to the 6 printed decimals.
+- No attempt ended above its start.
+- Every child's best is at or below every parent.
+
+Four attempts could not move: they started at the parent's value and ended there. They sit at the single-pair floors 9.831876 / 9.660144 (the bounds file's 9.831865 / 9.660137 at the ne=200 bound positions).
+
+The first report flagged these 4 attempts, plus the one killed at save. The flags came from the start being printed to 6 decimals (now the test's resolution) and from the kill (fix 6).
+
+The frozen ne=200 table itself breaks nesting in three places:
+- K+FB 9.831944 > K+B 9.831877;
+- KSP+FB 9.832102 > KSP+B 9.831877;
+- KSP+FC 9.660272 > KSP+C 9.660158.
+
+The protocol now excludes this.
+
+| case | check (3 rounds) | from | frozen ne=200 (reference) |
+|---|---|---|---|
+| B | 10.137367 | cold seed lqgbt | 9.944136 |
+| C | 10.010604 | cold seed lqgbt | 9.917965 |
+| KGC | 42.948630 | cold | 12.244295 |
+| KSP | 10.009940 | cold seed lqgbt | 9.831883 |
+| B+C | 9.674451 | from B | 9.674473 |
+| FB | 9.869400 | from B | 9.831877 |
+| FC | 9.660144 | from C | 9.660135 |
+| KGC+B | 13.250065 | from KGC | 11.600868 |
+| KGC+C | 12.872117 | from KGC | 11.719055 |
+| KSP+B | 9.835678 | from B | 9.831877 |
+| KSP+C | 9.684162 | from C | 9.660158 |
+| K | 9.861398 | from KSP | 9.831878 |
+| FB+FC | 4.566533 | from FC | 4.341229 |
+| KGC+B+C | 11.547840 | from KGC+C | 11.411560 |
+| KGC+FB | 9.831876 | from KGC+B | 9.831876 |
+| KGC+FC | 9.660144 | from KGC+C | 9.660144 |
+| KSP+B+C | 9.372717 | from B+C | 8.246535 |
+| KSP+FB | 9.831876 | from KSP+B | 9.832102 |
+| KSP+FC | 9.660144 | from FC | 9.660272 |
+| K+B | 9.832954 | from KSP+B | 9.831877 |
+| K+C | 9.666270 | from KSP+C | 9.660159 |
+| KGC+FB+FC | 4.142350 | from KGC+FC | 3.925812 |
+| KSP+FB+FC | 4.156543 | from FB+FC | 4.140174 |
+| K+B+C | 8.838092 | from KSP+B+C | 7.964064 |
+| K+FB | 9.831876 | from KGC+FB | 9.831944 |
+| K+FC | 9.660144 | from KGC+FC | 9.660153 |
+| K+FB+FC | 3.964539 | from KGC+FB+FC | 3.925456 |
+
+These are 3-round values: a check of the guarantee, not optima. The roots are short cold runs: KGC is still at 42.9 from the open loop's 882.9.
+
+**Cost.**
+- 58 attempts, 6.7 h of single-core work, about 4.5 h of wall time on 2 cores, including the reruns after each fix.
+- Median attempt: 2.5 min non-field, 8.4 min field.
+- Longest: 91 min, K+FB+FC from KSP+FB+FC. Its reduced basis reached kd ~ 300 (two field input bases of 160 modes each, above the compaction cap of 120), and its band widened to +-320.
+- Most of the 91 min was the record's 4001-point gain curve on the reduced model. At kd ~ 300 the batched subspace iteration costs ~7 GFlop per iteration over all frequencies.
+
+**Open (for the cluster estimate).** Field cases at ne=200 have a reduced basis of ~300. That makes their rounds ~3x and their saves far slower than the 120-dimensional cases. Options:
+- fewer input modes (80, as at ne=100);
+- input bases restricted to the fields' support;
+- a coarser stored curve.
+
+The full lattice's field runs should be budgeted at 1-2 h each, not 1 h.
+
 ## 6.23 Open items
 
 - the plant heights of the tail certificate: ~100 s at ne = 400 per process
@@ -1410,6 +1536,8 @@ Levers beyond this pass, if needed:
 - ne >= 400 MIMO runs: on the cluster (user, 2026-09-28).
 - orders 10 and 15 of the central K+B+C compensator (user, 2026-09-30):
   `tools/mimo_n100.sh kbc_cen10` / `kbc_cen15` (weighted-truncation starts, 6.27);
+- field cases at ne=200: reduced basis ~300 with two 160-mode input bases (6.31);
+  fewer modes or support-restricted input bases before the full lattice;
 - before 2-D scale: the five items of 6.28 are done (6.29), the parallel
   full-model tasks too (6.30); left: MUMPS as a `sparse_lu` backend, the
   singular-M (velocity mass) versions of the M-norm bounds at the BFS.

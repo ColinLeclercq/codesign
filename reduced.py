@@ -45,6 +45,8 @@ from scipy.linalg import sqrtm, svd, solve
 from closedloop_sparse import ClosedLoopResolvent as ClosedLoop
 
 ORTH = 'block'          # basis orthogonalisation: 'block' or 'column' (driver --oracle-orth)
+BATCH_BYTES = 512 * 2 ** 20   # gain_batch working memory per chunk
+SVCACHE_MAX = 20000     # warm-start subspaces kept by frequency (gain_batch), ~kd x 6 complex each
 UNION = 'full'          # union Galerkin step: 'full' (W against V entire) or 'new' (W's new columns only; --oracle-union)
 
 
@@ -856,6 +858,18 @@ class _ReducedCL:
             if pool is not None:
                 return pool.gain_batch(self, om, arow, nvec, K, wv, maxit, k)
         P = self.P; GVh, GWh = P['GV_h'], P['GW_h']; kd = GVh.shape[0]
+        # MEMORY: the batch holds ~60 complex vectors of length kd per frequency
+        # (measured 276 MB for 1001 frequencies at kd = 307); a long batch at a
+        # large basis (the save curve, 4001 points at kd ~ 300 with two field
+        # input bases) is split into chunks of BATCH_BYTES.  Below it (every GL
+        # ne=100 run) nothing changes; a chunk warm-starts from the cache the
+        # previous chunks filled (STAGE6 6.31)
+        nchunk = int(np.ceil(m * kd * 60 * 16 / BATCH_BYTES))
+        if nchunk > 1:
+            out = []
+            for idx in np.array_split(np.arange(m), nchunk):
+                out += self.gain_batch(om[idx], arow, nvec, K, wv[idx], maxit=maxit, k=k, par=False)
+            return out
         GVhH, GWhH = np.conj(GVh.T), np.conj(GWh.T)
         if self.mimo:
             bs = self._batch_setup_mimo(om, arow, nvec, K); Tt, TtH = self._Tt_mimo, self._TtH_mimo
@@ -865,6 +879,9 @@ class _ReducedCL:
         cache = getattr(self.ro, '_svcache', None)
         if cache is None or getattr(self.ro, '_svcache_dim', None) != kd:
             cache = {}; self.ro._svcache = cache; self.ro._svcache_dim = kd
+        if len(cache) > SVCACHE_MAX:              # bounded: the oldest half goes (dicts keep insertion order)
+            for key_ in list(cache)[:len(cache) // 2]:
+                cache.pop(key_)
         V = np.empty((m, kd, p), complex); rng = np.random.default_rng(12345)
         V0 = np.linalg.qr(rng.normal(size=(kd, p)) + 1j * rng.normal(size=(kd, p)))[0]
         for i, w in enumerate(om):
@@ -893,7 +910,11 @@ class _ReducedCL:
             done = res <= tol[act] * sb[:, 0]
             for jj in np.where(done)[0]:
                 i = act[jj]; sig[i] = sb[jj, :k]; v1[i] = Vr[jj, :, :k]
-                cache[int(round(float(om[i]) * 1000.0))] = Vr[jj]
+                # a COPY: Vr[jj] is a view that kept the whole batch array
+                # (frequencies x kd x p) alive for as long as the entry -- the
+                # cache pinned GBs (K+FB+FC at ne = 200, kd ~ 300: killed for
+                # memory at save; STAGE6 6.31)
+                cache[int(round(float(om[i]) * 1000.0))] = Vr[jj].copy()
             keep = ~done
             if not np.any(keep):
                 act = act[:0]; break
@@ -1217,7 +1238,18 @@ class _ReducedCL:
         """(A_cl - s M_cl)^{-1} X (or its adjoint) in O(k^2): A_cl - s M_cl =
         S0(s) + U V^H with S0 = blkdiag(At - s Mt, Ac - s I) -- the plant block
         TRIANGULAR in the QZ form computed once per basis, for any complex s --
-        and a rank-2 controller coupling U V^H read off A_cl (Woodbury)."""
+        and a rank-2 controller coupling U V^H read off A_cl (Woodbury).  A
+        shift that IS a compensator pole (a static gain leaves A_c's poles in
+        the closed loop, decoupled, and the Rayleigh-quotient iteration
+        converges onto them exactly) is moved by 1e-10 relative: the solve is
+        then a large multiple of the eigenvector, what the iteration needs
+        (STAGE6 6.31, KGC+FB at ne = 200)."""
+        try:
+            return self._pencil_solve0(Acl, Mcl, sh, X, adjoint)
+        except np.linalg.LinAlgError:
+            return self._pencil_solve0(Acl, Mcl, sh + 1e-10 * max(1.0, abs(sh)) * (1 + 1j), X, adjoint)
+
+    def _pencil_solve0(self, Acl, Mcl, sh, X, adjoint=False):
         P = self.P; kd = P['qzAA'].shape[0]; nd = Acl.shape[0]; r = nd - kd
         from scipy.linalg import solve_triangular
         T = P['qzAA'] - sh * P['qzBB']                               # At - s Mt = Q T Z^H

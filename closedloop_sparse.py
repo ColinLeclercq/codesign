@@ -541,7 +541,14 @@ class ClosedLoopResolvent:
         is not small -- inverse iteration degrades near a clustered eigenvalue.
         """
         N = self.n + self.r
-        self.setup(-1j * complex(lam), arow, nvec, K)   # i*omega = lam
+        try:
+            self.setup(-1j * complex(lam), arow, nvec, K)   # i*omega = lam
+        except np.linalg.LinAlgError:
+            # lam IS a compensator pole (a static gain leaves A_c's poles in the
+            # closed loop, decoupled): invert at a shift 1e-7 away -- the
+            # iteration still converges to lam's eigenvector, the residual is
+            # measured at lam (STAGE6 6.31, KGC+B at ne = 200)
+            self.setup(-1j * (complex(lam) + 1e-7 * max(1.0, abs(lam)) * (1 + 1j)), arow, nvec, K)
         rng = np.random.default_rng(seed)
         v = rng.standard_normal(N) + 1j * rng.standard_normal(N)
         v /= np.linalg.norm(v)

@@ -690,3 +690,16 @@ Start peaks on the reduced model: 9 within 5 % (-6.07 ... 8.41). Running
 | 1 task = previous commit | done: component check ALL IDENTICAL; A/B round values and LU counts identical; invariants and SISO check pass |
 | speed-up | GL ne=100: pooled work 7-10 % of a run, x1.56-1.74 on it, ~3 % end to end; 2-D operator n = 1.6k-25.6k: sweeps 1.46 -> 1.81, winding ~1.7, certificate ~1.55, enrichment ~1.1; grows with n towards structural bounds (6.30) |
 | `--cert-split`, `--oracle-union new` | options for the cluster (default off, bit-identical defaults) |
+
+**2026-09-30 23:59 (user: the 3-round check of every child against its parents at ne=200 in the sandbox; minimum atom width 0.4) -- STAGE6 6.31**
+
+| item | status |
+|---|---|
+| lattice check, 27 cases / 58 attempts / 54 pairs, 3 rounds | done: 0 failed checks (inclusion, descent, nesting); 6.7 h of work, ~4.5 h wall |
+| far-band hole of the strict certificate (B, C never moved) | fixed: norm-based free disks |
+| shifts on a compensator pole (KGC family crashed) | fixed in three solves |
+| children not started at the parent's design (fields; fixed controllers) | fixed |
+| start certified less rigorously than the rounds | fixed (settings first; ne=100 A/B, frozen, SISO unchanged) |
+| atom fit stalled at the width floor | fixed (half-width start, better of two) |
+| memory (cache pinned batch arrays: 5.6 GB, killed) | fixed (copies, bounded cache, chunked batches) |
+| field cases at ne=200: reduced basis ~300, slow sweeps | open (fewer input modes / support-restricted bases) |

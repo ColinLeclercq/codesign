@@ -390,3 +390,26 @@ warm-start search (`not MIMO`).
 **Tried and not kept as a default.**
 - The union step on W's new columns only: not bitwise (per-column GEMM results depend on the column count). It is the `--oracle-union new` option instead.
 - More winding segments per worker: 4 is the best of 4 / 8 / 16 (516 / 524 / 550 points, 4.9 / 5.0 / 5.5 s at n = 6400).
+
+## 16. 2026-10-01: the lattice check (STAGE6 6.31)
+
+**Added.**
+- `tools/lattice_check.py`.
+- `results_lattice_check_ne200/` (records, report, state, compressed logs).
+- `certify_sparse`:
+  - `SparsePencil.free_radius`, `N_DISK_FREE`;
+  - `_shift_eval(free=)`;
+  - the strict first-Arnoldi cap (300).
+- `fieldbasis._rho_from_halfwidth`; `fit_atoms` now tries both starts (`_fit_atoms`).
+- `reduced`: `_pencil_solve0`, `BATCH_BYTES` chunking, `SVCACHE_MAX`.
+
+**Changed.**
+- `run_case_epi`:
+  - the certificate settings come before the start certificate;
+  - a newly freed field starts from the parent's field;
+  - a fixed parent controller is the default start;
+  - `_sigmas` uses maxit 200.
+- `sparse_spectrum._near_eval`, `closedloop_sparse.eigvecs_at` and `reduced._pencil_solve`: shifts on a compensator pole are moved.
+- `reduced.gain_batch`'s cache stores copies, not views.
+
+**Removed.** Nothing.

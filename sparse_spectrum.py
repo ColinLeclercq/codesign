@@ -407,10 +407,17 @@ def _tile_task(t):
     return e_, o_, st
 
 
-def _near_eval(P, z, k):
-    """nearest_k at z, with one retry at 2k; None if ARPACK fails twice."""
+def _near_eval(P, z, k, _moved=False):
+    """nearest_k at z, with one retry at 2k; None if ARPACK fails twice.  A
+    shift ON a compensator pole (the candidates include them) makes the
+    compensator block singular: the shift is moved by 1e-7 relative (the
+    eigenvalues nearest it are the same; STAGE6 6.31, case B at ne = 200)."""
     try:
         return nearest_k(P, z, k)
+    except np.linalg.LinAlgError:
+        if _moved:
+            return None
+        return _near_eval(P, z + 1e-7 * max(1.0, abs(z)) * (1 + 1j), k, _moved=True)
     except spla.ArpackNoConvergence:
         try:
             return nearest_k(P, z, 2 * k)

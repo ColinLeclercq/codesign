@@ -141,6 +141,7 @@ factorisations per round, ~70 with reduced-model certification every 4th round.
 | static gain in K+FB+FC; non-diagonal central gain | **answered**: high-gain regime, the closed loop tends to the controller-free T_inf = R - R B (C^H R B)^-1 C^H R; the final centralized atoms design from the floor stays diagonal (cross gains 2e-6) | STAGE6 6.17 |
 | dead code after negative tests | **done** (removed, recorded) | CLEANUP 7 |
 | work that grows with n (lifted rows, repeated M/LU work, h^-2 winding tail, splu defaults, certificate and enrichment repeats) | **done**, validated (frozen bit-identical, SISO 4.3e-9, unit checks) | STAGE6 6.28-6.29, CLEANUP 14 |
+| nesting check of the 27-case lattice at ne=200 (children vs every parent, 3 rounds) | **done**: 54/54 pairs pass after 7 fixes (far-band free disks, compensator-pole shifts, parent's field/controller as start, start certificate settings, atom fit, memory, sweep iterations) | STAGE6 6.31, `results_lattice_check_ne200/` |
 | CLEANUP section 5 (reference tables, bounds file, archive) | **done** | CLEANUP 5 |
 
 ## Next
@@ -152,4 +153,4 @@ factorisations per round, ~70 with reduced-model certification every 4th round.
    face S carries over (kbc_dec entered it at round 0: the SISO optimum's pair on the line). Runs at ne >= 400 go to the cluster (user, 2026-09-28).
 1. Parallelisation (stage 6): **done** (6.26 rows, 6.30 full-model tasks); on the cluster: `--nproc` = cores, `--row-workers` = cores - 1, `--cert-split` ~ cores, `--oracle-union new`.
 2. Cavity (stage 7): operators from the user's solver, MUMPS/PETSc, subspace dimension, residual-based disks; the tail bound and P_plant are sparse now (STAGE6 6.13, 6.19) -- to be measured at 3-D sizes.
-3. Cluster: 27-case regression, multistart over controllers.
+3. Cluster: 27-case regression (full protocol at ne=200; the 3-round nesting check passes, 6.31; field cases need the input-basis size decided first), multistart over controllers.
