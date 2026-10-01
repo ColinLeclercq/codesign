@@ -570,7 +570,8 @@ class Evaluator:
                     if abs(den) < 1e-12:
                         continue
                     Gm = np.outer(wl.conj(), vr) / den
-                    gc = pk.zero_grad() if getattr(pk, 'mimo', False) else dict(n=np.zeros(rr, complex), K=0j, xa=0.0, xs=0.0)
+                    gc = pk.zero_grad() if (getattr(pk, 'mimo', False) or getattr(pk, 'pd', 1) > 1) \
+                        else dict(n=np.zeros(rr, complex), K=0j, xa=0.0, xs=0.0)
                     gc.update(d=np.array([Gm[i, i] for i in range(rr)]),
                               e=np.array([Gm[i, i + 1] for i in range(rr - 1)]),
                               f=np.array([Gm[i + 1, i] for i in range(rr - 1)]))

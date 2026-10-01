@@ -7,3 +7,7 @@ runs_old/
 logs/
 harness_out/
 cleanup_evidence/
+
+# BFS generated operators / meshes (bfs/ops_dolfinx.py, bfs/mesh_coarse.py)
+bfs/data/ops_*.npz
+bfs/data/coarse/

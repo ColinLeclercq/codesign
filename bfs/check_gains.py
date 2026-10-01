@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""check_gains.py -- the assembled operators against the user's resolvent gains
-(archive results/gains_fx.txt, dolfinx + SLEPc), BFS.md 1.
+"""check_gains.py -- the plant operators (bfs/ops_dolfinx.py) against the user's
+resolvent gains (archive results/gains_fx.txt, resolvent_gains.py: dolfinx +
+SLEPc), with the code's own LU (sparse_lu, MUMPS), BFS.md 1.
 
 Two forcing spaces, both without any mass inverse or Cholesky factor:
   'archive'   the archive's: forcing f in the whole P2 velocity space (its
@@ -11,7 +12,7 @@ Two forcing spaces, both without any mass inverse or Cholesky factor:
   'codesign'  the GL code's: load v = M f with M the Dirichlet-zeroed mass
               (forcing vanishing at Dirichlet dofs), W = M T^H M T
 
-    python bfs/check_gains.py --ops bfs/data/ops_fx.npz --omegas 0.75 2
+    python bfs/check_gains.py --data bfs/archive_dsr/fx_data --omegas 0.75 2
 """
 import os, sys, time, argparse
 import numpy as np
@@ -22,21 +23,17 @@ sys.path[:0] = [os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--ops', default='bfs/data/ops_fx.npz')
+    ap.add_argument('--data', default='bfs/archive_dsr/fx_data')
+    ap.add_argument('--baseflow', default='baseflow_fenicsx.npz')
     ap.add_argument('--omegas', type=float, nargs='+', default=[0.75, 2.0])
     ap.add_argument('--ref', default='bfs/archive_dsr/results/gains_fx.txt')
     ap.add_argument('--k', type=int, default=3)
-    ap.add_argument('--lu', default='pardiso', help="sparse_lu backend: pardiso (sandbox) or mumps (cluster)")
     a = ap.parse_args()
     import sparse_lu
-    sparse_lu.ORDER = a.lu
-    from bfs.plant_io import load_ops
-    import bfs.ops_skfem as osk
-    o = load_ops(a.ops)
-    A, M = o['A'], o['M']
-    # the unconstrained velocity mass for the archive's forcing space
-    ops = osk.assemble('bfs/archive_dsr/fx_data', 'baseflow_fenicsx.npz')
-    Mfull = ops['Mfull']
+    sparse_lu.ORDER = 'mumps'
+    from bfs.ops_dolfinx import assemble
+    o = assemble(a.data, a.baseflow)
+    A, M, Mfull = o['A'], o['M'], o['Mfull']       # Mfull: the archive's forcing space
     n = A.shape[0]; vel = o['comp'] < 2
     keep = np.ones(n); keep[o['bc']] = 0.0
     ref = np.loadtxt(a.ref)

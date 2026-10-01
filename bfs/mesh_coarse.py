@@ -11,7 +11,7 @@ operators are a realistic TEST plant (same structure, size n ~ 3e4 instead of
 runs on the user's mesh and base flow.
 
     python bfs/mesh_coarse.py --nx 140 --nt 26 --out bfs/data/coarse
-    python bfs/ops_skfem.py --data bfs/data/coarse --baseflow baseflow.npz --out bfs/data/ops_coarse.npz
+    python bfs/ops_dolfinx.py --data bfs/data/coarse --baseflow baseflow.npz --out bfs/data/ops_coarse.npz
 """
 import os, sys, argparse
 import numpy as np
@@ -63,18 +63,20 @@ def main():
     ap.add_argument('--fine', default='bfs/archive_dsr/fx_data/baseflow_fenicsx.npz')
     ap.add_argument('--out', default='bfs/data/coarse')
     a = ap.parse_args()
-    import h5py, skfem as fe
+    import meshio
     from scipy.interpolate import LinearNDInterpolator
     pts, tri, edges, labels = build(a.nx, a.nt)
     os.makedirs(a.out, exist_ok=True)
-    with h5py.File(os.path.join(a.out, 'mesh.h5'), 'w') as h:
-        h['data0'] = pts; h['data1'] = tri.astype(np.int64); h['data2'] = np.zeros(len(tri), np.int32)
-    with h5py.File(os.path.join(a.out, 'facets.h5'), 'w') as h:
-        h['data0'] = pts; h['data1'] = edges.astype(np.int64); h['data2'] = labels.astype(np.int32)
+    # the archive's format (freefem_to_fenicsx.py), read by nsforms.read_xdmf_mesh
+    meshio.write(os.path.join(a.out, 'mesh.xdmf'),
+                 meshio.Mesh(points=pts, cells=[('triangle', tri)], cell_data={'region': [np.zeros(len(tri), np.int32)]}))
+    meshio.write(os.path.join(a.out, 'facets.xdmf'),
+                 meshio.Mesh(points=pts, cells=[('line', edges)], cell_data={'label': [labels.astype(np.int32)]}))
     z = np.load(a.fine)
-    mesh = fe.MeshTri(pts.T.copy(), tri.T.copy())
-    X2 = fe.Basis(mesh, fe.ElementTriP2()).doflocs.T
-    X1 = fe.Basis(mesh, fe.ElementTriP1()).doflocs.T
+    # P2 nodes of the straight-sided triangles: vertices and edge midpoints; P1: vertices
+    ed = np.unique(np.sort(np.vstack([tri[:, [0, 1]], tri[:, [1, 2]], tri[:, [0, 2]]]), axis=1), axis=0)
+    X1 = pts
+    X2 = np.vstack([pts, 0.5 * (pts[ed[:, 0]] + pts[ed[:, 1]])])
     out = dict(baseflow_xy2=X2, baseflow_xy1=X1)
     for k, xy, src in (('u', X2, 'xy2'), ('v', X2, 'xy2'), ('p', X1, 'xy1')):
         f = LinearNDInterpolator(z[f'baseflow_{src}'], z[f'baseflow_{k}'])

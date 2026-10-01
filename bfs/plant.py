@@ -95,6 +95,22 @@ class BFSPlant(FECoDesign):
         out[1, idx] = (X[:, 1] - x0[1]) / self.sigma_port ** 2 * g
         return out
 
+    def jet(self, x0, which):
+        """The raw port field and its first and second derivatives in the
+        centre, (6, n): g, g_x, g_y, g_xx, g_xy, g_yy.  Their M-images span the
+        port's moves to second order: the reduced model's input basis for a free
+        centre (BFS.md 5; the GL range basis covered a 1-D interval)."""
+        x0 = np.asarray(x0, float).ravel()
+        idx = self.iv if which == 'a' else self.iu
+        X = self.xyd[idx]; s2 = self.sigma_port ** 2
+        g = self._g(x0, idx); dx = X[:, 0] - x0[0]; dy = X[:, 1] - x0[1]
+        rows = [g, dx / s2 * g, dy / s2 * g, (dx * dx / s2 - 1.0) / s2 * g, dx * dy / s2 ** 2 * g,
+                (dy * dy / s2 - 1.0) / s2 * g]
+        out = np.zeros((6, self.n), complex)
+        for k, r_ in enumerate(rows):
+            out[k, idx] = r_
+        return out
+
     def gauss(self, x0):
         raise NotImplementedError("BFS ports differ by component: use raw(x0, 'a' | 's')")
 
@@ -188,9 +204,70 @@ class BFSPlant(FECoDesign):
         return FECoDesign.hinf(self, arow, nvec, Kfb, b, c, lam=lam, warm=warm, nsw=nsw,
                                wmin=max(0.0, wmin), wmax=wmax, tol_active=tol_active)
 
+    band_of = None           # the driver's band, a callable -> the current upper edge
+
+    @property
+    def stab_whi(self):
+        """Upper edge of the stability line certificate: the driver's band
+        (band_of) or 10."""
+        return float(self.band_of()) if self.band_of is not None else 10.0
+
+    def alpha_certified(self, arow, nvec, Kfb, b, c, eps=1e-3, wlo=None, whi=None, eigs_seen=None):
+        """FECoDesign.alpha_certified on Im in [0, stab_whi] (conjugate
+        pairs: the lower half is the mirror image).  The GL default region came
+        from the plant's numerical-range enclosure (M^-1); here the plant's
+        spectrum near the axis is computed once (plant_spectrum) and the band
+        is the driver's."""
+        return FECoDesign.alpha_certified(self, arow, nvec, Kfb, b, c, eps=eps,
+                                          wlo=(0.0 if wlo is None else max(0.0, wlo)),
+                                          whi=(self.stab_whi if whi is None else whi), eigs_seen=eigs_seen)
+
+    def plant_spectrum(self, wmax, nshift=None, k=8, tol=1e-8, maxiter=200):
+        """Eigenvalues of (A, M) near the imaginary axis on [0, wmax], by
+        shift-invert at shifts i w_j (in the full-model pool), conjugates
+        added.  Fills the certificate's plant cache (certify_sparse.
+        stability_region), so nothing there touches M^-1.  NOT a proof that
+        none is missed (the GL enclosure needed M^-1; BFS.md 4)."""
+        import fullpar, certify_sparse as csp
+        nshift = nshift or max(4, int(np.ceil(wmax / 1.0)) + 1)
+        shifts = [1j * w for w in np.linspace(0.0, wmax, nshift)]
+        res = fullpar.pmap(_plant_shift_task, [(s, k, tol, maxiter) for s in shifts])
+        ev = np.concatenate([r[0] for r in res]) if res else np.zeros(0, complex)
+        ev = ev[np.isfinite(ev)]
+        ev = np.unique(np.round(np.concatenate([ev, ev.conj()]), 10))
+        self.plant_ev = ev
+        self.plant_ev_ok = all(r[1] for r in res)
+        key = (id(self.A), id(self.M), self.A.shape, self.A.nnz, self.M.nnz)
+        csp._PLANT_EV_CACHE.clear(); csp._PLANT_EV_CACHE[key] = ev
+        return ev
+
     def cl(self, b, c):
         R = ClosedLoopResolvent(self.M, self.A, b, c, r=self.r, mc=self.mc)
         R.lu_cache = self._lu_cache
         R.lu_cache_max = self.lu_cache_max
         R.lu_pin = self._lu_pin
         return R
+
+
+# ---------------------------------------------------------------- plant spectrum
+def _plant_shift_task(t):
+    """Eigenvalues of (A, M) nearest the shift s (shift-invert Arnoldi on
+    OP = (A - s M)^-1 M: one LU of A - s M, M only multiplies; the infinite
+    eigenvalues of the singular pencil map to theta = 0 and stay out of the
+    largest-magnitude set).  Runs in the full-model pool."""
+    import fullpar, sparse_lu
+    import scipy.sparse.linalg as spla
+    s, k, tol, maxiter = t
+    D = fullpar.CTX['D']
+    lu = sparse_lu.factor((D.A - s * D.M).tocsc())
+    n = D.n
+    OP = spla.LinearOperator((n, n), dtype=complex, matvec=lambda x: lu.solve(D.M @ np.asarray(x, complex)))
+    v0 = np.random.default_rng(12345).standard_normal(n) + 0j
+    v0 = OP.matvec(OP.matvec(v0))            # purified start: in the range of OP^2 (index-2 pencil)
+    try:
+        th = spla.eigs(OP, k=k, which='LM', tol=tol, maxiter=maxiter, v0=v0, return_eigenvectors=False)
+        ok = True
+    except spla.ArpackNoConvergence as e:
+        th = e.eigenvalues if e.eigenvalues is not None else np.zeros(0); ok = False
+    th = th[np.abs(th) > 1e-14]
+    return s + 1.0 / th, ok

@@ -445,7 +445,7 @@ def solve_epigraph(D, pk, flags, z0, Omega, t0, eps, wall, H0mode='auto',
             gei = np.array([_Gm[i, i + 1] for i in range(_rr - 1)])
             gfi = np.array([_Gm[i + 1, i] for i in range(_rr - 1)])
             try:
-                _gz = pk.zero_grad() if getattr(pk, 'mimo', False) else dict(n=np.zeros(_rr, complex), K=0j, xa=0.0, xs=0.0)
+                _gz = pk.zero_grad() if (getattr(pk, 'mimo', False) or getattr(pk, 'pd', 1) > 1) else dict(n=np.zeros(_rr, complex), K=0j, xa=0.0, xs=0.0)
                 _gz.update(d=gdi, e=gei, f=gfi)
                 g_im = np.real(pk.grad(_gz))
             except Exception:
@@ -455,7 +455,7 @@ def solve_epigraph(D, pk, flags, z0, Omega, t0, eps, wall, H0mode='auto',
             gd = np.array([_G[i, i] for i in range(_rr)])
             ge = np.array([_G[i, i + 1] for i in range(_rr - 1)])
             gf = np.array([_G[i + 1, i] for i in range(_rr - 1)])
-            gc = pk.zero_grad() if getattr(pk, 'mimo', False) else dict(n=np.zeros(_rr, complex), K=0j, xa=0.0, xs=0.0)
+            gc = pk.zero_grad() if (getattr(pk, 'mimo', False) or getattr(pk, 'pd', 1) > 1) else dict(n=np.zeros(_rr, complex), K=0j, xa=0.0, xs=0.0)
             gc.update(d=gd.real * 0 + gd, e=ge, f=gf)
             try:
                 g_ctrl = np.real(pk.grad(gc))
@@ -1296,9 +1296,53 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
         peaks = _enrol_peaks(wf, gf, sigr, rel=float(getattr(certified_norm, 'enroll_rel', 0.0)))
         certified_norm.last_provisional = True
         return float(gr), (float(wr) if np.isfinite(wr) else float(wf[gf.argmax()])), bool(okr), peaks
+    if getattr(certified_norm, 'sampled', 0):
+        # BACKWARD-FACING STEP, scale test (BFS.md 5, user 2026-10-01): no
+        # level-set certificate (shift-invert Arnoldi on the 2n even pencil does
+        # not converge away from its spectrum there, and the free-radius bound
+        # needs an M-norm).  gamma = the largest FULL-model sigma_1 over a grid
+        # of the band, the reduced model's peaks and the caller's hint, each
+        # local maximum climbed (sigma and its slope from the full model).  Not
+        # a certificate: the record says so (certified_norm.last_sampled).
+        ng = int(certified_norm.sampled)
+        cands = list(np.linspace(wlo, whi, ng))
+        if w_hint is not None and np.isfinite(w_hint):
+            cands.append(float(w_hint))
+        if ro_ is not None and ro_.dim > 0:
+            _rc = ro_.make_cl(b, c, D.r, D.mc)
+            _wf = np.linspace(wlo, whi, 1201); _gf = _sigmas(_rc, _wf, arow, nvec, K)
+            _i = np.arange(1, len(_gf) - 1)
+            _loc = _i[(_gf[_i] >= _gf[_i - 1]) & (_gf[_i] >= _gf[_i + 1])]
+            cands += [float(_wf[j]) for j in _loc[np.argsort(-_gf[_loc])][:6]]
+        cands = np.array(sorted(set(round(float(x), 9) for x in cands)))
+        vals = np.array(sig_many(cands) if sig_many else [sig(x) for x in cands])
+        j_ = np.arange(len(cands))
+        is_max = (np.r_[True, vals[1:] >= vals[:-1]]) & (np.r_[vals[:-1] >= vals[1:], True])
+        tops = j_[is_max][np.argsort(-vals[is_max])][:3]
+        span = max(1e-6, 0.5 * float(np.min(np.diff(np.linspace(wlo, whi, ng)))))
+        g, w = float(vals.max()), float(cands[int(vals.argmax())])
+        for j in tops:
+            try:
+                s0_, d0_ = sigd(float(cands[j]))
+                # xtol 1e-7 x band: sigma is flat at a peak (its error is
+                # quadratic in the frequency error), ~5 fewer evaluations a climb
+                wc_, gc_ = csp._climb_slope(sigd, float(cands[j]), s0_, d0_,
+                                            max(wlo, cands[j] - span), min(whi, cands[j] + span),
+                                            xtol=1e-7 * (whi - wlo))
+                if gc_ > g:
+                    g, w = float(gc_), float(wc_)
+            except Exception:
+                pass
+        certified_norm.last_sampled = dict(points=len(cands), climbs=len(tops))
+        certified_norm.last_all_w = None
+        ok = True
+    else:
+        g = w = ok = None
     # the certificate needs a strictly positive lower bound; use the cheap
     # seeded search when the caller has none (first outer iteration)
-    if not np.isfinite(gam_lb) or gam_lb <= 0:
+    if g is not None:
+        pass
+    elif not np.isfinite(gam_lb) or gam_lb <= 0:
         ro0 = getattr(certified_norm, 'oracle', None)
         if ro0 is not None and ro0.dim > 0 and getattr(ro0, 'galerkin', False):
             # the position-robust reduced model's maximum (exact to ~1e-8):
@@ -1308,10 +1352,11 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
             gam_lb = 0.99 * float(np.max(_sigmas(rc0, np.linspace(wlo, whi, 241), arow, nvec, K)))
         else:
             gam_lb = float(D.hinf(arow, nvec, K, b, c)[0])
-    g, w, ncall, ok = csp.hinf_certified_sparse(
-        D.A, D.M, b, c, Ac, Bc, nvec, K, sig, gam_lb=max(gam_lb, 1e-8),
-        wlo=wlo, whi=whi, rtol=float(getattr(certified_norm, 'rtol', 1e-4)), slope_of_w=sigd,
-        sigma_many=sig_many)
+    if g is None:
+        g, w, ncall, ok = csp.hinf_certified_sparse(
+            D.A, D.M, b, c, Ac, Bc, nvec, K, sig, gam_lb=max(gam_lb, 1e-8),
+            wlo=wlo, whi=whi, rtol=float(getattr(certified_norm, 'rtol', 1e-4)), slope_of_w=sigd,
+            sigma_many=sig_many)
     # ALL FREQUENCIES (STAGE6 6.21, --cert-all-w): the band is a heuristic; the
     # tail bound W (numerical range, sparse_spectrum.closed_loop_tail) proves
     # sigma_1 < g beyond W, and one more level-set question on [-W, W] at g
@@ -1361,7 +1406,9 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
     _peak_ref = nsw <= 0 and ro_ is not None and ro_.dim > 0
     if nsw <= 0 and not _peak_ref:
         nsw = 241                      # no reduced model yet: the frozen reference
-    if not _peak_ref:
+    if getattr(certified_norm, 'sampled', 0) and not _peak_ref:
+        ws, gs = cands, vals           # BFS sampled mode: its grid is the reference (no 241-point sweep)
+    elif not _peak_ref:
         ws = np.linspace(wlo, whi, nsw)
         gs = np.array(sig_many(ws) if sig_many else [sig(x) for x in ws])
     if ro_ is not None and ro_.dim > 0:
@@ -1569,13 +1616,16 @@ def main():
     ap.add_argument('--plant', choices=['gl', 'bfs'], default='gl',
                     help='gl: the Ginzburg-Landau mesh (--ne); bfs: the backward-facing step from --ops (BFS.md)')
     ap.add_argument('--ops', default=None, help='--plant bfs: the operator file (bfs/plant_io.py)')
+    ap.add_argument('--bfs-sampled', dest='bfs_sampled', type=int, default=33,
+                    help='--plant bfs: gamma from a full-model grid of this many points + the reduced model\'s peaks, '
+                         'climbed (no level-set certificate yet, BFS.md 5); 0 = the GL level-set certificate')
     ap.add_argument('--bfs-band', dest='bfs_band', type=float, default=8.0,
                     help='--plant bfs: the certified band is [0, this] (real plant: sigma(-w) = sigma(w)), widened '
                          'to cover the controller poles; no all-frequency tail bound yet (BFS.md 4)')
-    ap.add_argument('--lu-order', dest='lu_order', choices=['colamd', 'mmd_at_plus_a', 'pardiso', 'mumps'], default='colamd',
+    ap.add_argument('--lu-order', dest='lu_order', choices=['colamd', 'mmd_at_plus_a', 'mumps'], default='colamd',
                     help='column ordering of every full-model sparse LU (sparse_lu.py): colamd = scipy default '
                          '(bit-identical frozen path); mmd_at_plus_a = symmetric minimum degree for 2-D/3-D FE '
-                         'matrices (STAGE6 6.29)')
+                         'matrices (STAGE6 6.29); mumps = PETSc/MUMPS (--plant bfs, BFS.md 3)')
     ap.add_argument('--resume-guard', dest='resume_guard', type=float, default=10.0,
                     help='refuse a resumed start whose certified gamma exceeds this multiple of the source '
                          'record\'s (a failed transplant); 0 = off -- for starts that are poor by construction, '
@@ -2104,6 +2154,13 @@ def main():
     ap.add_argument('--seed_frac', type=float, default=0.02,
                     help='seed Omega where sigma_1 >= frac * peak')
     a = ap.parse_args()
+    if a.plant == 'bfs':
+        # MPI job (BFS.md 3): ranks > 0 are the full-model pool's workers
+        from bfs import mpipool as _mpp
+        if _mpp.active() and _mpp.comm().Get_rank() > 0:
+            if a.lu_order:
+                import sparse_lu; sparse_lu.ORDER = a.lu_order
+            _mpp.serve()
     certified_norm.rtol = float(a.cert_rtol)      # BEFORE the start certification: one tolerance for every certified value of a run
     global REDUCED_CERT
     REDUCED_CERT = a.reduced_cert
@@ -2200,6 +2257,9 @@ def main():
     import fullpar
     csp.register_plant(D.A, D.M)          # the continuation gate's tracked queries carry a tag (STAGE6 6.29)
     fullpar.start(a.nproc, D=D)
+    if fullpar._MPI is not None:
+        a.nproc = fullpar.NPROC              # MPI job: the ranks are the pool (BFS.md 3)
+        print(f"full-model pool: {fullpar.NPROC - 1} MPI worker ranks (bfs/mpipool.py)", flush=True)
     def _plant_warmup():
         # once per mesh, before the loop (STAGE6 6.29): the widest plant
         # enclosure (every narrower one is filtered from it) and the
@@ -2726,6 +2786,13 @@ def main():
     wlo_run, whi_run = band_from_controller(arow0)
     if BFS:
         wlo_run = 0.0
+        D.band_of = lambda: a.whi + a.wpad        # the stability certificate's band follows the run's
+        _t0 = time.time()
+        _ev = D.plant_spectrum(a.whi + a.wpad)
+        _ev = _ev[_ev.imag >= 0]
+        print(f"BFS plant spectrum near the axis (shift-invert, Im in [0, {a.whi + a.wpad:g}]): "
+              f"{len(_ev)} eigenvalues, rightmost {_ev[np.argmax(_ev.real)]:.4f} "
+              f"({'converged' if D.plant_ev_ok else 'NOT all shifts converged'}, {time.time() - _t0:.0f} s)", flush=True)
     if (wlo_run, whi_run) != (a.wlo, a.whi):
         print(f"start design has poles beyond the band; widened to "
               f"[{wlo_run:.2f}, {whi_run:.2f}] for the first iterates",
@@ -2760,6 +2827,7 @@ def main():
     csp.NEAR_K = int(a.cert_near_k); csp.CLIMB = a.cert_climb; csp.CERT_SPLIT = int(a.cert_split)
     certified_norm.rtol = float(a.cert_rtol)
     certified_norm.all_w = (a.cert_all_w == 'on') and not BFS
+    certified_norm.sampled = int(a.bfs_sampled) if BFS else 0
     g0, w0, ok0, peaks0 = certified_norm(D, pk, z, a.wlo, a.whi, gam_lb=0.0)
     if _ctrl_borrowed:
         # The parent guarantee -- "a child started from a parent cannot finish
@@ -2968,8 +3036,24 @@ def main():
                 U_, s_, _ = np.linalg.svd(np.asarray(D.M @ np.hstack(cols), complex), full_matrices=False)
                 _tangent_sides.add(key)
                 return U_[:, s_ > 1e-12 * s_[0]]
-            _Pb = input_basis(D, 'b', a.xa_lo, a.xa_hi, other=0.98)[0] if flags.get('B') else None
-            _Pc = input_basis(D, 'c', a.xs_lo, a.xs_hi, other=-1.03)[0] if flags.get('C') else None
+            if BFS:
+                # free 2-D centres (BFS.md 5): the ports' second-order jets at
+                # the round's design, rebuilt every round (as the atoms' tangent)
+                def _jet_basis(z_, key):
+                    _xa_j, _xs_j = pk.unpack(z_)[3:5]
+                    J_ = D.jet(_xa_j if key == 'xa' else _xs_j, 'a' if key == 'xa' else 's')
+                    U_, s_, _ = np.linalg.svd(np.asarray(D.M @ J_.T, complex), full_matrices=False)
+                    _tangent_sides.add(key)
+                    return U_[:, s_ > 1e-12 * s_[0]]
+                _tangent_basis_fields = _tangent_basis
+
+                def _tangent_basis(z_, key):
+                    return _jet_basis(z_, key) if key in ('xa', 'xs') else _tangent_basis_fields(z_, key)
+                _Pb = _tangent_basis(zbest, 'xa') if flags.get('B') else None
+                _Pc = _tangent_basis(zbest, 'xs') if flags.get('C') else None
+            else:
+                _Pb = input_basis(D, 'b', a.xa_lo, a.xa_hi, other=0.98)[0] if flags.get('B') else None
+                _Pc = input_basis(D, 'c', a.xs_lo, a.xs_hi, other=-1.03)[0] if flags.get('C') else None
             # free fields on a basis: b = M va/||va||_M lies in span(M Phi_a)
             for _fbk, _fik, _w in (('field_basis_a', 'field_input_a', 'b'), ('field_basis_s', 'field_input_s', 'c')):
                 if _tangent_on:
@@ -3150,8 +3234,10 @@ def main():
             if _tangent_sides and it > 0:
                 # the atoms' tangent space at the round's design (6.33): every
                 # anchor of this round adds the responses to it
-                _ro.set_input_basis(_tangent_basis(zbest, 'va') if 'va' in _tangent_sides else _ro.Phi_b,
-                                    _tangent_basis(zbest, 'vs') if 'vs' in _tangent_sides else _ro.Psi_c,
+                _kb = 'va' if 'va' in _tangent_sides else ('xa' if 'xa' in _tangent_sides else None)
+                _kc = 'vs' if 'vs' in _tangent_sides else ('xs' if 'xs' in _tangent_sides else None)
+                _ro.set_input_basis(_tangent_basis(zbest, _kb) if _kb else _ro.Phi_b,
+                                    _tangent_basis(zbest, _kc) if _kc else _ro.Psi_c,
                                     per_design=True)
             if _ro.dim > a.oracle_dim_cap:
                 # restart from the current design's certified peaks and the

@@ -92,6 +92,14 @@ class _ProxyCL:
     def placement(self, D, side, x0):
         """W^H M dpsi(x0) (actuator side) / V^H M dpsi(x0) (sensor side), once per
         design and position."""
+        if getattr(D, 'pos_dim', 1) == 2:
+            # backward-facing step (BFS.md 2): a 2-D centre, (kd, 2)
+            key = (side, float(x0[0]), float(x0[1]))
+            v = self._pl.get(key)
+            if v is None:
+                B = self._W if side == 'a' else self._V
+                v = self._pl[key] = B.conj().T @ D.Mdpsi(x0, side).T
+            return v
         key = (side, float(x0))
         v = self._pl.get(key)
         if v is None:
@@ -120,10 +128,16 @@ class _ProxyCL:
         bt = np.asarray(self._r.b, complex).ravel(); ct = np.asarray(self._r.c, complex).ravel()
         Sa = Kfb * np.vdot(ct, xp) + np.dot(nv, xc)
         Sc = np.vdot(zp, bt) * Kfb + D.mc * np.sum(np.conj(zc))
-        if flags['B']:
-            out['xa'] = float(np.real(np.vdot(zp, self.placement(D, 'a', xa)) * Sa / eta))
-        if flags['C']:
-            out['xs'] = float(np.real(Sc * np.vdot(self.placement(D, 's', xs), xp) / eta))
+        if getattr(D, 'pos_dim', 1) == 2:
+            if flags['B']:
+                out['xa'] = np.real((zp.conj() @ self.placement(D, 'a', xa)) * Sa / eta)
+            if flags['C']:
+                out['xs'] = np.real(Sc * (xp @ self.placement(D, 's', xs).conj()) / eta)
+        else:
+            if flags['B']:
+                out['xa'] = float(np.real(np.vdot(zp, self.placement(D, 'a', xa)) * Sa / eta))
+            if flags['C']:
+                out['xs'] = float(np.real(Sc * np.vdot(self.placement(D, 's', xs), xp) / eta))
         if flags.get('FB'):
             out['va_packed'] = self._field_row('va', 0, zp, np.conj(Sa) / eta)
         if flags.get('FC'):

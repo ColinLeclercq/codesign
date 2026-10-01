@@ -38,10 +38,28 @@ CTX = {}
 STATS = dict(calls=0, tasks=0, work=0.0, wall=0.0)    # pmap calls through the pool (report())
 
 
+_MPI = None          # bfs/mpipool.MPIPool when the run is an MPI job (backward-facing step, BFS.md 3)
+
+
 def start(nproc, **ctx):
     """(Re)start the pool with nproc workers holding ctx (fork inheritance).
-    nproc <= 1: no pool, every pmap runs in this process."""
-    global POOL, NPROC, _STAMP
+    nproc <= 1: no pool, every pmap runs in this process.  Under MPI (more
+    than one rank) the pool is the other ranks instead (bfs/mpipool.py): the
+    context is SENT to them, nproc is the number of ranks."""
+    global POOL, NPROC, _STAMP, _MPI
+    from bfs import mpipool as _mpp
+    if _mpp.active():
+        CTX.clear(); CTX.update(ctx)
+        if _MPI is None:
+            _MPI = _mpp.MPIPool()
+        _MPI.set_context(dict(ctx))
+        POOL = _MPI
+        NPROC = _MPI.size
+        _STAMP = _stamp()
+        D = CTX.get('D')
+        if D is not None and getattr(D, 'cert_pool', None) is not None:
+            D.cert_pool = POOL
+        return POOL
     stop()
     CTX.clear(); CTX.update(ctx)
     NPROC = max(1, int(nproc or 1))
@@ -67,6 +85,9 @@ _STAMP = None
 
 def stop():
     global POOL
+    if POOL is not None and POOL is _MPI:
+        POOL = None                          # the MPI ranks stay up (they stop at exit)
+        return
     if POOL is not None:
         try:
             POOL.close(); POOL.join()

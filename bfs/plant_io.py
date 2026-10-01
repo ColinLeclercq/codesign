@@ -1,7 +1,7 @@
 """plant_io.py -- the operator file shared by the two assemblies (BFS.md 1).
 
-Written by bfs/ops_dolfinx.py (cluster, the user's nsforms.py) and by
-bfs/ops_skfem.py (sandbox), read by bfs/plant.py.  One .npz:
+Written by bfs/ops_dolfinx.py (the user's nsforms.py), read by bfs/plant.py.
+One .npz:
 
   A, M        real CSR (n x n): A = J = -dF/dW at the base flow with the
               Dirichlet rows/columns set to -identity; M = velocity mass with

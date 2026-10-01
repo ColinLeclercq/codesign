@@ -1,7 +1,7 @@
 """mumps_lu.py -- complex sparse LU through PETSc/MUMPS (petsc4py), the
 cluster's factorisation (BFS.md 3).
 
-Same interface as SciPy's SuperLU object and bfs/pardiso_lu.py:
+Same interface as SciPy's SuperLU object:
     lu = MumpsLU(S);  x = lu.solve(b, trans='N'|'T'|'H')   (b: (n,) or (n, k))
 so sparse_lu.factor() returns it for ORDER = 'mumps' and no caller changes.
 
