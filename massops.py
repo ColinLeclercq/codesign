@@ -26,9 +26,17 @@ import scipy.sparse as sp
 import sparse_lu
 
 _REG = {}          # id(M) -> dict(M=M, c=complex LU, r=real LU)
+# Backward-facing step (BFS.md 4): M is the velocity mass, singular, and must
+# never be factorised or inverted (user, 2026-10-01).  The BFS plant sets
+# FORBIDDEN; every helper then raises instead of factorising (a singular LU can
+# 'succeed' with perturbed pivots and return garbage silently).
+FORBIDDEN = False
 
 
 def _entry(M):
+    if FORBIDDEN:
+        raise RuntimeError("massops: the mass matrix is singular here (backward-facing step) and is "
+                           "never factorised -- this code path needs an M-free replacement (BFS.md 4)")
     e = _REG.get(id(M))
     if e is None or e['M'] is not M:
         e = _REG[id(M)] = dict(M=M, c=None, r=None)

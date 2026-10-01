@@ -1,0 +1,30 @@
+large mesh: 60326 triangles, 273995 dofs
+  Re =    50  it  0  |F| = 1.430e+00
+  Re =    50  it  1  |F| = 8.102e-02
+  Re =    50  it  2  |F| = 1.720e-03
+  Re =    50  it  3  |F| = 6.820e-05
+  Re =    50  it  4  |F| = 8.171e-08
+  Re =    50  it  5  |F| = 7.368e-14
+  Re =   150  it  0  |F| = 7.748e-03
+  Re =   150  it  1  |F| = 2.780e-03
+  Re =   150  it  2  |F| = 1.794e-04
+  Re =   150  it  3  |F| = 1.123e-06
+  Re =   150  it  4  |F| = 4.901e-11
+  Re =   150  it  5  |F| = 4.281e-15
+  Re =   300  it  0  |F| = 2.472e-03
+  Re =   300  it  1  |F| = 5.354e-04
+  Re =   300  it  2  |F| = 2.765e-05
+  Re =   300  it  3  |F| = 1.109e-07
+  Re =   300  it  4  |F| = 2.967e-12
+  Re =   450  it  0  |F| = 1.250e-03
+  Re =   450  it  1  |F| = 1.719e-04
+  Re =   450  it  2  |F| = 7.289e-06
+  Re =   450  it  3  |F| = 1.076e-08
+  Re =   450  it  4  |F| = 3.549e-14
+  Re =   600  it  0  |F| = 8.136e-04
+  Re =   600  it  1  |F| = 9.952e-05
+  Re =   600  it  2  |F| = 3.757e-06
+  Re =   600  it  3  |F| = 3.440e-09
+  Re =   600  it  4  |F| = 6.989e-15
+Newton done in 307 s
+written fx_data/baseflow_fenicsx.npz

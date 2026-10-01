@@ -46,6 +46,10 @@ class Packer:
         self.sK = max(abs(self.K0), 1.0)   # static-gain scale
         self.sx = 0.30          # placement scale
         self.nth = len(th)
+        # backward-facing step (BFS.md 2): a REAL controller (only the real
+        # parts are design variables) and 2-D placements (pos_dim entries each)
+        self.real_ctrl = bool(flags.get('real_ctrl'))
+        self.pd = int(getattr(D, 'pos_dim', 1))
 
     def z0(self):
         z = []
@@ -54,14 +58,14 @@ class Packer:
             th = np.concatenate([self.d0, self.e0, self.f0,
                                  self.nvec0, [self.K0]])
             k = self.nth if m == 'full' else self.nth - 1   # drop Dc if s.proper
-            z += [th[:k].real / self.sc[:k], th[:k].imag / self.sc[:k]]
+            z += [th[:k].real / self.sc[:k]] + ([] if self.real_ctrl else [th[:k].imag / self.sc[:k]])
         elif self.f['K'] and m == 'gain':          # static complex gain
             z += [np.array([self.K0.real / self.sK, self.K0.imag / self.sK])]
         elif self.f['K'] and m == 'gainr':         # static real gain
             z += [np.array([self.K0.real / self.sK])]
-        if self.f['B']:  z += [np.array([self.xa0 / self.sx])]
+        if self.f['B']:  z += [np.atleast_1d(np.asarray(self.xa0, float)) / self.sx]
         if self.f['C'] and not self.sym_pos:
-            z += [np.array([self.xs0 / self.sx])]
+            z += [np.atleast_1d(np.asarray(self.xs0, float)) / self.sx]
         Pa, Ps = getattr(self.D, 'field_basis_a', None), getattr(self.D, 'field_basis_s', None)
         Aa, As = getattr(self.D, 'atoms_a', None), getattr(self.D, 'atoms_s', None)
         if self.f['FB']:
@@ -83,7 +87,10 @@ class Packer:
         m = self.f.get('ctrl_mode', 'full')
         if self.f['K'] and m in ('full', 'sp'):
             k = self.nth if m == 'full' else self.nth - 1
-            th = (z[i:i+k] + 1j*z[i+k:i+2*k]) * self.sc[:k]; i += 2*k
+            if self.real_ctrl:
+                th = z[i:i+k] * self.sc[:k] + 0j; i += k
+            else:
+                th = (z[i:i+k] + 1j*z[i+k:i+2*k]) * self.sc[:k]; i += 2*k
             j = 0
             dd = th[j:j+r]; j += r
             ee = th[j:j+r-1]; j += r - 1
@@ -104,12 +111,14 @@ class Packer:
         else:
             arow, nvec, K = self.arow0, self.nvec0, self.K0
         xa = self.xa0; xs = self.xs0
-        if self.f['B']: xa = float(z[i] * self.sx); i += 1
+        pd = self.pd
+        if self.f['B']:
+            xa = float(z[i] * self.sx) if pd == 1 else np.asarray(z[i:i + pd], float) * self.sx; i += pd
         if self.f['C']:
             if self.sym_pos:
                 xs = -xa
             else:
-                xs = float(z[i] * self.sx); i += 1
+                xs = float(z[i] * self.sx) if pd == 1 else np.asarray(z[i:i + pd], float) * self.sx; i += pd
         va = vs = None
         Pa, Ps = getattr(self.D, 'field_basis_a', None), getattr(self.D, 'field_basis_s', None)
         Aa, As = getattr(self.D, 'atoms_a', None), getattr(self.D, 'atoms_s', None)
@@ -153,16 +162,16 @@ class Packer:
         if self.f['K'] and m in ('full', 'sp'):
             gc = np.concatenate([g['d'], g['e'], g['f'], g['n'], [g['K']]])
             k = self.nth if m == 'full' else self.nth - 1
-            out += [np.real(gc[:k])*self.sc[:k], -np.imag(gc[:k])*self.sc[:k]]
+            out += [np.real(gc[:k])*self.sc[:k]] + ([] if self.real_ctrl else [-np.imag(gc[:k])*self.sc[:k]])
         elif self.f['K'] and m == 'gain':
             out += [np.array([np.real(g['K'])*self.sK, -np.imag(g['K'])*self.sK])]
         elif self.f['K'] and m == 'gainr':
             out += [np.array([np.real(g['K'])*self.sK])]
         if self.f['B']:
             gxa = g['xa'] - g['xs'] if self.sym_pos else g['xa']
-            out += [np.array([gxa * self.sx])]
+            out += [np.atleast_1d(np.asarray(gxa, float)) * self.sx]
         if self.f['C'] and not self.sym_pos:
-            out += [np.array([g['xs']*self.sx])]
+            out += [np.atleast_1d(np.asarray(g['xs'], float)) * self.sx]
         Pa, Ps = getattr(self.D, 'field_basis_a', None), getattr(self.D, 'field_basis_s', None)
         Aa, As = getattr(self.D, 'atoms_a', None), getattr(self.D, 'atoms_s', None)
         if Aa is not None or As is not None:
@@ -235,7 +244,8 @@ class Packer:
         """The gradient dict with every entry zero (rows that touch only some groups)."""
         r, n = self.D.r, self.D.n
         return dict(d=np.zeros(r, complex), e=np.zeros(max(r - 1, 0), complex), f=np.zeros(max(r - 1, 0), complex),
-                    n=np.zeros(r, complex), K=0j, xa=0.0, xs=0.0,
+                    n=np.zeros(r, complex), K=0j,
+                    xa=(0.0 if self.pd == 1 else np.zeros(self.pd)), xs=(0.0 if self.pd == 1 else np.zeros(self.pd)),
                     va=np.zeros(n, complex), vs=np.zeros(n, complex))
 
     def atom_params(self, z):

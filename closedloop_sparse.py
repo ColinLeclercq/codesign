@@ -50,6 +50,13 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import sparse_lu
 
+# Krylov subspace of the gain eigensolver (ARPACK ncv).  None = ARPACK's
+# default (2k + 1, at least 20): the GL path, bit-identical.  At the
+# backward-facing step every operator application is two solves with a
+# 1-GB factor: ncv = 8 needs 7-16 applications where the default needs 21
+# (sigma equal to 1e-11; BFS.md 5), so the BFS plant sets it.
+GAIN_NCV = None
+
 def _safe_solve(Gm, rhs):
     """Solve with the Woodbury capacitance, tolerating a singular one.
 
@@ -238,7 +245,7 @@ class ClosedLoopResolvent:
         Wop = spla.LinearOperator(
             (n, n), matvec=lambda v: self.M @ THv(self.M @ Tv(v)),
             dtype=complex)
-        lam, V = spla.eigs(Wop, k=1, which='LM', tol=tol, maxiter=5000,
+        lam, V = spla.eigs(Wop, k=1, which='LM', tol=tol, maxiter=5000, ncv=GAIN_NCV,
                            v0=_v0(Wop.shape[0]))
         lam = float(np.real(lam[0]))
         sigma = float(np.sqrt(max(lam, 0.0)))
@@ -282,7 +289,7 @@ class ClosedLoopResolvent:
             (n, n), matvec=lambda v: self.M @ THv(self.M @ Tv(v)),
             dtype=complex)
         lam, V = spla.eigs(Wop, k=k, which='LM', tol=tol, maxiter=5000,
-                           v0=_v0(Wop.shape[0]))
+                           ncv=(max(GAIN_NCV, 2 * k + 2) if GAIN_NCV else None), v0=_v0(Wop.shape[0]))
         order = np.argsort(np.real(lam))[::-1]
         out = []
         for j in order:

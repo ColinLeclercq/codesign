@@ -24,9 +24,17 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
 ORDER = 'colamd'
+# backward-facing step (BFS.md 3): 'pardiso' (MKL PARDISO, the sandbox's
+# stand-in) and 'mumps' (PETSc/MUMPS, the cluster): same interface.
 
 
 def factor(S):
+    if ORDER == 'pardiso':
+        from bfs.pardiso_lu import PardisoLU
+        return PardisoLU(S)
+    if ORDER == 'mumps':
+        from bfs.mumps_lu import MumpsLU
+        return MumpsLU(S)
     S = sp.csc_matrix(S)
     if ORDER == 'mmd_at_plus_a':
         return spla.splu(S, permc_spec='MMD_AT_PLUS_A', diag_pivot_thresh=0.01,

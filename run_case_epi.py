@@ -1566,7 +1566,13 @@ def main():
     ap.add_argument('--inner-adapt-tol', dest='inner_adapt_tol', type=float, default=0.05)
     ap.add_argument('--inner-maxit-min', dest='inner_maxit_min', type=int, default=5)
     ap.add_argument('--inner-maxit-max', dest='inner_maxit_max', type=int, default=40)
-    ap.add_argument('--lu-order', dest='lu_order', choices=['colamd', 'mmd_at_plus_a'], default='colamd',
+    ap.add_argument('--plant', choices=['gl', 'bfs'], default='gl',
+                    help='gl: the Ginzburg-Landau mesh (--ne); bfs: the backward-facing step from --ops (BFS.md)')
+    ap.add_argument('--ops', default=None, help='--plant bfs: the operator file (bfs/plant_io.py)')
+    ap.add_argument('--bfs-band', dest='bfs_band', type=float, default=8.0,
+                    help='--plant bfs: the certified band is [0, this] (real plant: sigma(-w) = sigma(w)), widened '
+                         'to cover the controller poles; no all-frequency tail bound yet (BFS.md 4)')
+    ap.add_argument('--lu-order', dest='lu_order', choices=['colamd', 'mmd_at_plus_a', 'pardiso', 'mumps'], default='colamd',
                     help='column ordering of every full-model sparse LU (sparse_lu.py): colamd = scipy default '
                          '(bit-identical frozen path); mmd_at_plus_a = symmetric minimum degree for 2-D/3-D FE '
                          'matrices (STAGE6 6.29)')
@@ -2157,6 +2163,8 @@ def main():
     # "operands could not be broadcast together with shapes (27,) (30,)", i.e.
     # 4r-1 for r = 7 against r = 8.
     try:
+        if a.plant == 'bfs':
+            raise LookupError('the BFS start sets the order (--r)')
         _sd = np.load(a.seed_file or f"seeds_ne{a.ne}.npz", allow_pickle=True)
         _r = int(_sd['r'])
         if _r != a.r:
@@ -2167,8 +2175,17 @@ def main():
         pass
     import sparse_lu; sparse_lu.ORDER = a.lu_order
     import reduced as _reduced_mod; _reduced_mod.ORTH = a.oracle_orth; _reduced_mod.UNION = a.oracle_union
-    D = FECoDesign(ne=a.ne, r=a.r, sob_len=a.sob_len)
-    import massops; massops.warmup(D.M)          # the mass matrix, factorised ONCE (STAGE6 6.29)
+    BFS = a.plant == 'bfs'
+    if BFS:
+        # the backward-facing step (BFS.md): its M is the velocity mass,
+        # singular, never factorised (no massops warm-up)
+        from bfs.plant import BFSPlant
+        D = BFSPlant(a.ops, r=a.r)
+        print(f"BFS plant: {a.ops}, n = {D.n}, Re = {D.Re:g}, ports: Gaussians of std {D.sigma_port}, "
+              f"LU backend {a.lu_order}", flush=True)
+    else:
+        D = FECoDesign(ne=a.ne, r=a.r, sob_len=a.sob_len)
+        import massops; massops.warmup(D.M)          # the mass matrix, factorised ONCE (STAGE6 6.29)
     # THE FULL-MODEL POOL (fullpar, STAGE6 6.30).  Take the whole allocation
     # unless told otherwise.  Forked here, after the plant and its mass LU, so
     # the workers hold them; re-forked before the rounds with the reduced
@@ -2213,13 +2230,23 @@ def main():
     D.cert_itmax = a.cert_itmax
     D.cert_shrink = a.cert_shrink
     flags = parse_case(a.case)
-    ini = np.load(a.init or f"init_ne{a.ne}.npz")
-    arow0 = (ini['d'], ini['e'], ini['f']); nvec0 = ini['nvec']; K0 = 0j
     _ctrl_borrowed, _ctrl_default = False, None
     _resume_gamma = None
-    xa0, xs0 = float(ini['xa']), float(ini['xs'])
-    va0 = D.gauss(xa0); vs0 = D.gauss(xs0)
-    if a.seed:
+    if BFS:
+        # the start (bfs/hifoo_init.py): a REAL order-r controller for the
+        # unit-norm ports and the two centres; no seed catalogue, no rescaling
+        flags['real_ctrl'] = True
+        ini = np.load(a.init, allow_pickle=True)
+        arow0 = tuple(np.asarray(ini[k], complex) for k in ('d', 'e', 'f'))
+        nvec0 = np.asarray(ini['nvec'], complex); K0 = complex(ini['K'])
+        xa0, xs0 = np.asarray(ini['xa'], float), np.asarray(ini['xs'], float)
+        va0 = vs0 = None
+    else:
+        ini = np.load(a.init or f"init_ne{a.ne}.npz")
+        arow0 = (ini['d'], ini['e'], ini['f']); nvec0 = ini['nvec']; K0 = 0j
+        xa0, xs0 = float(ini['xa']), float(ini['xs'])
+        va0 = D.gauss(xa0); vs0 = D.gauss(xs0)
+    if a.seed and not BFS:
         sd = np.load(a.seed_file or f"seeds_ne{a.ne}.npz", allow_pickle=True)
         arow0 = (sd[a.seed + '__d'], sd[a.seed + '__e'], sd[a.seed + '__f'])
         nvec0 = sd[a.seed + '__nvec']
@@ -2232,9 +2259,11 @@ def main():
         if a.seed + '__xs' in sd.files and flags.get('C'):
             xs0 = float(sd[a.seed + '__xs']); vs0 = D.gauss(xs0)
         print(f"controller seed = {a.seed}", flush=True)
-    _al = D.norm_M(D.gauss(xa0).astype(complex))
-    _be = D.norm_M(D.gauss(xs0).astype(complex))
-    nvec0 = nvec0 * (_al * _be); K0 = K0 * (_al * _be)
+    if not BFS:
+        _al = D.norm_M(D.gauss(xa0).astype(complex))
+        _be = D.norm_M(D.gauss(xs0).astype(complex))
+        nvec0 = nvec0 * (_al * _be); K0 = K0 * (_al * _be)
+    _pos = (lambda v: np.asarray(v, float)) if BFS else (lambda v: float(v))
 
     src = a.resume
     # CHECKPOINT AUTO-RESUME.  An interrupted run (SLURM time limit, node
@@ -2290,7 +2319,7 @@ def main():
     # (MIMO starts from --mimo-start: the SISO warm-start search is not needed,
     # and its stability check is a DENSE eig of the plant -- 160 GB at n = 1e5;
     # 2026-09-30 review)
-    if src is None and not a.cold and not MIMO:
+    if src is None and not a.cold and not MIMO and not BFS:
         # warm-start selection lives in warmstart.py: it filters out UNSTABLE
         # candidates (the old directories hold closed loops with alpha up to
         # +4.3e6, which look attractive to a lowest-gamma search precisely
@@ -2361,8 +2390,8 @@ def main():
             except Exception as _e:
                 print(f"  controller seed unavailable ({type(_e).__name__})",
                       flush=True)
-        if pf['B']: xa0 = float(ck['xa'])
-        if pf['C']: xs0 = float(ck['xs'])
+        if pf['B']: xa0 = _pos(ck['xa'])
+        if pf['C']: xs0 = _pos(ck['xs'])
         if pf['FB']:
             va0 = ck['xi_a'] if ('xi_a' in ck.files and ck['xi_a'].size) \
                 else D.smooth_unmap(ck['va'])
@@ -2622,6 +2651,10 @@ def main():
         tested (STAGE6 6.13)."""
         import sparse_spectrum as _ss
         half = max(a.whi, -a.wlo)
+        if BFS:
+            # no plant enclosure without M^-1 (BFS.md 4): the band covers the
+            # compensator poles only
+            return max(a.whi, band_from_controller(arow_)[1])
         # the same design is asked twice a round (band-first, then at acceptance
         # with the harvested eigenvalues): the shift results are memoised per
         # design (STAGE6 6.29)
@@ -2685,7 +2718,14 @@ def main():
     print(f"band [{a.wlo:.2f}, {a.whi:.2f}]; controller poles |Im| <= "
           f"{wmax:.2f} (3/2 x max seed |Im|, band = 3/2 x wmax)", flush=True)
 
+    if BFS:
+        # real plant: w >= 0 (sigma(-w) = sigma(w), eigenvalues in conjugate
+        # pairs); a fixed band [0, --bfs-band] widened to the controller poles
+        a.wlo, a.whi = 0.0, float(a.bfs_band)
+        print(f"BFS: band [0, {a.whi:g}] (real plant: w >= 0); no all-frequency tail bound (BFS.md 4)", flush=True)
     wlo_run, whi_run = band_from_controller(arow0)
+    if BFS:
+        wlo_run = 0.0
     if (wlo_run, whi_run) != (a.wlo, a.whi):
         print(f"start design has poles beyond the band; widened to "
               f"[{wlo_run:.2f}, {whi_run:.2f}] for the first iterates",
@@ -2719,7 +2759,7 @@ def main():
     csp.DISK_STRICT = (a.cert_disk == 'strict')
     csp.NEAR_K = int(a.cert_near_k); csp.CLIMB = a.cert_climb; csp.CERT_SPLIT = int(a.cert_split)
     certified_norm.rtol = float(a.cert_rtol)
-    certified_norm.all_w = (a.cert_all_w == 'on')
+    certified_norm.all_w = (a.cert_all_w == 'on') and not BFS
     g0, w0, ok0, peaks0 = certified_norm(D, pk, z, a.wlo, a.whi, gam_lb=0.0)
     if _ctrl_borrowed:
         # The parent guarantee -- "a child started from a parent cannot finish

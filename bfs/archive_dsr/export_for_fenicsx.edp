@@ -1,0 +1,60 @@
+// Export FreeFEM [P2,P2,P1] vectors at their dof coordinates, so that the
+// FEniCSx scripts can map them onto their own dof numbering (by coordinates).
+//
+// Writes, for each field NAME:
+//   ff_export/NAME_P2.txt : x  y  Re(u) Im(u) Re(v) Im(v)   (one line per P2 dof)
+//   ff_export/NAME_P1.txt : x  y  Re(p) Im(p)               (one line per P1 dof)
+//
+// For a P2->P2 (or P1->P1) space on the same mesh, interpolation is an exact
+// permutation of dofs, so this also works for "dual" vectors such as the sensor
+// vector C (it is not re-interpreted as a function, only re-ordered).
+
+mesh th = readmesh("mesh.msh");
+fespace Uv(th,P2);
+fespace Up(th,P1);
+fespace Uvvp(th,[P2,P2,P1]);
+
+string dir     = "RegKhinf50p/";   // folder with actuator / sensor (same as svd2.edp)
+bool   control = true;             // set to false if you only want the base flow
+exec("mkdir -p ff_export");
+
+Uv xv = x, yv = y;
+Up xp = x, yp = y;
+
+Uvvp<complex> [ea, eb, ec];     // work function used by writeField
+Uv<complex> ua; Uv<complex> ub2; Up<complex> pc;
+
+// writeField(name, W): W is the dof array of a Uvvp<complex> function
+macro writeField(name, W)
+{
+  ea[] = W;
+  ua = ea; ub2 = eb; pc = ec;
+  {
+    ofstream f("ff_export/" + name + "_P2.txt"); f.precision(17);
+    for (int i = 0; i < Uv.ndof; i++)
+      f << xv[][i] << " " << yv[][i] << " " << real(ua[][i]) << " " << imag(ua[][i])
+        << " " << real(ub2[][i]) << " " << imag(ub2[][i]) << "\n";
+  }
+  {
+    ofstream f("ff_export/" + name + "_P1.txt"); f.precision(17);
+    for (int i = 0; i < Up.ndof; i++)
+      f << xp[][i] << " " << yp[][i] << " " << real(pc[][i]) << " " << imag(pc[][i]) << "\n";
+  }
+  cout << "exported " << name << endl;
+} // EOM
+
+// Base flow (real)
+Uvvp [ub, vb, pb];
+{ ifstream file("cb_newton.txt"); file >> ub[]; }
+Uvvp<complex> [wu, wv, wp];
+wu[].re = ub[];
+writeField("baseflow", wu[]);
+
+if (control)
+{
+  Uvvp<complex> [BBu, BBv, BBp], [Cu, Cv, Cp];
+  { ifstream file(dir + "matQ0_Colin.txt");          file >> BBu[]; }   // actuator (function, B = Qu*BB)
+  { ifstream file(dir + "matC0_Colin_upstream.txt"); file >> Cu[];  }   // sensor (vector)
+  writeField("actuator", BBu[]);
+  writeField("sensor",   Cu[]);
+}
