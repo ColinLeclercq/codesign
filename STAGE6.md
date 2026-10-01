@@ -1705,6 +1705,45 @@ The fix:
 - same width 1, centres 0.5 / 1 / 2 apart: 0.939 / 0.779 / 0.368;
 - same centre and width 1, wavenumbers 0.25 / 0.5 / 1 apart: 0.985 / 0.940 / 0.779.
 
+## 6.36 Why did 4 atoms beat 160 Laplacian modes? Optimisation, not representation (user, 2026-10-01 16:07)
+
+The user's question: if the modes can reconstruct the atoms faithfully, the atoms cannot do better unless the mode runs were unconverged or stuck in a local minimum. Which was it?
+
+**The atom design is admissible in both mode problems** (ne=200, 160 modes on [-38.9, 39.2]):
+
+| fields | 160-mode projection error | H^1 RMS wavenumber | H^2 measure R_2^(1/4) (S2's bound 1) |
+|---|---|---|---|
+| A2'', 4 atoms (3.876296) | 4.9e-6 / 3.9e-6 | 0.49 | 0.60 / 0.59 |
+| S2, H^2 (3.911740) | 1e-15 | 0.63 | 1.000 (on its bound) |
+| R1, unconstrained (3.888738) | 2e-15 | 1.82 / 1.88 | 3.18 / 3.30 |
+
+So R1 (3.8887) and S2 (3.9117) both ended above a point of their own admissible set. Representation is excluded.
+
+**Same start, same mesh, same value.**
+- A2 (atoms) and S2 (H^2) both started from the frozen ne=200 design (`tools/fields_mesh.sh`). They ended at 3.912595 (progress stop, 15 rounds) and 3.911740 (round cap, 20 rounds), both still descending. STAGE5 32.6 noted that A2 "equalled H^2".
+- The atoms' 3.876 came from another start and about twice the effort: A3 at ne=400 from the frozen design carried to ne=400 (3.9039, 11 rounds), carried to ne=200, then A2' (12 rounds) and A2'' (21 rounds).
+- STAGE5 32.6 / 32.8's "atoms beat H^2 with 1/16 of the parameters" compared unequal starts and effort. **Withdrawn**: the atoms gave no better optimum. Their advantages are smoothness by construction, mesh independence and fewer parameters, with a lower cost per round. The STAGE5 conclusions about mesh independence stand.
+
+**The decisive test** (`tools/modes_vs_atoms.sh`, new; `results_modes_vs_atoms/`): S2's problem (ne=200, 160 modes, H^2 row kmax = 1, the STAGE5 loop with progress stop 0.05 %), stopped by hand after 5 / 9 rounds:
+
+| run | start | after rounds 1 .. | stopped at |
+|---|---|---|---|
+| from_atoms (A2'' design, fields projected onto the modes) | 3.876296 | 3.875400, 3.871456, 3.868796, (refused), **3.868466** | 5 rounds, still -0.01 .. -0.1 % a round |
+| s2_cont (S2 continued) | 3.911740 | 3.911534, 3.911534, 3.911482, 3.911218, 3.910895, 3.910778, 3.910778, 3.910760, 3.910707 | 9 rounds, -0.003 % a round on average |
+
+- **The modes do better than the atoms when started well.** From the atom design the mode problem goes below it at once: 3.868466 after 5 rounds, 0.20 % below 3.876296.
+  - The design is stable (alpha_dense -0.219).
+  - Its fields moved 0.10 from the atom fields.
+  - Their H^2 measure rose from 0.60 to 0.98 / 0.997, onto the bound the atoms never reached.
+  - The modes use the extra freedom: finer content inside the H^2 ball, which 4 atoms of width >= 1 cannot carry.
+- **S2's end is a stall in a flat valley.**
+  - 9 more rounds gained 0.026 %.
+  - At that rate the 1.1 % to the new value would take hundreds of rounds.
+  - Formally unconverged (it still descends), practically a different basin reached from the frozen start. A local minimum cannot be excluded; nothing here shows a barrier.
+- So both: the mode runs were **not converged**, and they crawled in a **different, flat region** reached from the frozen start. The modes' representation was never the limit.
+
+The runs used `--nproc` default (2 pool workers each, mostly idle); the rounds took 5-8 min with kd ~300 (two 160-mode input bases). The checkpoints are kept.
+
 ## 6.23 Open items
 
 - the plant heights of the tail certificate: ~100 s at ne = 400 per process
@@ -1728,6 +1767,8 @@ The fix:
 - atom well-posedness (6.33, 6.34): explicit width/wavenumber bounds instead of the flat
   reparametrisation at the floor; dead, edge and overlapping atoms (all seen in 6.34);
 - atom count: nested study from A2'' (6.34);
+- field parametrisation (6.36): the modes + H^2 beat the atoms when started from them;
+  the choice is between parametrisations on cost and conditioning, not optimum;
 - before 2-D scale: the five items of 6.28 are done (6.29), the parallel
   full-model tasks too (6.30); left: MUMPS as a `sparse_lu` backend, the
   singular-M (velocity mass) versions of the M-norm bounds at the BFS.

@@ -2190,6 +2190,8 @@ carried to the finer mesh and certified there:
   these wavenumbers; so is the smooth start (6e-4 from ne=100).
 
 **32.8 Conclusion.**
+
+> **ERRATUM (STAGE6 6.36, 2026-10-01).** "Atoms give a LOWER gamma" below compared unequal starts and effort. From the same start on the same mesh, A2 equalled H^2 (3.9126 vs 3.9117). The 4-atom design is admissible for the H^2 problem (160-mode projection 5e-6, H^2 measure 0.60 < 1), and S2's problem started from it reaches 3.868466 in 5 rounds, below the atoms. The atoms' advantages are smoothness, mesh independence and cost, not the optimum.
 - Viscosity regularises the response, not the design. The unconstrained
   field problem is ill-posed in the precise sense the user suspected: its
   optimum moves with the discretisation (energy at the cutoff, band edge at
