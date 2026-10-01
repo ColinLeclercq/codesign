@@ -37,9 +37,11 @@ ALL27 = ['B', 'C', 'KGC', 'KSP', 'B+C', 'FB', 'FC', 'KGC+B', 'KGC+C', 'KSP+B', '
 # field cases: 4 Gabor atoms of width >= 0.4 (the actuator's own width, so a
 # parent's Gaussian is an admissible field: fit error 3e-12 at ne = 200) and the
 # H^1 row at 1.8 (the Gaussian's RMS wavenumber is 1.759); the Laplacian modes
-# are only the reduced model's input basis (user, 2026-09-30: minimum width 0.4)
+# are only the reduced model's input basis (user, 2026-09-30: minimum width 0.4);
+# since 6.33 the model's field input basis is the atoms' tangent space instead
+# (--field-input tangent; the 6.31 check ran with the modes)
 ATOMS = ("--field-basis laplace --field-lo -38.9 --field-hi 39.2 --field-n {nf} --field-atoms 4 "
-         "--atom-smin 0.4 --atom-kmax 0.7071 --field-kmax 1.8 --field-order 1")
+         "--atom-smin 0.4 --atom-kmax 0.7071 --field-kmax 1.8 --field-order 1 --field-input tangent")
 
 
 def loop_flags(ne, outer):

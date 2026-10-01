@@ -1569,6 +1569,50 @@ The sensor fields give the same numbers to within 0.03; all rows are in the .md.
   - for N <= 4, the fit to A2'';
   - for N > 4, extra atoms with nonzero amplitude. An atom of zero amplitude has zero gradient in its centre, width and wavenumber.
 
+## 6.33 Atoms as the reduced model's input basis: `--field-input tangent` (user, 2026-10-01 10:10)
+
+The user's question: why the Laplacian modes at all, if the fields are atoms? There is no reason. The modes came with the field-on-modes parametrisation (STAGE5 32), where they were the design basis and so the natural input basis. When atoms replaced them as the design parametrisation (32.6), the 160 modes stayed as the model's input basis. That is the kd ~ 300 of 6.31.
+
+**What the input basis has to contain.** Within a round the SQP evaluates gamma for fields b(theta + delta) near the round's design b(theta). To first order these lie in span(M J), where J is the atoms' Jacobian (`fieldbasis.atom_jacobian`, already used for the gradients since 6.29).
+- In the complex span, the two amplitude columns are one column: the atom phi.
+- Centre and wavenumber give the same direction, (x - c) phi.
+- The width gives (x - c)^2 phi.
+- So the span is 3 columns per atom: 12 per field at 4 atoms, against 160 modes.
+
+**Implementation.**
+- `--field-input {modes,tangent}`, default `modes`, so every existing path is unchanged.
+- With `tangent`, the field side's input basis is orth(M J) at the round's design (SVD, relative cutoff 1e-12; it drops exactly the 2 dependent columns per atom). It is rebuilt at the start of every round.
+- The position side (B/C cases) keeps its range basis.
+- `ReducedOracle.set_input_basis(..., per_design=True)`: with the full-model pool up, the enrichment tasks carry the bases in their arguments, since the workers' forked copy would be stale.
+- `tools/lattice_check.py` now passes `--field-input tangent` for field cases. The 6.31 check ran with the modes.
+
+**Measured** on K+FB+FC at ne=200, from the lattice check's KGC+FB+FC record, 3 rounds, 1 core:
+
+| input basis | kd | gamma after rounds 1 / 2 / 3 | model vs certificate at the witness | wall |
+|---|---|---|---|---|
+| 160 + 160 modes (6.31 check) | 299-307 | 4.076221 / 4.003424 / 3.964539 | 1e-15 .. 5e-14 | 809 s |
+| none (`--oracle-inputs off`), 2 rounds | 16-82 | 4.072165 (refused, model error 2e-4) / 4.072165 (refused) | 2e-4 | 78 s |
+| atom tangent, 12 + 12 | 94-126 (compacted at 120) | 4.076221 / 4.003428 / **3.963170** | 3e-15 .. 3e-13 | **191 s** |
+
+- The tangent basis follows the modes' path: the same first two rounds to 4e-6, and a slightly lower third round. The model is exact at the witness to 1e-13.
+- 4.2x faster per 3 rounds. Without any input basis the model is 2e-4 off and both rounds are refused.
+- 2 workers give the same record bit for bit (2 rounds: 4.003428128817293 on 1 and on 2 workers; pool x1.63).
+- Frozen path 10.23128516441147, witness invariant 0, Hurwitz selftest 0/200 (`tools/check_invariants.sh`).
+
+**Where the remaining time goes** (profile, 3 rounds, 225 s with the profiler):
+- inner SQP on the reduced model: 125 s, of which the batched singular values take 96 s;
+- full-model certificates: 58 s;
+- plant heights: 24 s, once per mesh;
+- closed-loop band: 22 s.
+
+That is about 1 min per round. Earlier atom runs converged in 12-21 rounds (STAGE5 32.6), so about 15-25 min per run at ne=200 on 1 core, against the 1-2 h budgeted in 6.31-6.32 with the modes.
+
+**Well-posedness of the atom family** (for the user's point on constraints):
+- Width collapse: excluded by construction (s = smin (1 + rho^2)). But ds/drho = 0 at the floor, so an atom AT the floor has a zero width gradient: the floor is stationary for any objective. In the KGC+FB+FC start design, 3 of 8 atoms sit there (rho ~ 6e-4, width-column norm 2e-3 against ~3). An explicit bound s >= smin in the SQP would remove this.
+- Wavenumber: bounded by tanh, so it has the same flatness at the bound.
+- Amplitude: a vanishing atom loses its centre, width and wavenumber gradients (dead atom). This is not prevented.
+- Overlap: not prevented. Two atoms with the same centre, width and wavenumber are one atom: the Jacobian loses rank and the parametrisation is not identifiable. A separation penalty or merge-and-reseed rule would be the fix. So far it has not occurred (STAGE5 32.6).
+
 ## 6.23 Open items
 
 - the plant heights of the tail certificate: ~100 s at ne = 400 per process
@@ -1585,9 +1629,12 @@ The sensor fields give the same numbers to within 0.03; all rows are in the .md.
 - ne >= 400 MIMO runs: on the cluster (user, 2026-09-28).
 - orders 10 and 15 of the central K+B+C compensator (user, 2026-09-30):
   `tools/mimo_n100.sh kbc_cen10` / `kbc_cen15` (weighted-truncation starts, 6.27);
-- field cases at ne=200: reduced basis ~300 with two 160-mode input bases (6.31);
-  fewer modes, support-restricted or atom-tangent input bases before the full lattice;
-- number of atoms (6.32): optimised K+FB+FC gamma against N at ne=200, width >= 0.4;
+- field cases at ne=200: reduced basis ~300 with two 160-mode input bases (6.31) --
+  `--field-input tangent` (6.33): 12 + 12 columns, kd ~120, 4.2x faster, same path;
+- number of atoms (6.32): optimised K+FB+FC gamma against N at ne=200, width >= 0.4
+  (with `--field-input tangent`: ~15-25 min per run);
+- atom well-posedness (6.33): explicit width/wavenumber bounds instead of the flat
+  reparametrisation at the floor; dead and overlapping atoms;
 - before 2-D scale: the five items of 6.28 are done (6.29), the parallel
   full-model tasks too (6.30); left: MUMPS as a `sparse_lu` backend, the
   singular-M (velocity mass) versions of the M-norm bounds at the BFS.

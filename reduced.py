@@ -290,15 +290,20 @@ class ReducedOracle:
             Q = np.column_stack([Q] + keep) if Q.shape[1] else np.column_stack(keep)
         return Q
 
-    def set_input_basis(self, Phi_b=None, Psi_c=None):
+    def set_input_basis(self, Phi_b=None, Psi_c=None, per_design=False):
         """INPUT-FIELD BASIS (TRACKER I.1): orthonormal columns spanning the
         actuator vectors b(x_a) over the actuator range (Phi_b) and the sensor
         vectors c(x_s) over the sensor range (Psi_c).  Every later anchor adds
         R(iw) Phi_b to V and R(iw)^H Psi_c to W -- triangular solves with the
         LU the anchor already holds, no factorisation -- so the model is exact
         in the positions across the range (n-width: ~20 modes at 1e-8 for
-        sigma = 0.4 over a range of 3)."""
+        sigma = 0.4 over a range of 3).
+        per_design=True (STAGE6 6.33, --field-input tangent): the bases belong
+        to the current design and are replaced every round, so the full-model
+        pool's tasks carry them (they are small: the atoms' tangent space)
+        instead of reading the copy forked into the workers."""
         self.Phi_b, self.Psi_c = Phi_b, Psi_c
+        self.inputs_per_design = bool(per_design)
         self.galerkin = True          # the input basis requires the union space (see enrich)
 
     @staticmethod
@@ -372,7 +377,9 @@ class ReducedOracle:
         if bc is None or not fullpar.active() or len(omegas) < 2:
             cols = [None] * len(omegas)
         else:
-            cols = fullpar.pmap(_enrich_task, [(bc[0], bc[1], arow, nvec, K, w, nvec_dirs) for w in omegas])
+            ib = ((getattr(self, 'Phi_b', None), getattr(self, 'Psi_c', None),)
+                  if getattr(self, 'inputs_per_design', False) else ())
+            cols = fullpar.pmap(_enrich_task, [(bc[0], bc[1], arow, nvec, K, w, nvec_dirs) + ib for w in omegas])
         # the basis updates in order; the projection (A V, M V, the Gram
         # matrices, the QZ form: O(nnz kd + n kd^2 + kd^3)) once, after the
         # last one -- it depends on the final basis only (STAGE6 6.30)
@@ -1363,12 +1370,13 @@ def input_basis(D, which, lo, hi, other=0.0, nsnap=121, tol=1e-8):
 # ------------------------------------------------ full-model pool tasks (fullpar)
 def _enrich_task(t):
     """An anchor's columns in a worker: the design's closed loop from the
-    registered mesh object, the input bases from the pool's context."""
+    registered mesh object, the input bases from the pool's context -- or from
+    the task when they belong to the design (set_input_basis per_design)."""
     import fullpar
-    b, c, arow, nvec, K, w, nvec_dirs = t
+    b, c, arow, nvec, K, w, nvec_dirs = t[:7]
+    Pb, Pc = t[7:9] if len(t) > 7 else (fullpar.CTX.get('Phi_b'), fullpar.CTX.get('Psi_c'))
     cl = fullpar.CTX['D'].cl(b, c)
-    return ReducedOracle.enrich_columns(cl, w, arow, nvec, K, nvec_dirs,
-                                        fullpar.CTX.get('Phi_b'), fullpar.CTX.get('Psi_c'))
+    return ReducedOracle.enrich_columns(cl, w, arow, nvec, K, nvec_dirs, Pb, Pc)
 
 
 def _eigvec_task(t):

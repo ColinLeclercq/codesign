@@ -1554,6 +1554,12 @@ def main():
                     help='column ordering of every full-model sparse LU (sparse_lu.py): colamd = scipy default '
                          '(bit-identical frozen path); mmd_at_plus_a = symmetric minimum degree for 2-D/3-D FE '
                          'matrices (STAGE6 6.29)')
+    ap.add_argument('--field-input', dest='field_input', choices=['modes', 'tangent'], default='modes',
+                    help='atom fields (--field-atoms) with --oracle-inputs on: the reduced model\'s input basis for '
+                         'the fields.  modes = the --field-basis modes (exact for any field in their span; 160 per '
+                         'field at ne=200, kd ~300); tangent = the current atom fields and their derivatives in '
+                         'centre, width and wavenumber, whose complex span is phi, (x-c) phi, (x-c)^2 phi per atom '
+                         '(3 x n_atoms columns per field), rebuilt at every round (STAGE6 6.33)')
     ap.add_argument('--oracle-orth', dest='oracle_orth', choices=['block', 'column'], default='block',
                     help='orthogonalisation of the reduced basis (reduced.py): block = BLAS3 passes against the '
                          'basis (default, STAGE6 6.29); column = the reference column-by-column version, for the '
@@ -2854,6 +2860,7 @@ def main():
     _al_accepted = None                 # certified abscissa of the accepted design (SQP start check)
     # ---- STAGE 5: the projected oracle for the inner loop ------------------
     _ro = None
+    _tangent_sides = set()                   # fields whose input basis is their atoms' tangent space (6.33)
     if a.oracle == 'reduced':
         from reduced import ReducedOracle
         import reduced as _red_mod
@@ -2867,10 +2874,41 @@ def main():
             # position-robust model (STAGE5 5): input bases over the position
             # ranges + union Galerkin; for K-only cases the Galerkin alone
             from reduced import input_basis
+            # --field-input tangent (STAGE6 6.33): an atom field moves on a
+            # 5 n_atoms-parameter family; to first order its changes lie in
+            # span(M J), J = the atoms and their centre / width / wavenumber
+            # derivatives (the amplitudes' real and imaginary parts span the
+            # same complex columns; centre and wavenumber give the same complex
+            # direction (x-c) phi, so the span is phi, (x-c) phi, (x-c)^2 phi:
+            # 3 per atom, the SVD drops the rest).  That is the field side's input basis, at
+            # the current design, rebuilt every round -- in place of the
+            # --field-basis modes, which made the model exact for every field
+            # in their span (kd ~300 at ne=200, STAGE6 6.31).
+            _tangent_on = a.field_input == 'tangent' and bool(a.field_atoms)
+
+            def _tangent_basis(z_, key):
+                J = pk.field_jacobians(z_).get(key)
+                if not J or any(j is None for j in J):
+                    return None
+                cols = []
+                for j in J:
+                    na = j.shape[1] // 5
+                    cols.append(np.hstack([j[:, :na], j[:, 2 * na:]]))
+                U_, s_, _ = np.linalg.svd(np.asarray(D.M @ np.hstack(cols), complex), full_matrices=False)
+                _tangent_sides.add(key)
+                return U_[:, s_ > 1e-12 * s_[0]]
             _Pb = input_basis(D, 'b', a.xa_lo, a.xa_hi, other=0.98)[0] if flags.get('B') else None
             _Pc = input_basis(D, 'c', a.xs_lo, a.xs_hi, other=-1.03)[0] if flags.get('C') else None
             # free fields on a basis: b = M va/||va||_M lies in span(M Phi_a)
             for _fbk, _fik, _w in (('field_basis_a', 'field_input_a', 'b'), ('field_basis_s', 'field_input_s', 'c')):
+                if _tangent_on:
+                    _Q = _tangent_basis(zbest, 'va' if _w == 'b' else 'vs')
+                    if _Q is not None:                     # atoms: their tangent space at this design (6.33)
+                        if _w == 'b':
+                            _Pb = _Q
+                        else:
+                            _Pc = _Q
+                        continue
                 _Phi = getattr(D, _fbk, None)
                 if _Phi is None:
                     _Phi = getattr(D, _fik, None)          # atoms: the basis is the model's input basis only
@@ -2881,7 +2919,7 @@ def main():
                     else:
                         _Pc = _Q
             if _Pb is not None or _Pc is not None:
-                _ro.set_input_basis(_Pb, _Pc)
+                _ro.set_input_basis(_Pb, _Pc, per_design=bool(_tangent_sides))
             _ro.galerkin = True
             print(f"oracle: position-robust (union Galerkin"
                   f"{', input basis b %d' % _Pb.shape[1] if _Pb is not None else ''}"
@@ -3038,6 +3076,12 @@ def main():
         if _ro is not None:
             _nlu = 0
             _eig_done = set()                    # eigenvalues whose eigenvectors are already in (compaction)
+            if _tangent_sides and it > 0:
+                # the atoms' tangent space at the round's design (6.33): every
+                # anchor of this round adds the responses to it
+                _ro.set_input_basis(_tangent_basis(zbest, 'va') if 'va' in _tangent_sides else _ro.Phi_b,
+                                    _tangent_basis(zbest, 'vs') if 'vs' in _tangent_sides else _ro.Psi_c,
+                                    per_design=True)
             if _ro.dim > a.oracle_dim_cap:
                 # restart from the current design's certified peaks and the
                 # watch-list eigenvalues: the basis carries directions from
