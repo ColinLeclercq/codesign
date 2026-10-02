@@ -412,6 +412,14 @@ class BFSPlant(FECoDesign):
         (winding_cert.winding_count with the M-free plant data and tail)."""
         import winding_cert as wc
         cnt, hot = self.plant_poles(line)
+        if not np.any(nvec) and K == 0:
+            # the open loop (zero controller): f = 1 - k G = 1 identically, so the
+            # count is the plant's (certified) plus the compensator's, exactly
+            import controller as ctl
+            lam_c = np.linalg.eigvals(ctl.A_of(*(np.asarray(x, complex) for x in arow[:3])))
+            pc = int(np.sum(lam_c.real > line))
+            return dict(count=cnt + pc, winding=0, winding_raw=0.0, p_plant=int(cnt), p_ctrl=pc, npts=0,
+                        nsolve=0, wtail=0.0, ok=True, open_loop=True)
         return wc.winding_count(self.A, self.M, b, c, arow, nvec, K, line=line, mc=self.mc, p_plant=cnt, hot=hot,
                                 zeros_hint=zeros_hint, ctrl_exact=True, gbound=self.gbound(pa, c, line), real_sym=True)
 

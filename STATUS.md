@@ -157,7 +157,7 @@ factorisations per round, ~70 with reduced-model certification every 4th round.
 | HIFOO starts at the paper's B2/C1, feasibility by loop-gain continuation | **done** (test plant) | BFS.md 6 |
 | cluster scripts (setup into `codesign`, smoke, plant_cert, production array <= 15 h) | **ready**; smoke passed before the device change | BFS.md 7 |
 | figures per start: sigma_1..3 with/without control + gamma, singular vectors with the devices, controller Bode (`bfs/postproc.py`) | **done** (test plant) | BFS.md 5 |
-| HIFOO start + 1 round above the open-loop peak (1645 vs 1464, test plant): zero-controller start | open | BFS.md 9 |
+| HIFOO start + 1 round above the open-loop peak (1645 vs 1464, test plant): zero-controller start (`--kind zero`, `KIND=zero`) | **ready**; rounds to run on the cluster (`testplant.slurm`) | BFS.md 6 |
 
 ## Next
 

@@ -252,6 +252,11 @@ ones.
 - Positions (`--positions`): `paper` (default, user 2026-10-02) puts every start at the paper's B2 (0.6, 1.0) and C1 window start 2.0; `random` draws the actuator centre uniformly inside the domain and the sensor window start uniformly on the floor.
 - The catalogue is deterministic in (seed, n); the slurm array takes entry `SLURM_ARRAY_TASK_ID`.
 
+**The zero controller** (`--kind zero`, user 2026-10-02; `KIND=zero` in the slurm scripts)
+- The same draws with the loop open: nvec = 0, K = 0, only A_c kept (shifted stable by `feasible_start`). gamma starts at the open-loop peak exactly (test plant 1463.9), the floor a useful controller must go below; the HIFOO draws start above it (1655.3; after one round 1645.2).
+- At k = 0 the gradient in the gains is generically nonzero (dsigma = Re(dk (u^H T b)(c^H T v)), dk = dK + dnvec (sI - A_c)^-1 B_c, any complex value at the peak); those in A_c and the positions vanish (they act only through the loop) and grow with the gains.
+- `feasible_start` returns the certified anchor directly (nothing to continue: 38 s on the test plant, alpha -0.0560); the all-frequency count of an open loop is the plant's plus the compensator's, exactly (`BFSPlant.winding`, no march).
+
 **Why the GL phase does not carry over**
 - GL's phase (`stabilise.py`) descends the closed-loop abscissa from a dense eigensolve.
 - No method here gives the abscissa of an unstable design. The line certificate proves only that nothing lies on Re = -eps, and it reports the first witness or the eigenvalues near its shifts.
@@ -306,6 +311,7 @@ ones.
   5. one start end to end on the test plant, 24 ranks: feasible start and its count, one round with gamma certified on [0, 10], the all-frequency count at the end.
   6. its figures (`postproc.py`, 24 ranks).
 - `bfs/slurm/plant_cert.slurm` (once per mesh, 48 ranks, under 8 h): the full mesh's certified range and poles, cached next to `ops_fx.npz`.
+- `bfs/slurm/testplant.slurm` (24 ranks, 1 h 30 limit): one start on the test plant on the production path, `KIND` (default zero) and `OUTER` (default 3) rounds, then the figures and a one-line verdict (gamma per round against the open-loop peak). Makes the test plant's operators and plant data first if missing. Expected 35 to 45 min (serial sandbox timings: start-up 1422 s with the HIFOO continuation, round 0 587 s of which 334 s is the gamma certificate, which splits over the workers).
 - `bfs/slurm/codesign.slurm`:
   - an array job, one start per task (HIFOO's controller draw at the paper's B2 and C1);
   - 24 ranks per start (the driver and 23 workers) and 240 GB: two starts per 96-core node (the gamma certificate's 2n pencil factor is 3.9 GB in every worker);
@@ -395,7 +401,7 @@ smoke test, 96 ranks at once on one node):
 
 ## 9. Open items
 
-- **Starts below the open loop:** the zero controller is feasible (the plant is stable) with gamma = the open-loop peak (1463.9 on the test plant), while the HIFOO starts begin above it. A start at the zero controller (or a small multiple of a HIFOO draw) would begin the descent below; not yet in the catalogue.
+- **Starts below the open loop:** the zero-controller start exists (section 6); its rounds are to be run on the cluster (`testplant.slurm`, then `KIND=zero codesign.slurm`).
 
 - **The disks of the gamma certificate** are certificates by exhibition: each comes from eigenvalues Arnoldi returned converged (residual 1e-9) nearest the shift. A set that does not converge is retried, then the interval bisected; nothing is assumed. The norm-based (eigenvalue-free) radius is rigorous but 1e-7 to 1e-10 here, so it cannot replace them (section 4).
 - **Plant certificate on the full mesh:** about 2 h on 48 ranks projected from the test plant (41 + 36 min serial); not yet run.

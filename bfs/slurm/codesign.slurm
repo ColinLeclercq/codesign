@@ -11,6 +11,9 @@
 #
 #   sbatch bfs/slurm/codesign.slurm                  (after bfs/slurm/smoke.slurm passed)
 #   sbatch --array=0-15 bfs/slurm/codesign.slurm     (more starts)
+#   KIND=zero sbatch --array=0-1 bfs/slurm/codesign.slurm
+#                     (the zero controller: the same draws with the loop open,
+#                      gamma starting at the open-loop peak; user 2026-10-02)
 #
 # SISO co-design on the backward-facing step (BFS.md 5): one HIFOO start per
 # array task (bfs/hifoo_init.py, SEED, start = the array index: HIFOO's
@@ -30,7 +33,7 @@
 # DEADLINE (14 h 15 min after its start; with the driver's 30 min reserve the
 # last round ends by 13 h 45, leaving 75 min for the final certificate, the
 # winding count, the save and the figures), so the job finishes inside its 15 h with a record
-# (OUT/start_XXX/K_B_C_s0_bfs.json/.npz).  Re-submitting the same command
+# (OUT/KIND_XXX/K_B_C_s0_bfs.json/.npz).  Re-submitting the same command
 # resumes every unfinished start from its checkpoint (accepted designs, the
 # working set and the band are stored); a finished start is not redone.
 set -eo pipefail
@@ -42,8 +45,9 @@ LAUNCHER=${LAUNCHER:-mpiexec}
 SEED=${SEED:-0}; NSTART=${NSTART:-64}
 OUT=${OUT:-results_bfs}
 IDX=${SLURM_ARRAY_TASK_ID:-0}
-NAME=$(printf "hifoo_%03d" "$IDX")
-RUN=$OUT/start_$(printf "%03d" "$IDX")
+KIND=${KIND:-hifoo}                      # hifoo | zero (the same draw, loop open: gamma starts at the open-loop peak)
+NAME=$(printf "%s_%03d" "$KIND" "$IDX")
+RUN=$OUT/${KIND}_$(printf "%03d" "$IDX")
 echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none} (array ${SLURM_ARRAY_JOB_ID:-}_$IDX)  $(date -Is) ==="
 echo "=== python: $(command -v python) ($(python -V 2>&1)); start $NAME (seed $SEED) -> $RUN ==="
 [ -f bfs/data/ops_fx.npz ] || { echo "*** bfs/data/ops_fx.npz missing: run bfs/slurm/smoke.slurm first"; exit 1; }
@@ -60,7 +64,7 @@ fi
 # the catalogue is deterministic in (SEED, NSTART): every array task draws the
 # same set into its own directory and takes its own entry
 mkdir -p "$RUN"
-python bfs/hifoo_init.py --ops bfs/data/ops_fx.npz --n "$NSTART" --seed "$SEED" --out "$RUN/catalogue" > "$RUN.catalogue.json"
+python bfs/hifoo_init.py --ops bfs/data/ops_fx.npz --n "$NSTART" --seed "$SEED" --kind "$KIND" --out "$RUN/catalogue" > "$RUN.catalogue.json"
 export OPS=bfs/data/ops_fx.npz OUTER=${OUTER:-40} DEADLINE=${DEADLINE:-51300} PY=python
 export LAUNCH="$LAUNCHER -n ${SLURM_NTASKS:-24}"
 bash bfs/run_bfs.sh "$RUN" "$RUN/catalogue/$NAME.npz"

@@ -14,8 +14,17 @@ the output row nvec, the feedthrough K, all real.  Positions (--positions):
 The draw is NOT stabilised here: run_case_epi.py --stabilise makes it
 feasible (feasible_start below) when it is not.
 
+--kind zero (user 2026-10-02): the same draws with the loop OPEN -- nvec = 0,
+K = 0, only the compensator A_c kept (feasible_start shifts it stable).  The
+start's gamma is then the open-loop peak exactly, the floor any useful
+controller must go below; the HIFOO draws themselves start above it (test
+plant: 1655 against 1464).  At the zero controller the gradient in the gains
+is generically nonzero, those in A_c and the positions vanish (they act only
+through the loop) and grow as soon as the gains do.
+
     python bfs/hifoo_init.py --ops bfs/data/ops_fx.npz --n 8 --seed 0 --out bfs/data/starts
-writes bfs/data/starts/hifoo_000.npz ... (the --init format of run_case_epi.py)
+writes bfs/data/starts/hifoo_000.npz ... (the --init format of run_case_epi.py);
+with --kind zero, zero_000.npz ...
 """
 import os, sys, argparse, json
 import numpy as np
@@ -95,6 +104,12 @@ def feasible_start(D, arow, nvec, K, b, c, eps, delta=3e-3, tau0=1e-6, pool=None
         log(f"  feasible_start: tau = {tau0:g} is not certified (alpha {al0:+.4f}): the plant itself is "
             f"not inside the margin?")
         return (d, e, f), 0.0 * nvec, 0j, info
+    if not np.any(nvec) and K == 0:
+        # the zero controller (--kind zero): the loop is open at every tau, so
+        # the certified anchor IS the start -- nothing to continue
+        info['tau'] = 1.0
+        log(f"  feasible_start: zero controller (open loop), compensator shifted by {s:.4f}; alpha {al0:+.4f}")
+        return (d, e, f), nvec, K, info
     tau, ratio, t_bad = tau0, 4.0, np.inf
     while tau < 1.0 and ratio > 1.05 and t_bad > 1.05 * tau:
         # geometric growth until the first refusal; then bisection (in log tau)
@@ -136,6 +151,8 @@ def main():
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--margin', type=float, default=0.05, help='as run_case_epi.py --bfs-margin')
     ap.add_argument('--positions', choices=['paper', 'random'], default='paper')
+    ap.add_argument('--kind', choices=['hifoo', 'zero'], default='hifoo',
+                    help='zero: the same draws with nvec = 0, K = 0 (the open loop; gamma = its peak)')
     ap.add_argument('--out', default='bfs/data/starts')
     a = ap.parse_args()
     from bfs.plant import BFSPlant
@@ -145,13 +162,15 @@ def main():
     rows = []
     for i in range(a.n):
         s = draw(rng, a.r, D, a.positions)
-        nm = f"hifoo_{i:03d}"
-        np.savez(os.path.join(a.out, nm + '.npz'), **s, seed=a.seed, index=i, margin=a.margin, positions=a.positions)
+        if a.kind == 'zero':
+            s.update(nvec=np.zeros(a.r), K=0.0)
+        nm = f"{a.kind}_{i:03d}"
+        np.savez(os.path.join(a.out, nm + '.npz'), **s, seed=a.seed, index=i, margin=a.margin, positions=a.positions, kind=a.kind)
         import controller as ctl
         al_c = float(np.max(np.linalg.eigvals(ctl.A_of(s['d'] + 0j, s['e'] + 0j, s['f'] + 0j)).real))
         rows.append(dict(name=nm, xa=np.round(s['xa'], 3).tolist(), xs=np.round(s['xs'], 3).tolist(),
                          K=round(s['K'], 3), alpha_ctrl=round(al_c, 3)))
-    print(json.dumps(dict(out=a.out, n=a.n, seed=a.seed, r=a.r, margin=a.margin, positions=a.positions,
+    print(json.dumps(dict(out=a.out, n=a.n, seed=a.seed, r=a.r, margin=a.margin, positions=a.positions, kind=a.kind,
                      starts=rows), indent=1))
 
 
