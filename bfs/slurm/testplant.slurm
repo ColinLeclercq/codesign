@@ -11,6 +11,7 @@
 #   sbatch bfs/slurm/testplant.slurm                       (zero controller, 3 rounds)
 #   KIND=hifoo OUTER=5 sbatch bfs/slurm/testplant.slurm    (HIFOO start, 5 rounds)
 #   OUTER=300 sbatch --time=15:00:00 bfs/slurm/testplant.slurm
+#   R=10 OUTER=300 sbatch --time=15:00:00 bfs/slurm/testplant.slurm   (order 10)
 #        (as many rounds as fit: the driver stops before the job's end, or when
 #         progress stops)
 #   RESUME=1 OUT=testplant_bfs/zero_s0_r5 OUTER=10 sbatch bfs/slurm/testplant.slurm
@@ -33,7 +34,8 @@ mkdir -p logs
 source ./env.sh
 LAUNCHER=${LAUNCHER:-mpiexec}
 KIND=${KIND:-zero}; OUTER=${OUTER:-3}; SEED=${SEED:-0}
-OUT=${OUT:-testplant_bfs/${KIND}_s${SEED}_r${OUTER}}
+export R=${R:-5}                          # controller order (R=10: an order-10 controller)
+OUT=${OUT:-testplant_bfs/${KIND}$([ "$R" = 5 ] || echo "_o$R")_s${SEED}_r${OUTER}}
 OPS=bfs/data/ops_coarse.npz
 echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none}  $(date -Is)  $KIND start, $OUTER rounds -> $OUT ==="
 python -c "import clarabel, qdldl, matplotlib" || { echo "*** clarabel / qdldl / matplotlib missing: run bash bfs/setup_cluster.sh on the login node"; exit 1; }
@@ -53,7 +55,7 @@ if [ "${RESUME:-0}" = "1" ] && [ -f "$OUT/run/K_B_C_s0_bfs.npz" -o -f "$OUT/run/
     CONT=(--continue-record 1)
 else
     rm -rf "$OUT"; mkdir -p "$OUT"
-    python bfs/hifoo_init.py --ops "$OPS" --n 1 --seed "$SEED" --kind "$KIND" --out "$OUT/starts" > "$OUT/starts.json"
+    python bfs/hifoo_init.py --ops "$OPS" --n 1 --seed "$SEED" --kind "$KIND" --r "$R" --out "$OUT/starts" > "$OUT/starts.json"
 fi
 # the deadline from the job's own end time (any --time): no round starts that
 # would not end, 5 min kept for the figures (bfs/slurm_remaining.py)

@@ -51,8 +51,10 @@ SEED=${SEED:-0}; NSTART=${NSTART:-64}
 OUT=${OUT:-results_bfs}
 IDX=${SLURM_ARRAY_TASK_ID:-0}
 KIND=${KIND:-hifoo}                      # hifoo | zero (the same draw, loop open: gamma starts at the open-loop peak)
+export R=${R:-5}                          # controller order; directories carry _o<R> when it is not 5
+SUF=$([ "$R" = 5 ] || echo "_o$R")
 NAME=$(printf "%s_%03d" "$KIND" "$IDX")
-RUN=$OUT/${KIND}_$(printf "%03d" "$IDX")
+RUN=$OUT/${KIND}${SUF}_$(printf "%03d" "$IDX")
 echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none} (array ${SLURM_ARRAY_JOB_ID:-}_$IDX)  $(date -Is) ==="
 echo "=== python: $(command -v python) ($(python -V 2>&1)); start $NAME (seed $SEED) -> $RUN ==="
 [ -f bfs/data/ops_fx.npz ] || { echo "*** bfs/data/ops_fx.npz missing: run bfs/slurm/smoke.slurm first"; exit 1; }
@@ -75,7 +77,7 @@ fi
 # the catalogue is deterministic in (SEED, NSTART): every array task draws the
 # same set into its own directory and takes its own entry
 mkdir -p "$RUN"
-python bfs/hifoo_init.py --ops bfs/data/ops_fx.npz --n "$NSTART" --seed "$SEED" --kind "$KIND" --out "$RUN/catalogue" > "$RUN.catalogue.json"
+python bfs/hifoo_init.py --ops bfs/data/ops_fx.npz --n "$NSTART" --seed "$SEED" --kind "$KIND" --r "$R" --out "$RUN/catalogue" > "$RUN.catalogue.json"
 # the deadline from the job's own end time (any --time): 45 min kept after the
 # driver's last round for the figures, on top of its own 30 min for the final
 # certificate and count (bfs/slurm_remaining.py)

@@ -7,6 +7,7 @@
 #   LAUNCH    MPI launcher prefix, e.g. "mpiexec -n 96" (default: none = serial)
 #   OPS       operator file (default bfs/data/ops_fx.npz)
 #   OUTER     rounds (default 40)
+#   R         controller order (default 5; the start file must have the same order)
 #   DEADLINE  seconds after which no new round starts (default 0 = off)
 #   WALL      the driver's --wall (inner-solve clock budgets; default 54000)
 #   CERT_NSEG line-certificate segments over the MPI pool (default 16; serial runs: 1)
@@ -30,7 +31,7 @@ cd "$(dirname "$0")/.."
 STAB=()
 [ "${STABILISE:-1}" = "1" ] && STAB=(--stabilise)
 exec ${LAUNCH} ${PY:-python} -u run_case_epi.py --plant bfs --ops "${OPS:-bfs/data/ops_fx.npz}" --lu-order mumps \
-    --init "$init" --cold --case K+B+C --r 5 --eps 0.05 --start 0 --nproc 1 --cert_nseg "${CERT_NSEG:-16}" --cert-split "${CERT_SPLIT:-23}" --wlo 0 --whi 10 \
+    --init "$init" --cold --case K+B+C --r "${R:-5}" --eps 0.05 --start 0 --nproc 1 --cert_nseg "${CERT_NSEG:-16}" --cert-split "${CERT_SPLIT:-23}" --wlo 0 --whi 10 \
     --outer "${OUTER:-40}" --deadline "${DEADLINE:-0}" --wall "${WALL:-54000}" "${STAB[@]}" \
     --inner-budget iters --inner-maxit 10 --inner-maxit-adapt --select-cons on --ctrl-imcap off \
     --cont-anchor defer --sigma2 on --oracle reduced --oracle-inputs on --ctrl-line eps --cert-sweep 0 \
