@@ -46,6 +46,7 @@ trap 'rc=$?; echo ""; echo "*** FAILED: line $LINENO: $BASH_COMMAND (exit $rc)";
 cd "$SLURM_SUBMIT_DIR"
 mkdir -p logs
 source ./env.sh
+python bfs/version_check.py || { echo "*** mixed code versions (bfs/version_check.py): stop"; exit 1; }
 LAUNCHER=${LAUNCHER:-mpiexec}
 SEED=${SEED:-0}; NSTART=${NSTART:-64}
 OUT=${OUT:-results_bfs}

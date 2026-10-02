@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""version_check.py -- is this checkout ONE consistent version of the code?
+(BFS.md 7.)  bfs/MANIFEST lists the sha256 of every code file the runs execute
+(the top-level and bfs/ *.py, *.sh, *.slurm), written when the package was
+made.  The slurm scripts run this first: a file from another version (a
+partial copy, an old file left behind) stops the job before it computes
+anything, with the files named.
+
+    python bfs/version_check.py            check (exit 1 on a mismatch;
+                                           ALLOW_MODIFIED=1: warn only)
+    python bfs/version_check.py --write L  (packaging) rewrite the manifest,
+                                           version label L
+"""
+import os, sys, hashlib, subprocess
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+MAN = os.path.join(HERE, 'MANIFEST')
+
+
+def _sha(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _files():
+    out = subprocess.run(['git', 'ls-files', '*.py', '*.sh', '*.slurm'], cwd=ROOT, capture_output=True,
+                         text=True, check=True).stdout.split()
+    return sorted(p for p in out if not p.startswith(('tools/', 'attic/')))
+
+
+def write(label):
+    rows = [f"{_sha(os.path.join(ROOT, p))}  {p}" for p in _files()]
+    with open(MAN, 'w') as f:
+        f.write(f"# version {label}\n" + "\n".join(rows) + "\n")
+    print(f"{MAN}: {len(rows)} files, version {label}")
+
+
+def check():
+    if not os.path.exists(MAN):
+        print("version_check: bfs/MANIFEST missing -- this checkout is older than the check (2026-10-02)")
+        return 1
+    label, bad = '?', []
+    n = 0
+    for line in open(MAN):
+        if line.startswith('# version'):
+            label = line.split(None, 2)[2].strip()
+            continue
+        sha, path = line.split(None, 1)
+        path = path.strip(); n += 1
+        full = os.path.join(ROOT, path)
+        if not os.path.exists(full):
+            bad.append(f"missing   {path}")
+        elif _sha(full) != sha:
+            bad.append(f"different {path}")
+    if not bad:
+        print(f"version_check: code version {label}, {n} files consistent")
+        return 0
+    print(f"version_check: this checkout is NOT the code version {label}: {len(bad)} of {n} files differ")
+    for b in bad:
+        print("   " + b)
+    print("   (extract the whole package again, or fetch the bundle; ALLOW_MODIFIED=1 to run anyway)")
+    return 0 if os.environ.get('ALLOW_MODIFIED') == '1' else 1
+
+
+if __name__ == '__main__':
+    if len(sys.argv) > 2 and sys.argv[1] == '--write':
+        write(sys.argv[2])
+    else:
+        sys.exit(check())

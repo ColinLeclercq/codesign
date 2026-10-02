@@ -34,6 +34,7 @@ cd "$SLURM_SUBMIT_DIR"
 mkdir -p logs
 echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none}  $(date -Is) ==="
 source ./env.sh
+python bfs/version_check.py || { echo "*** mixed code versions (bfs/version_check.py): stop"; exit 1; }
 echo "=== python: $(command -v python) ($(python -V 2>&1)) ==="
 LAUNCHER=${LAUNCHER:-mpiexec}
 python -c "import clarabel, qdldl, matplotlib" || { echo "*** clarabel / qdldl / matplotlib missing: run bash bfs/setup_cluster.sh on the login node"; exit 1; }
