@@ -35,6 +35,13 @@ sys.path[:0] = [os.path.dirname(HERE)]
 
 PAPER_XA = (0.6, 1.0)          # B2, Barbagallo et al. (2012) figure 1
 PAPER_XS = 2.0                 # C1 = [2.0, 2.6], ibid.
+# The zero controller's compensator: its rightmost pole at -eps - ZERO_CTRL_DEPTH,
+# not at the margin.  With the loop open the compensator poles are closed-loop
+# eigenvalues; at -eps - 2 delta (0.006 from the line, the HIFOO shift) the
+# continuation gate's motion allowance (half the distance to the line) was
+# 0.003, and the first step that closed the loop could not be certified even at
+# 1/16 of its length (cluster test plant, 2026-10-02: round 0 lost twice).
+ZERO_CTRL_DEPTH = 0.5
 
 
 def draw(rng, r, D, positions='paper', max_tries=100000):
@@ -65,7 +72,8 @@ def feasible_start(D, arow, nvec, K, b, c, eps, delta=3e-3, tau0=1e-6, pool=None
     run is certified -- by continuation from a design whose spectrum is known:
 
       1. the compensator, exactly (r x r): A_c - s I with s = max(0,
-         alpha(A_c) + eps + 2 delta) (the tridiagonal diagonal shifted);
+         alpha(A_c) + eps + 2 delta) (the tridiagonal diagonal shifted; for
+         the zero controller + ZERO_CTRL_DEPTH instead of 2 delta);
       2. the loop gain: (nvec, K) -> tau (nvec, K).  At tau ~ 0 the closed
          loop is the plant (stable; its near-axis spectrum computed once) and
          the compensator; tau grows to 1 by steps each gated like an accepted
@@ -82,7 +90,8 @@ def feasible_start(D, arow, nvec, K, b, c, eps, delta=3e-3, tau0=1e-6, pool=None
     import certify_sparse as csp
     d, e, f = (np.asarray(x, complex) for x in arow[:3])
     al_c = float(np.max(np.linalg.eigvals(ctl.A_of(d, e, f)).real))
-    s = max(0.0, al_c + eps + 2.0 * delta)
+    zero = not np.any(nvec) and K == 0          # the zero controller (--kind zero): the loop is open
+    s = max(0.0, al_c + eps + (ZERO_CTRL_DEPTH if zero else 2.0 * delta))
     d = d - s
     Ac = ctl.A_of(d, e, f); Bc = ctl.Bc_of((d, e, f), D.r, D.mc)
     nvec = np.asarray(nvec, complex); K = complex(K)
@@ -104,9 +113,9 @@ def feasible_start(D, arow, nvec, K, b, c, eps, delta=3e-3, tau0=1e-6, pool=None
         log(f"  feasible_start: tau = {tau0:g} is not certified (alpha {al0:+.4f}): the plant itself is "
             f"not inside the margin?")
         return (d, e, f), 0.0 * nvec, 0j, info
-    if not np.any(nvec) and K == 0:
-        # the zero controller (--kind zero): the loop is open at every tau, so
-        # the certified anchor IS the start -- nothing to continue
+    if zero:
+        # the loop is open at every tau, so the certified anchor IS the start --
+        # nothing to continue
         info['tau'] = 1.0
         log(f"  feasible_start: zero controller (open loop), compensator shifted by {s:.4f}; alpha {al0:+.4f}")
         return (d, e, f), nvec, K, info

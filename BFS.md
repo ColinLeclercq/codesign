@@ -228,6 +228,7 @@ ones.
 - The continuation gate certifies the segment from the last accepted design to the candidate piece by piece, left to right (halving up to `--cont-depth`). When it gives up -- a crossing ahead, or the eigenvalue motion still too large at full depth -- the path up to its last certified piece is already proved free of crossings (`continuation_gate(..., reach=)`).
 - That point becomes the candidate: its own line certificate (and the rectangle gate) and its gamma certificate; accepted if it improves on the best, with the step cap set to the certified length. The round is no longer lost (cluster test plant, zero start: round 0's step 1464 -> 1140 was refused whole, at depth 4).
 - Cost when it fires: one line certificate and one gamma certificate (5 to 10 min on the full mesh), against a whole round (35 to 50 min).
+- An empty prefix (the first 1/2^depth piece already refused) is reported ("certified prefix: none"). That was the case in the second cluster run: the zero start's compensator pole 0.006 from the line (fixed in section 6).
 
 **Stopping before the time limit**
 - `--deadline S` (general; default 0 = off): no new round once elapsed time + 1.25 x the longest round + `--deadline-final` (default 1800 s) would pass S.
@@ -261,7 +262,8 @@ ones.
 **The zero controller** (`--kind zero`, user 2026-10-02; `KIND=zero` in the slurm scripts)
 - The same draws with the loop open: nvec = 0, K = 0, only A_c kept (shifted stable by `feasible_start`). gamma starts at the open-loop peak exactly (test plant 1463.9), the floor a useful controller must go below; the HIFOO draws start above it (1655.3; after one round 1645.2).
 - At k = 0 the gradient in the gains is generically nonzero (dsigma = Re(dk (u^H T b)(c^H T v)), dk = dK + dnvec (sI - A_c)^-1 B_c, any complex value at the peak); those in A_c and the positions vanish (they act only through the loop) and grow with the gains.
-- `feasible_start` returns the certified anchor directly (nothing to continue: 38 s on the test plant, alpha -0.0560); the all-frequency count of an open loop is the plant's plus the compensator's, exactly (`BFSPlant.winding`, no march).
+- `feasible_start` returns the certified anchor directly (nothing to continue: 38 s on the test plant); the all-frequency count of an open loop is the plant's plus the compensator's, exactly (`BFSPlant.winding`, no march).
+- The compensator is shifted to put its rightmost pole at -eps - 0.5 (`ZERO_CTRL_DEPTH`), not at -eps - 2 delta as for the HIFOO draws (2026-10-02). With the loop open its poles are closed-loop eigenvalues: at -0.056 (0.006 from the line) the continuation gate allowed 0.003 of motion per piece, and the first step closing the loop was refused whole -- not even 1/16 of it certified -- in both cluster runs. Now the start's alpha is the plant's, -0.1148 (allowance 0.032).
 
 **Why the GL phase does not carry over**
 - GL's phase (`stabilise.py`) descends the closed-loop abscissa from a dense eigensolve.
@@ -414,6 +416,11 @@ smoke test, 96 ranks at once on one node):
 - Controller: one compensator pole at -0.05, on the constraint alpha(A_c) <= -eps; |k| rises towards w = 0 (163 vs 52 open loop at w = 0, below gamma).
 - Not converged: -11.6 % in the last round.
 - Found: the certified value was the reduced t, not attained (fixed above); the Bode plot's axis ran to 1e-15 for a real pole with Im ~ 1e-16 (fixed); the job's verdict printed candidates, not the accepted values (fixed).
+
+*Cluster, the same run after those fixes (job 16887057, 12 min for the run)*
+- Round 0 refused again: the certified prefix was EMPTY (4 splits, all on the leftmost piece; the gate gave up on the first 1/16). Cause: the zero start's compensator pole at -0.056, 0.006 from the line (fixed in section 6: -0.55).
+- Round 1 accepted the same design as before (1367.6621; the first run's 1367.6776 was the unattained reduced t, the witness then gave 1367.6617). Round 2 differs: 1244.845 against 1209.568, ratio 0.850 against 0.826.
+- Why: the certificate now returns an attained value and its own witness; the witness and the certified level feed the next round's working set and the reduced model's anchors (round 2: |Omega| 42 vs 41, different disagreement anchors), so the SQP solved a different round-2 problem. Three rounds of a nonsmooth local method are path dependent; neither run had converged (-11.6 % and -9.0 % in their last round). The comparison that matters is the converged value (OUTER = 20).
 
 ## 9. Open items
 
