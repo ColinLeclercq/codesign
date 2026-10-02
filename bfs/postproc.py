@@ -139,8 +139,8 @@ def _pick(ws, s_open, s_closed, user):
 
 # ------------------------------------------------------------------ figures
 INK, INK2, GRID = '#0b0b0b', '#52514e', '#d9d8d4'
-START = '#8a8984'                              # the start positions (recessive grey)
-BAR = 0.1                                      # height of the sensor-window bars, drawn under the floor
+START = '#008300'                              # the start positions (green: apart from the RdBu field and the black final ones)
+BAR = 0.12                                     # height of the sensor-window outlines, centred on the wall y = 0
 C_OPEN, C_CLOSED = '#eb6834', '#2a78d6'       # categorical slots 2 and 1 (dataviz reference palette)
 
 
@@ -221,30 +221,32 @@ def fig_modes(path, D, w, rec, des, comp='u'):
         pc = ax.tripcolor(tri, val / m, cmap='RdBu_r', vmin=-1, vmax=1, shading='gouraud', rasterized=True)
         ax.plot(xx, D.wall(xx), color=INK2, lw=0.8)
         if des.get('xa0') is not None:
-            # the start: grey, the actuator's move as an arrow; the sensor's start
-            # window under the final one, both drawn BELOW the floor (outside the
-            # fluid: the sensor is the wall shear on y = 0)
+            # the start in green, the actuator's move as an arrow; both sensor
+            # windows ON the wall (the wall shear at y = 0), as outlines so that
+            # overlapping windows stay readable
             xa0, xs0 = des['xa0'], float(des['xs0'][0])
             ax.plot(xa0[0] + 0.5 * np.cos(th), xa0[1] + 0.5 * np.sin(th), color=START, lw=0.9, ls=(0, (1.5, 1.5)))
             ax.plot(*xa0, marker='x', color=START, ms=5, mew=1.0)
             if np.linalg.norm(des['xa'] - xa0) > 1e-3:
                 ax.annotate('', xy=tuple(des['xa']), xytext=tuple(xa0),
                             arrowprops=dict(arrowstyle='->', color=INK, lw=0.9, shrinkA=2, shrinkB=2))
-            ax.add_patch(Rectangle((xs0, -2 * BAR), D.sensor_len, BAR, color=START, lw=0))
+            # taller than the final outline, so that the two stay apart where they overlap
+            ax.add_patch(Rectangle((xs0, -BAR), D.sensor_len, 2.0 * BAR, fill=False, edgecolor=START, lw=1.3,
+                                   ls=(0, (2, 1.5)), zorder=5))
         ax.plot(des['xa'][0] + 0.5 * np.cos(th), des['xa'][1] + 0.5 * np.sin(th), color=INK, lw=1.0, ls=(0, (3, 2)))
         ax.plot(*des['xa'], marker='+', color=INK, ms=7, mew=1.2)
-        ax.add_patch(Rectangle((xs, -BAR), D.sensor_len, BAR, color=INK, lw=0))
+        ax.add_patch(Rectangle((xs, -0.5 * BAR), D.sensor_len, BAR, fill=False, edgecolor=INK, lw=1.3, zorder=6))
         ax.set_aspect('equal')
-        ax.set_xlim(x_lo, xr); ax.set_ylim(min(y_lo, 0.0) - 2.4 * BAR, y_hi)
+        ax.set_xlim(x_lo, xr); ax.set_ylim(min(y_lo, 0.0) - 1.3 * BAR, y_hi)
         sig = rec['sigma1_vec_' + key.split('_')[1]]
         ax.set_title(f'optimal {title} ($\\sigma_1$ = {sig:.5g})', color=INK, fontsize=9, loc='left')
         ax.tick_params(colors=INK2, labelsize=8)
     fig.colorbar(pc, ax=[p[0] for p in panels], shrink=0.5, pad=0.01,
                  label=f'Re {comp}, each panel scaled to max |.| = 1')
-    moved = ('; grey: their START positions (dotted circle, x, lower bar), arrow: the actuator\'s move'
+    moved = ('; green: their START positions (dotted circle, x, dashed outline), arrow: the actuator\'s move'
              if des.get('xa0') is not None else '')
     fig.suptitle(f'$\\omega$ = {w:.4g}: singular vectors of $\\sigma_1$; actuator (dashed: half-amplitude circle, '
-                 f'+: centre), sensor window (bar under the floor){moved}', color=INK, fontsize=9.5, x=0.01, y=0.95,
+                 f'+: centre), sensor window (outline on the wall){moved}', color=INK, fontsize=9.5, x=0.01, y=0.95,
                  ha='left', wrap=True)
     fig.savefig(path, dpi=150, bbox_inches='tight')
     plt.close(fig)
