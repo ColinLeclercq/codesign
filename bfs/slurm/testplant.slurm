@@ -10,6 +10,9 @@
 #
 #   sbatch bfs/slurm/testplant.slurm                       (zero controller, 3 rounds)
 #   KIND=hifoo OUTER=5 sbatch bfs/slurm/testplant.slurm    (HIFOO start, 5 rounds)
+#   RESUME=1 OUT=testplant_bfs/zero_s0_r5 OUTER=10 sbatch bfs/slurm/testplant.slurm
+#        (10 more rounds for that run: from its checkpoint if it was stopped, from
+#         its record if it finished; without RESUME the directory is started over)
 #
 # One start on the small test plant (n = 33,593, bfs/mesh_coarse.py), the
 # production path on 24 ranks (BFS.md 6): the start (KIND=zero: HIFOO's
@@ -41,10 +44,16 @@ if [ ! -f bfs/data/ops_coarse_range.npz ]; then
     echo "=== the test plant's certified range and poles (bfs/plant_cert.py) ==="
     time $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/plant_cert.py --ops "$OPS"
 fi
-rm -rf "$OUT"; mkdir -p "$OUT"
-python bfs/hifoo_init.py --ops "$OPS" --n 1 --seed "$SEED" --kind "$KIND" --out "$OUT/starts" > "$OUT/starts.json"
+CONT=()
+if [ "${RESUME:-0}" = "1" ] && [ -f "$OUT/run/K_B_C_s0_bfs.npz" -o -f "$OUT/run/K_B_C_s0_bfs_ckpt.npz" ]; then
+    echo "=== RESUME: $OUT/run continues (checkpoint if present, else the finished record) ==="
+    CONT=(--continue-record 1)
+else
+    rm -rf "$OUT"; mkdir -p "$OUT"
+    python bfs/hifoo_init.py --ops "$OPS" --n 1 --seed "$SEED" --kind "$KIND" --out "$OUT/starts" > "$OUT/starts.json"
+fi
 export OPS OUTER PY=python LAUNCH="$LAUNCHER -n ${SLURM_NTASKS:-24}"
-time bash bfs/run_bfs.sh "$OUT/run" "$OUT/starts/${KIND}_000.npz"
+time bash bfs/run_bfs.sh "$OUT/run" "$OUT/starts/${KIND}_000.npz" "${CONT[@]}"
 time $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/postproc.py --ops "$OPS" --rec "$OUT/run/K_B_C_s0_bfs.npz"
 python - "$OUT/run/K_B_C_s0_bfs.json" "$OUT/run/K_B_C_s0_bfs_post/post.json" <<'EOF'
 import json, sys

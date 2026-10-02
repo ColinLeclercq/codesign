@@ -1986,6 +1986,9 @@ def main():
                          'wrapped).  Implied by --dump.')
     ap.add_argument('--init', default=None)
     ap.add_argument('--resume', default=None)
+    ap.add_argument('--continue-record', dest='continue_record', type=int, default=0,
+                    help='1: a finished run in OUTDIR (record, no checkpoint) continues from its record for '
+                         '--outer more rounds (BFS.md 7)')
     ap.add_argument('--parent', default=None)
     ap.add_argument('--cold', action='store_true',
                     help='no warm start at all')
@@ -2407,6 +2410,24 @@ def main():
     # checkpoint goes through the same resume path and the same anchor
     # verification (line sweep + dense at GL) as any other start.
     _ck = tag + '_ckpt.npz'
+    if a.continue_record and not os.path.exists(_ck) and os.path.exists(tag + '.npz'):
+        # CONTINUE A FINISHED RUN (--continue-record; BFS.md 7, 2026-10-02): its
+        # record becomes the checkpoint, so the run resumes from the saved design
+        # with its working set (the record's active frequencies), through the same
+        # anchor verification as any resume.  The finished run's summary is kept
+        # as tag_partN.json (its round history would otherwise be overwritten).
+        import shutil
+        _k = 1
+        while os.path.exists(f"{tag}_part{_k}.json"):
+            _k += 1
+        if os.path.exists(tag + '.json'):
+            shutil.copyfile(tag + '.json', f"{tag}_part{_k}.json")
+        shutil.copyfile(tag + '.npz', _ck)
+        _gr = float(np.load(tag + '.npz', allow_pickle=True)['gamma'])
+        json.dump(dict(case=a.case, gamma=_gr, note=f'continued from the finished record (part {_k})'),
+                  open(tag + '_ckpt.json', 'w'))
+        print(f"CONTINUE: the finished record (gamma={_gr:.6f}) is the checkpoint; its summary kept as "
+              f"{os.path.basename(tag)}_part{_k}.json", flush=True)
     if os.path.exists(_ck) and not MIMO:
         try:
             _ckg = float(json.load(open(tag + '_ckpt.json'))['gamma'])
@@ -4756,8 +4777,18 @@ def main():
                 import warmstart as _ws
                 prev_ok = _ws.is_stable(D, tag + '.npz', eps=a.eps,
                                         dense=True)
-            elif 'alpha_dense' in pz.files:
+            elif 'alpha_dense' in pz.files and not (BFS and not np.isfinite(float(pz['alpha_dense']))):
                 prev_ok = float(pz['alpha_dense']) + a.eps <= 0.0
+            elif BFS:
+                # the BFS record has no dense abscissa (nan); its alpha is the line
+                # certificate's, its stability the all-frequency count (2026-10-02:
+                # a resumed run reported its stable start as failing re-verification)
+                _wc = None
+                try:
+                    _wc = json.load(open(tag + '.json')).get('wind_count')
+                except Exception:
+                    pass
+                prev_ok = float(pz['alpha']) + a.eps <= 0.0 and _wc in (0, None)
             else:
                 prev_ok = float(pz['alpha']) + a.eps <= 0.0
                 print("guard: previous file has no alpha_dense and n is too "

@@ -325,7 +325,8 @@ ones.
   - 24 ranks per start (the driver and 23 workers) and 240 GB: two starts per 96-core node (the gamma certificate's 2n pencil factor is 3.9 GB in every worker);
   - 15 h limit, `--deadline` at 14 h 15: with the driver's 30 min reserve the last round ends by 13 h 45, leaving 75 min for the final certificate, the count, the save and the figures;
   - then `bfs/postproc.py` on the saved record (also after a deadline stop: the figures then show the progress); a finished start re-submitted only draws missing figures;
-  - resubmitting resumes unfinished starts; it refuses to start without the plant certificate.
+  - resubmitting resumes unfinished starts (a deadline stop or a killed job: from the checkpoint written at every accepted round); `CONTINUE=1` gives finished starts OUTER more rounds from their records (`--continue-record`, the finished summary kept as `K_B_C_s0_bfs_partN.json`); it refuses to start without the plant certificate.
+- `testplant.slurm` with `RESUME=1 OUT=<its directory>` does the same for a test-plant run (otherwise the directory is started over).
 - The launcher is the conda env's `mpiexec` (`LAUNCHER=` to change).
 
 **Run time** (measured 2026-10-02; projected to the cluster)
@@ -368,6 +369,7 @@ smoke test, 96 ranks at once on one node):
 - **End:** the final certificate and the all-frequency count, 30 to 50 min.
 - **Figures** (`postproc.py`): test plant 245 frequencies x 1.7 s (both loops, k = 3, one LU each); full mesh about 24 s each, so about 100 min of task time, **5 to 10 min** over 23 workers.
 - **In the 15 h job:** about **15 to 20 rounds**. GL K+B+C needed 20 to 40 rounds to converge; a second job (resume from the checkpoint) may be needed.
+- Re-projected from the cluster test plant (2026-10-02, zero start, 5 rounds of 154 to 255 s: pool 58 to 95 s, driver MUMPS 45 to 57 s, the rest 50 to 100 s; full-mesh factor x 11, solve x 14): 25 to 50 min a round, start-up ~25 min, end ~30 min, so **17 to 30 rounds** in 15 h. OUTER = 40 with the deadline: no need to choose.
 - **Throughput:** 2 starts per node; 8 starts on 4 nodes.
 
 ## 8. Validation log
@@ -421,6 +423,13 @@ smoke test, 96 ranks at once on one node):
 - Round 0 refused again: the certified prefix was EMPTY (4 splits, all on the leftmost piece; the gate gave up on the first 1/16). Cause: the zero start's compensator pole at -0.056, 0.006 from the line (fixed in section 6: -0.55).
 - Round 1 accepted the same design as before (1367.6621; the first run's 1367.6776 was the unattained reduced t, the witness then gave 1367.6617). Round 2 differs: 1244.845 against 1209.568, ratio 0.850 against 0.826.
 - Why: the certificate now returns an attained value and its own witness; the witness and the certified level feed the next round's working set and the reduced model's anchors (round 2: |Omega| 42 vs 41, different disagreement anchors), so the SQP solved a different round-2 problem. Three rounds of a nonsmooth local method are path dependent; neither run had converged (-11.6 % and -9.0 % in their last round). The comparison that matters is the converged value (OUTER = 20).
+
+*Cluster, zero start with the compensator at -0.55, 5 rounds (job 16887198, 19 min for the run)*
+- Start alpha -0.1148 (the plant's); round 0 ACCEPTED: 1464.37 -> 1296.62.
+- Best after each round: 1296.62, 1147.23, 1057.35, 989.95, **960.36 = 0.656 x the open-loop peak**; still -3.0 % in the last round. alpha -0.1016, winding count 0 (3296 points, 108 s). Actuator (0.6, 1.0) -> (1.34, 1.33), sensor window 2.0 -> 2.48.
+- Rounds 172, 154, 195, 255, ~200 s; they grow with |Omega| (21 -> 72) and the inner calls (24 -> 107).
+- Restart, tested in the sandbox on this start (2026-10-02, MPI 2 ranks): (A) `--deadline` stopped it after round 0 (1296.6185, `deadline_stop`, the checkpoint kept); (B) the same command again resumed from the checkpoint -- gamma 1296.618509 restored, |Omega| 25, the inner budget, the SQP trust radius and 2 peak members restored, the anchor verified -- and its round reached 1145.98; the finished run removed the checkpoint; (C) `--continue-record 1` on a copy with the checkpoint deleted (a finished run) made the record the checkpoint, kept the summary as `_part1.json` and resumed the same way. Found on the way: the BFS record's alpha_dense is nan, so the guard that keeps a better previous record called a stable record "FAILS re-verification"; it now uses the record's certified alpha and winding count.
+- Reduced vs full at the certificate's witness: 3.3e-7, 8.5e-4, 3.5e-2, 2.2e-2, 1.9e-5. The large ones are where the design moved far (positions) and the witness sat between the working-set frequencies ("NOT a peak member"); certified / predicted t was then 1.004 and 1.017, the step still accepted, and the witness becomes an anchor. The certified gamma never depends on the reduced model.
 
 ## 9. Open items
 

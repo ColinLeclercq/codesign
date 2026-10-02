@@ -11,6 +11,10 @@
 #
 #   sbatch bfs/slurm/codesign.slurm                  (after bfs/slurm/smoke.slurm passed)
 #   sbatch --array=0-15 bfs/slurm/codesign.slurm     (more starts)
+#   CONTINUE=1 sbatch --array=0-7 bfs/slurm/codesign.slurm
+#                     (finished starts continue from their records for OUTER
+#                      more rounds; unfinished ones resume from their checkpoints
+#                      in any case)
 #   KIND=zero sbatch --array=0-1 bfs/slurm/codesign.slurm
 #                     (the zero controller: the same draws with the loop open,
 #                      gamma starting at the open-loop peak; user 2026-10-02)
@@ -56,10 +60,16 @@ post() {      # the figures and data of the saved record (bfs/postproc.py, BFS.m
     $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/postproc.py --ops bfs/data/ops_fx.npz --rec "$RUN/K_B_C_s0_bfs.npz" \
         || echo "*** postproc failed (the record is saved; rerun: sbatch the same array)"
 }
+CONT=()
 if [ -f "$RUN/K_B_C_s0_bfs.json" ] && [ ! -f "$RUN/K_B_C_s0_bfs_ckpt.npz" ]; then
-    echo "start $NAME already finished ($RUN/K_B_C_s0_bfs.json)"
-    [ -f "$RUN/K_B_C_s0_bfs_post/post.json" ] || post
-    exit 0
+    if [ "${CONTINUE:-0}" = "1" ]; then
+        echo "start $NAME finished: CONTINUE=1, OUTER more rounds from its record"
+        CONT=(--continue-record 1)
+    else
+        echo "start $NAME already finished ($RUN/K_B_C_s0_bfs.json; CONTINUE=1 to give it more rounds)"
+        [ -f "$RUN/K_B_C_s0_bfs_post/post.json" ] || post
+        exit 0
+    fi
 fi
 # the catalogue is deterministic in (SEED, NSTART): every array task draws the
 # same set into its own directory and takes its own entry
@@ -67,7 +77,7 @@ mkdir -p "$RUN"
 python bfs/hifoo_init.py --ops bfs/data/ops_fx.npz --n "$NSTART" --seed "$SEED" --kind "$KIND" --out "$RUN/catalogue" > "$RUN.catalogue.json"
 export OPS=bfs/data/ops_fx.npz OUTER=${OUTER:-40} DEADLINE=${DEADLINE:-51300} PY=python
 export LAUNCH="$LAUNCHER -n ${SLURM_NTASKS:-24}"
-bash bfs/run_bfs.sh "$RUN" "$RUN/catalogue/$NAME.npz"
+bash bfs/run_bfs.sh "$RUN" "$RUN/catalogue/$NAME.npz" "${CONT[@]}"
 # the figures of the saved record, finished or stopped at the deadline (then they show the progress)
 [ -f "$RUN/K_B_C_s0_bfs.json" ] && post
 echo "=== done $(date -Is) ==="
