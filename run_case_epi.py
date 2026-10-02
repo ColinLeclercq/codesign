@@ -1986,6 +1986,8 @@ def main():
                          'wrapped).  Implied by --dump.')
     ap.add_argument('--init', default=None)
     ap.add_argument('--resume', default=None)
+    ap.add_argument('--post', type=int, default=0,
+                    help='BFS: 1 = the figures and post.npz (bfs/postproc.py) at the end, on the same pool')
     ap.add_argument('--continue-record', dest='continue_record', type=int, default=0,
                     help='1: a finished run in OUTDIR (record, no checkpoint) continues from its record for '
                          '--outer more rounds (BFS.md 7)')
@@ -3115,6 +3117,7 @@ def main():
     exch_fixed_point = False
     exch_progress_stop = False
     _gh_hist = []
+    _n_noimp = 0           # consecutive rounds without an accepted design (--stop-progress mismatch exemption)
     exch_stalled = False
     per_outer = (a.wall - (time.time() - t_start) - 45.) / max(a.outer, 1)
     gbest, zbest, albest = g0, z.copy(), None
@@ -4499,10 +4502,21 @@ def main():
             # the best 7.9490, and the rule stopped the run on the three slow rounds
             # before it)
             _refused = (not improved) and bool(np.isfinite(g)) and g < gbest * (1.0 - _tol)
+            # nor (BFS) when the round was refused because the reduced model had
+            # MISJUDGED the candidate (certified > 1 % above the model's t): the
+            # flatness is the model's, not the landscape's; the witness was just
+            # anchored and enrolled.  Order-10 test plant (2026-10-02): rounds 10-11
+            # certified 1015.96 / 1004.41 against t = 776.07 / 820.49 (a peak at
+            # w ~ 0.27 the model missed) and the rule stopped the run at 868.27.
+            # At most 2 k consecutive rounds without an accepted design.
+            _n_noimp = 0 if improved else _n_noimp + 1
+            _mismatch = (BFS and (not improved) and bool(np.isfinite(g)) and np.isfinite(best.get('t', np.nan))
+                         and g > best['t'] * 1.01 and _n_noimp < 2 * _k)
             if (len(_gh_hist) > _k and (_gh_hist[-_k - 1] - _gh_hist[-1]) < _tol * _gh_hist[-1]
-                    and not _prov and not _stalled and not _accel and not _refused and _armed):
+                    and not _prov and not _stalled and not _accel and not _refused and not _mismatch and _armed):
                 print(f"  PROGRESS STOP: {100 * (_gh_hist[-_k - 1] - _gh_hist[-1]) / _gh_hist[-1]:.3f} % over the last "
-                      f"{_k} rounds (< {100 * _tol:.2f} %)", flush=True)
+                      f"{_k} rounds (< {100 * _tol:.2f} %)"
+                      + (f"; {_n_noimp} rounds without an accepted design" if _n_noimp else ""), flush=True)
                 exch_progress_stop = True
                 break
 
@@ -4918,6 +4932,16 @@ def main():
     if BFS:
         from bfs import mumps_lu as _ml
         print(_ml.report(), flush=True)
+    if BFS and a.post:
+        # the figures in this job and on this pool (bfs/postproc.run_post): no
+        # second MPI launch -- the cluster's controller refused one (srun socket
+        # timeout) and the job then hung until its time limit (2026-10-02)
+        try:
+            from bfs import postproc as _pp
+            _pp.run_post(D, tag + '.npz')
+        except Exception as _e:
+            print(f"postproc failed non-fatally: {_e!r} (the record is saved; bfs/slurm/postproc.slurm redoes it)",
+                  flush=True)
     fullpar.stop()
     print(json.dumps({k: summ[k] for k in
                       ('case', 'gamma', 'alpha', 'n_active', 'outer',

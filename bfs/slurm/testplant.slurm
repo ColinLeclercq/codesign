@@ -75,8 +75,14 @@ fi
 export DEADLINE=${DEADLINE:-$(python bfs/slurm_remaining.py --reserve 300)}
 export OPS OUTER PY=python LAUNCH="$LAUNCHER -n ${SLURM_NTASKS:-24}"
 time bash bfs/run_bfs.sh "$OUT/run" "$OUT/starts/${KIND}_000.npz" --deadline-final 600 "${CONT[@]}"   # the test plant's end: ~3 min
-time $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/postproc.py --ops "$OPS" --rec "$OUT/run/$TAG.npz"
-python - "$OUT/run/$TAG.json" "$OUT/run/${TAG}_post/post.json" <<'EOF'
+# the figures are made by the driver itself (--post 1, same job and pool); a
+# second launch only if they are missing, bounded in time (a launch that hangs
+# must not hold the allocation to its limit)
+if [ -f "$OUT/run/$TAG.npz" ] && [ ! -f "$OUT/run/${TAG}_post/post.json" ]; then
+    timeout 3600 $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/postproc.py --ops "$OPS" --rec "$OUT/run/$TAG.npz" \
+        || echo "*** postproc failed (the record is saved; bfs/slurm/postproc.slurm redoes it)"
+fi
+[ -f "$OUT/run/${TAG}_post/post.json" ] && python - "$OUT/run/$TAG.json" "$OUT/run/${TAG}_post/post.json" <<'EOF'
 import json, sys
 r, p = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
 print("best gamma after each round:", [round(h['gamma_best'], 4) for h in r['history']],

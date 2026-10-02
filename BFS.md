@@ -450,6 +450,11 @@ smoke test, 96 ranks at once on one node):
 - Reduced vs full at the witness: below 1e-3 from round 8 on except two rounds (1.6e-2, 8.7e-4 ...); the rounds that returned the same design had 1e-13.
 - The progress rule (3 rounds below 0.15 %) stopped it after a stall like that of rounds 12-13; continuing it (`RESUME=1`) shows whether more descent is there.
 
+*Cluster, zero start, ORDER 10, OUTER = 300 (job 16894514, version o)*
+- Best after each round: 1223.07, 1166.52, 1107.21, 1030.07, 972.64, 954.73, 931.27, 892.13, 868.27; round 9 (813.18) refused by the gate at depth 4, its certified prefix (0.938 of the step) at 928.26, not better; rounds 10-11 refused by their certificates, 1015.96 / 1004.41 against the model's t = 776.07 / 820.49 (a peak near w = 0.27 the reduced model missed by 24 % / 19 %). The progress rule then stopped the run at **868.27** (order 5: 769.57). Not Clarke stationarity, not convergence: a stop on three rounds the model had misjudged. Since fixed: such rounds no longer count towards the progress stop (at most 2 k rounds without an accepted design).
+- The record was saved; the figures' separate `mpiexec` launch then failed in SLURM (`srun: Unable to confirm allocation ... Socket timed out`) and hung, holding the job. Since fixed: the driver makes the figures itself on its pool (`--post 1`, `postproc.run_post`), a second launch happens only if they are missing and is bounded (`timeout 3600`); `bfs/slurm/postproc.slurm` makes them for any record.
+- Time per round, from the ledger: pool 49 %, driver MUMPS 21 %, the driver's own Python (reduced model, SQP over |Omega|) 30 %. The pool's calls hold ~9 tasks on average (7 to 11), so 23 workers are busy 25 to 37 % of the time; the ledger's 95-worker estimate is no faster. More ranks would not shorten a round; about 12 would barely lengthen it (to be measured), which would let 4 starts share a node instead of 2.
+
 ## 9. Open items
 
 - **Starts below the open loop:** the zero-controller start works (test plant, cluster: 0.826 x the open-loop peak in 3 rounds, section 8). The certified prefix (section 5) is to be seen on the cluster rerun.
@@ -458,5 +463,5 @@ smoke test, 96 ranks at once on one node):
 - **Plant certificate on the full mesh:** about 2 h on 48 ranks projected from the test plant (41 + 36 min serial); not yet run.
 - **Winding count cost:** about 0.6 s per frequency point on the test plant (3400 to 3600 points), dense near the 282 hot plant poles; on the full mesh the n LU is 14 times dearer. Over 23 workers (92 segments) the test plant's 2013 s of task time is 90 s of wall, so 20 to 40 min on the full mesh, twice per start (feasible start, end of run); to be measured on the cluster.
 - **The paper's own domain** ([-20, 100] x [0, 20], n = 400,775) is larger than the archive's ([-1.5, 30] x [0, 3.5]); gains differ by orders of magnitude (fig. 2a ~2e3 vs 2.2e6 here). The devices and the floor positions are the paper's; the domain stays the user's.
-- **MIMO** (2 x 2, decentralised): not part of the fork yet (`bc` raises).
+- **The driver's own work** (30 % of a round on the test plant, growing with |Omega|) is serial while the workers idle 65 % of the time: farming the reduced model's per-frequency evaluations to the pool is the next speed-up.
 - **The KS weight:** kept for later (user).

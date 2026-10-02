@@ -67,7 +67,7 @@ echo "=== python: $(command -v python) ($(python -V 2>&1)); start $NAME (seed $S
 [ -f bfs/data/ops_fx.npz ] || { echo "*** bfs/data/ops_fx.npz missing: run bfs/slurm/smoke.slurm first"; exit 1; }
 [ -f bfs/data/ops_fx_range.npz ] || { echo "*** bfs/data/ops_fx_range.npz missing: run bfs/slurm/plant_cert.slurm first"; exit 1; }
 post() {      # the figures and data of the saved record (bfs/postproc.py, BFS.md 7)
-    $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/postproc.py --ops bfs/data/ops_fx.npz --rec "$RUN/$TAG.npz" \
+    timeout 3600 $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/postproc.py --ops bfs/data/ops_fx.npz --rec "$RUN/$TAG.npz" \
         || echo "*** postproc failed (the record is saved; rerun: sbatch the same array)"
 }
 CONT=()
@@ -91,6 +91,6 @@ python bfs/hifoo_init.py --ops bfs/data/ops_fx.npz --n "$NSTART" --seed "$SEED" 
 export OPS=bfs/data/ops_fx.npz OUTER=${OUTER:-40} DEADLINE=${DEADLINE:-$(python bfs/slurm_remaining.py --reserve 2700)} PY=python
 export LAUNCH="$LAUNCHER -n ${SLURM_NTASKS:-24}"
 bash bfs/run_bfs.sh "$RUN" "$RUN/catalogue/$NAME.npz" "${CONT[@]}"
-# the figures of the saved record, finished or stopped at the deadline (then they show the progress)
-[ -f "$RUN/$TAG.json" ] && post
+# the figures: made by the driver itself (--post 1); a bounded second launch only if missing
+[ -f "$RUN/$TAG.json" ] && [ ! -f "$RUN/${TAG}_post/post.json" ] && post
 echo "=== done $(date -Is) ==="

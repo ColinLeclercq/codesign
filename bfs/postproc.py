@@ -337,19 +337,30 @@ def main():
     import fullpar
     from bfs.plant import BFSPlant
     des = _design(a.rec, a.start)
-    js = a.rec[:-4] + '.json'
-    band = json.load(open(js)).get('band_final', [0.0, a.whi]) if os.path.exists(js) else [0.0, a.whi]
-    W = max(float(a.whi), float(band[1]))
-    os.makedirs(out, exist_ok=True)
     D = BFSPlant(a.ops, r=len(des['arow'][0]))
     fullpar.start(1, D=D)
+    run_post(D, a.rec, out=out, omegas=a.omegas, whi=a.whi, k=a.k, comp=a.comp, start=a.start, stop_pool=True)
+
+
+def run_post(D, rec, out=None, omegas='0.3,1.5', whi=10.0, k=3, comp='u', start=None, stop_pool=False):
+    """Everything above for the record `rec`, on the full-model pool that is
+    already up with D (fullpar.CTX): from this script, or at the end of the
+    driver itself (run_case_epi --post 1), so the figures need no second MPI
+    launch.  Writes OUT/post.npz, post.json and the figures."""
+    import fullpar
+    des = _design(rec, start)
+    out = out or rec[:-4] + '_post'
+    js = rec[:-4] + '.json'
+    band = json.load(open(js)).get('band_final', [0.0, whi]) if os.path.exists(js) else [0.0, whi]
+    W = max(float(whi), float(band[1]))
+    os.makedirs(out, exist_ok=True)
     t0 = time.time()
     ws = freq_grid(W, des['active'])
-    res = fullpar.pmap(_task, [(w, des, a.k, False) for w in ws])
+    res = fullpar.pmap(_task, [(w, des, k, False) for w in ws])
     so = np.array([r_['sigma_open'] for r_ in res]); sc = np.array([r_['sigma_closed'] for r_ in res])
     t1 = time.time()
-    wvec = _pick(ws, so[:, 0], sc[:, 0], [float(x) for x in a.omegas.split(',') if x.strip()])
-    vec = fullpar.pmap(_task, [(w, des, a.k, True) for w in wvec])
+    wvec = _pick(ws, so[:, 0], sc[:, 0], [float(x) for x in str(omegas).split(',') if x.strip()])
+    vec = fullpar.pmap(_task, [(w, des, k, True) for w in wvec])
     t2 = time.time()
     wk = np.logspace(-2, np.log10(max(100.0, 10.0 * W)), 600)
     kk, poles = controller_tf(D, des, wk)
@@ -359,7 +370,7 @@ def main():
                                                                  'sigma1_vec_open', 'sigma1_vec_closed')},
              xy=D.xyd, comp=D.comp, xa=des['xa'], xs=des['xs'])
     io, ic = int(np.argmax(so[:, 0])), int(np.argmax(sc[:, 0]))
-    summ = dict(rec=a.rec, n=D.n, band=[0.0, W], nfreq=len(ws), gamma_record=des['gamma'],
+    summ = dict(rec=rec, n=D.n, band=[0.0, W], nfreq=len(ws), gamma_record=des['gamma'],
                 peak_open=dict(omega=float(ws[io]), sigma=[float(x) for x in so[io]]),
                 peak_closed=dict(omega=float(ws[ic]), sigma=[float(x) for x in sc[ic]]),
                 closed_over_gamma=float(sc[:, 0].max() / des['gamma']),
@@ -368,8 +379,9 @@ def main():
                 seconds=dict(curves=round(t1 - t0, 1), vectors=round(t2 - t1, 1)), pool=fullpar.report())
     json.dump(summ, open(os.path.join(out, 'post.json'), 'w'), indent=1)
     print(json.dumps(summ), flush=True)
-    fullpar.stop()
-    plot(out, D, des, a.comp)
+    if stop_pool:
+        fullpar.stop()
+    plot(out, D, des, comp)
 
 
 def plot(out, D, des, comp='u'):
