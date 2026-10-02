@@ -38,7 +38,7 @@ KIND=${KIND:-zero}; OUTER=${OUTER:-3}; SEED=${SEED:-0}
 export R=${R:-5}                          # controller order (R=10: an order-10 controller)
 OUT=${OUT:-testplant_bfs/${KIND}$([ "$R" = 5 ] || echo "_o$R")_s${SEED}_r${OUTER}}
 OPS=bfs/data/ops_coarse.npz
-echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none}  $(date -Is)  $KIND start, $OUTER rounds -> $OUT ==="
+echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none}  $(date -Is)  $KIND start, order $R, $OUTER rounds -> $OUT ==="
 python -c "import clarabel, qdldl, matplotlib" || { echo "*** clarabel / qdldl / matplotlib missing: run bash bfs/setup_cluster.sh on the login node"; exit 1; }
 if ! python -c "import numpy as np, sys; sys.exit(0 if 'shear_S_data' in np.load('$OPS').files else 1)" 2>/dev/null; then
     echo "=== test plant operators (missing or without the shear trace) ==="

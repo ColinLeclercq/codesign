@@ -57,7 +57,7 @@ SUF=$([ "$R" = 5 ] || echo "_o$R")
 NAME=$(printf "%s_%03d" "$KIND" "$IDX")
 RUN=$OUT/${KIND}${SUF}_$(printf "%03d" "$IDX")
 echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none} (array ${SLURM_ARRAY_JOB_ID:-}_$IDX)  $(date -Is) ==="
-echo "=== python: $(command -v python) ($(python -V 2>&1)); start $NAME (seed $SEED) -> $RUN ==="
+echo "=== python: $(command -v python) ($(python -V 2>&1)); start $NAME (seed $SEED, order $R) -> $RUN ==="
 [ -f bfs/data/ops_fx.npz ] || { echo "*** bfs/data/ops_fx.npz missing: run bfs/slurm/smoke.slurm first"; exit 1; }
 [ -f bfs/data/ops_fx_range.npz ] || { echo "*** bfs/data/ops_fx_range.npz missing: run bfs/slurm/plant_cert.slurm first"; exit 1; }
 post() {      # the figures and data of the saved record (bfs/postproc.py, BFS.md 7)
