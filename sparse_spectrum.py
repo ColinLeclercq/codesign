@@ -66,7 +66,11 @@ _SFAR_CACHE = {}
 
 def plant_rectangle(A, M, s0, taus=(0.0, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0)):
     """(s_far, W_lo, W_hi): every eigenvalue of (A, M) with Re >= s0 lies in
-    [s0, s_far] x [-W_lo, W_hi].  Sparse Lanczos only."""
+    [s0, s_far] x [-W_lo, W_hi].  Sparse Lanczos only; with a singular mass
+    (massops.FORBIDDEN: the backward-facing step) the M-free certified bounds
+    of bfs/mfree.py instead."""
+    if massops.FORBIDDEN:
+        return _plant_rectangle_mfree(A, M, s0, taus)
     Mlu = massops.lu(M); key = (id(A), id(M))
     A0, M0 = A, M
     A = sp.csc_matrix(A, dtype=complex); M = sp.csc_matrix(M, dtype=complex)
@@ -97,16 +101,45 @@ def plant_rectangle(A, M, s0, taus=(0.0, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0))
     return s_far, max(Wlo, 0.0), max(Whi, 0.0)
 
 
+def _plant_rectangle_mfree(A, M, s0, taus):
+    """plant_rectangle for a singular M (BFS.md 4): the same rectangle, its
+    edges the certified tops of Hermitian pencils on the divergence-free
+    velocities (bfs/mfree.SaddleRange: inertia of a quasi-definite LDL^T, no
+    M^-1).  H = (A + A^T)/2, S = (A - A^T)/(2i) = -i T (A real)."""
+    from bfs.mfree import saddle_range
+    R = saddle_range(A, M); key = (id(A), id(M)); A0, M0 = A, M
+    A = sp.csr_matrix(A)
+    H = ((A + A.T) * 0.5).tocsr(); T = ((A - A.T) * 0.5).tocsr()
+    e = _SFAR_CACHE.get(key)
+    if e is None or e[0] is not A0 or e[1] is not M0:     # s_far: once per plant
+        e = _SFAR_CACHE[key] = (A0, M0, R.lmax(H))
+    s_far = e[2]
+    if s_far < s0:
+        return s_far, 0.0, 0.0
+    G = (H - s0 * M).tocsr()
+
+    def best(sgn):
+        # rtol 1e-2: the heights only feed the tail bound, where a looser
+        # (still certified) height costs nothing measurable
+        b_, up = np.inf, 0
+        for t in sorted(taus):
+            v = R.lmax(t * G, -sgn * T, start=max(1.0, b_ if np.isfinite(b_) else 1.0), rtol=1e-2)
+            if v < b_:
+                b_, up = v, 0
+            else:
+                up += 1
+                if up >= 2:
+                    break
+        return b_
+    Whi = best(1.0); Wlo = best(-1.0)
+    return s_far, max(Wlo, 0.0), max(Whi, 0.0)
+
+
 class PlantPencil:
     """(A, M) sparse: shift solves by a sparse LU."""
     def __init__(self, A, M):
-        self._Mlu = massops.lu(M)
         self.A = sp.csc_matrix(A, dtype=complex); self.M = sp.csc_matrix(M, dtype=complex)
         self.n = self.A.shape[0]; self._sig = None; self._lu = None
-        self.Mmat = self.M
-
-    def Minv(self, x):
-        return self._Mlu.solve(np.asarray(x, complex))
 
     def shift(self, sigma):
         if self._sig != sigma:
@@ -131,12 +164,6 @@ class ClosedLoopPencil:
     def __init__(self, cl, arow, nvec, K):
         self.cl, self.arow, self.nvec, self.K = cl, arow, nvec, K
         self.n = cl.n + cl.r; self._sig = None
-        r = cl.r
-        self.Mmat = sp.block_diag([sp.csc_matrix(cl.M, dtype=complex), sp.identity(r, dtype=complex, format='csc')]).tocsc()
-        self._M = cl.M; self._r = r
-
-    def Minv(self, x):                       # blockdiag(M, I)^-1: the run's one factor of M (massops)
-        return massops.block_solve(self._M, self._r, x)
 
     def shift(self, sigma):
         if self._sig != sigma:
@@ -157,21 +184,23 @@ class ClosedLoopPencil:
 
 def free_radius(P, sigma, safety=1.01):
     """Radius of a PROVABLY eigenvalue-free disk around sigma, for any
-    (non-normal) pencil: an eigenpair gives v = (lambda - sigma) (A - sigma M)^-1 M v,
-    so |lambda - sigma| >= 1 / ||X||_M with X = (A - sigma M)^-1 M and the M-norm
-    ||X||_M^2 = lambda_max of the Hermitian pencil (M X^H... = X^H M X, M) -- Lanczos
-    (two shift solves per step; M products and the LU of the shift only).  The
-    Ritz value approaches lambda_max from below: `safety` covers the tolerance."""
+    (non-normal) pencil, with no mass inverse: an eigenpair gives
+    v = (lambda - sigma) X v, X = (A - sigma M)^-1 M, so |lambda - sigma| >=
+    1 / rho(X); with M = R^T R (R never formed) the nonzero spectrum of X is
+    that of R (A - sigma M)^-1 R^T, so rho(X)^2 <= lambda_max of
+    P^-H M P^-1 M (P = A - sigma M): self-adjoint in the M semi-inner product,
+    real nonnegative spectrum, Arnoldi on the shift's factors (two solves and
+    two M products per step; certify_sparse.SparsePencil.free_radius has the
+    argument; for an SPD M it is the earlier lambda_max(X^H M X, M)).  The
+    Ritz value approaches lambda_max from below: `safety` covers the
+    tolerance."""
     P.shift(sigma); n = P.n
 
-    def XHMX(v):
-        x = P.solve(P.Mop(v))                       # X v
-        return P.Mop(P.solveH(P.Mop(x)))            # M^H (A - sigma M)^-H M x  (M Hermitian)
-    Hop = spla.LinearOperator((n, n), dtype=complex, matvec=XHMX)
-    Minv = spla.LinearOperator((n, n), dtype=complex, matvec=P.Minv) if hasattr(P, 'Minv') else None
-    lam = spla.eigsh(Hop, k=1, M=spla.aslinearoperator(P.Mmat) if hasattr(P, 'Mmat') else None, Minv=Minv,
-                     which='LA', tol=1e-6, maxiter=2000, v0=_v0(n).astype(complex), return_eigenvectors=False)
-    return 1.0 / (safety * np.sqrt(max(float(lam[0].real), 1e-300)))
+    def YM(v):
+        return P.solveH(P.Mop(P.solve(P.Mop(np.asarray(v, complex)))))
+    op = spla.LinearOperator((n, n), dtype=complex, matvec=YM)
+    lam = spla.eigs(op, k=1, which='LM', tol=1e-6, maxiter=2000, v0=_v0(n).astype(complex), return_eigenvectors=False)
+    return 1.0 / (safety * np.sqrt(max(float(np.abs(lam[0])), 1e-300)))
 
 
 def nearest_k(P, sigma, k, maxiter=600):
@@ -190,11 +219,15 @@ def nearest_k(P, sigma, k, maxiter=600):
     return lam[o], res[o]
 
 
+FREE_TILE = True     # try the norm-based empty disk first (GL); the backward-facing step's plant is so
+                     # non-normal that it never succeeds there (BFS.md 4): off
+
+
 def _tile(P, x0, x1, y0, y1, kmax, res_tol, depth, maxdepth, stats):
     c = complex(0.5 * (x0 + x1), 0.5 * (y0 + y1))
     R = 0.5 * np.hypot(x1 - x0, y1 - y0)                  # circumradius
     stats['shifts'] += 1
-    if free_radius(P, c) >= R:                           # provably empty
+    if FREE_TILE and free_radius(P, c) >= R:             # provably empty
         stats['free'] += 1
         return [], True
     # nearest-k at the centre, k doubled until the k-th nearest lies outside the

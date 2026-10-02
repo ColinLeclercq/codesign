@@ -4,16 +4,22 @@ Every modification made for the backward-facing step (BFS), in one place.
 Branch `bfs`, forked from `mimo` (2026-10-01).  The GL path is unchanged:
 frozen path bit-identical (10.23128516441147) after every change below.
 
-The case (user, 2026-10-01): SISO co-design on the Dergham-Sipp-Robinet
-(2013) step at Re = 600, on the user's linear-analysis mesh and base flow
-(`bfs/archive_dsr`, the user's zip).
+The case (user, 2026-10-01, revised 2026-10-02): SISO co-design on the
+Dergham-Sipp-Robinet (2013) step at Re = 600, on the user's linear-analysis
+mesh and base flow (`bfs/archive_dsr`, the user's zip).
 - **Plant:** real.
 - **Controller:** real, structured, order 5, proper but not strictly proper.
-- **Actuator:** an isotropic Gaussian of std h/2 = 0.5 forcing the y-momentum only.
-- **Sensor:** the same Gaussian, measuring u only.
-- **Design variables:** the controller and the two centres (x, y), each free inside the domain.
-- **Disturbance and performance:** momentum forcing in, kinetic energy out (the archive's weighted SVD).
-- **Starts:** HIFOO style.
+- **Actuator** (since 2026-10-02): the B2 of Barbagallo, Dergham, Sipp, Schmid & Robinet (JFM 2012), a Gaussian body force on the vertical momentum, free centre (x, y).
+- **Sensor** (since 2026-10-02): their wall-shear sensor C1, `int chi du/dy` over a window of the floor, free window start.
+- **Start:** HIFOO's controller draw at the paper's B2 (0.6, 1.0) and C1 [2.0, 2.6].
+- **Disturbance and performance:** a [u, v] forcing field in the velocity mass in, the whole state in the mass seminorm out (the archive's weighted SVD): B B^T = C^T C = Q.
+- **gamma:** certified on [0, 10] (option A, user 2026-10-02).
+- **Stability:** certified over all frequencies (the winding count, M-free).
+- **Rule:** no inverse and no Cholesky factor of the (velocity) mass, anywhere.
+
+(Until 2026-10-02 the ports were two isotropic Gaussians of std 0.5, the
+actuator forcing v and the sensor measuring u, with free 2-D centres; that
+version is described in the git history, commits 36010c7 and 2f744e4.)
 
 Contents:
 1. Operators
@@ -69,14 +75,24 @@ Neither forcing space uses a mass inverse or a Cholesky factor (section 3).
 
 `bfs/plant.py`, `BFSPlant(FECoDesign)`, has the interface the GL pipeline uses.
 
-**Ports** (`raw`, `bc`)
-- Each port is `g(x) = exp(-|x - x0|^2 / (2 sigma^2))` with sigma = 0.5 = h/2.
-- Actuator: `psi_a = (0, g)`, forcing the v-momentum; `b = M psi_a`.
-- Sensor: `psi_s = (g, 0)`; `c = M psi_s`, so `y = int g u`.
-- Both are normalised to `||psi||_M = 1`; the controller absorbs the scale.
-- Dirichlet rows are zero through M, so a port overlapping a wall loses that part of itself.
-- `pos_dim = 2`: a position is (x, y), and the placement gradient has two components (`grads`).
-- `Mdpsi` is memoised.
+**Ports** (`bc`, `act_field`, `sensor_vec`, `Mdpsi`, `port_jet`): the devices of Barbagallo et al. (2012) and of the user's `actuator_sensor.edp`, with free positions.
+- Actuator: `psi_a = (0, g)` with `g = exp(-|x - x_a|^2 / (2 sig^2))`, `sig = 0.5 / sqrt(ln 2) = 0.6006` (half amplitude at distance 0.5, as in the script); peak 1; weak form `b = M psi_a`; free centre `x_a = (x, y)`.
+  - The paper forces the vertical momentum; the script forces u ("careful I am forcing on u, not v"). `--bfs-act-comp {v,u}`, default v.
+  - The script truncates the Gaussian at radius 2 (an amplitude jump of 0.4 %, 1e-5 of its energy). Not done here, so b is smooth in x_a.
+- Sensor: the wall shear stress on the floor y = 0, `y = int chi(x - x_s) du/dy dx`, i.e. `c = S^T (w * chi)`.
+  - `S` is the floor's shear trace, exported with the operators (`ops_dolfinx.floor_shear_trace`): six Gauss points per floor facet, `(S q)_k = du/dy (x_k, 0)` from the P2 basis of the facet's cell (local Vandermonde fit, exact for P2 on straight triangles; checked to 4e-13 on a P2 field).
+  - `chi` is a window of length 0.6 (the paper's Cp = [11, 11.6] in the text, and C1..C4 in its figure 1) with tanh edges of width 0.05. The script's selector is the P2 interpolant of an indicator, which ramps over one element (0.04 on the fine floor); the tanh edge is the same measurement made differentiable in x_s.
+  - Free window start `x_s` (one number). Dirichlet columns of c are zero (as b's rows).
+- Both ports are unnormalised (physical); the controller gain absorbs the scale.
+- Placement gradients: `Mdpsi` returns d b / d x_a (2 rows) and d c / d x_s (1 row); `grads` uses them in the GL formulas. Finite differences agree to 1e-9 (test plant).
+- Reduced-model input basis: `port_jet`, the port vectors and their first and second derivatives in the position (6 for the actuator, 3 for the sensor).
+- Positions are per port (`pos_dims = {'a': 2, 's': 1}`; packer `pd_a`, `pd_s`).
+
+**Positions from the paper** (figure 1, calibrated on Cp's stated [11, 11.6]):
+- B2 sits on the arc at x = 0.6; its centre is placed at (0.6, 1.0), 0.07 above the wall. The user's script has (0.87, 1.0).
+- C1 = [2.0, 2.6], C2 = [3.6, 4.2], C3 = [5.3, 5.9], C4 = [7.3, 7.9], all length 0.6. The script's upstream spy is [2.0, 2.4].
+- B1 (the paper's noise) is not used: the noise here is a distributed field.
+- The paper's domain is [-20, 100] x [0, 20] (n = 400,775); the user's linear-analysis domain is the truncated [-1.5, 30] x [0, 3.5] of Dergham et al. (2013), same boundary-condition types (no slip on the walls, v = 0 on top, natural outlet; the inlet moves from x = -20 to -1.5).
 
 **Real system** (`real_plant = True`)
 - `sigma(-w) = sigma(w)`, and eigenvalues come in conjugate pairs.
@@ -84,12 +100,10 @@ Neither forcing space uses a mass inverse or a Cholesky factor (section 3).
 - The packer's `real_ctrl` keeps only the real parts of (d, e, f, n, K) as design variables (`packer.py`).
 - Complex arithmetic remains only where it is intrinsic: the resolvent at w != 0.
 
-**Interior constraint** (`position_constraints`, `position_rows`) applies to each free centre:
-- `x_lo + m <= x <= x_hi - m`;
-- `y <= y_hi - m`;
-- `clearance >= m`, where the clearance is the distance to the lower wall's tangent line at x. This is the true distance where the wall is straight; on the arc it is first order.
-- The lower wall is: the plate y = 1 for x <= 0, the arc of centre (0, -1.5) with R = 2.5 for 0 <= x <= 2, and y = 0 beyond. The geometry is from `mesh_large.py`.
-- `m = --bfs-margin`, default 0.25 = sigma/2.
+**Interior constraint** (`position_constraints(x0, side)`, `position_rows`):
+- actuator centre: `x_lo + m <= x <= x_hi - m`, `y <= y_hi - m`, and `clearance >= m`, the clearance being the distance to the lower wall's tangent line at x (the true distance where the wall is straight, first order on the arc). The lower wall: the plate y = 1 for x <= 0, the arc of centre (0, -1.5), R = 2.5, for 0 <= x <= 2, y = 0 beyond.
+- sensor window: on the floor, `2.0 <= x_s` and `x_s + 0.6 <= x_hi - m`.
+- `m = --bfs-margin`, default 0.05 (the paper's devices sit 0.05 to 0.16 from the wall; it was 0.25 for the Gaussian ports).
 
 **How the constraint enters the SQP** (`sqp_inner.py`, `Evaluator._pos_rows`, `subproblem`)
 - The rows are hard linear rows `c + g.d <= 0`, with g in z through the packer.
@@ -138,31 +152,49 @@ pivots that moved the computed eigenvalues).
 - Each shift is a full LU here, so the sweep's segments run on the workers (`certify_sparse._seg_worker`).
 - The workers now return the eigenvalues their sweeps saw. The continuation gate's watch list, and the argmax used for the eigenvector, are therefore harvested in pooled mode too. Before, they were serial-only; GL with `--cert_nseg > 1` benefits as well.
 
-## 4. Stability and the singular mass matrix
+## 4. Certification without M^-1
 
-What GL used that needs M^-1, and what replaces it:
+The algebra is in `docs/note_algebra_clean.tex`, section "The backward-facing
+step: algebra without M^-1".  What each GL ingredient needed and what the BFS
+uses:
 
-| GL ingredient | needs | BFS |
+| GL ingredient | needed | BFS |
 |---|---|---|
-| plant enclosure / numerical range (`sparse_spectrum`, `stability_region`) | M^-1 | plant spectrum near the axis by shift-invert, once (`plant_spectrum`), cached for the certificate's region; NOT a proof that nothing is missed |
-| free-radius bound of the level set, all-w tail bound | M-norm | none: gamma is SAMPLED (section 5) |
-| winding count, final band check | the enclosure's tail | not run; the run prints so and the record says `all_w = {sampled: true}` |
-| massops, `plant_rectangle` | M factor | forbidden (raise) |
+| gamma pencil (even, sparse + low rank) | nothing | the same pencil: with the weak-form ports B B^T = C^T C = Q, so no inverse ever appears |
+| eigenvalue-free disks of the gamma certificate | nearest eigenvalues; norm-based fallback with M^-1 | nearest eigenvalues only (Arnoldi, converged); the norm fallback is M-free now but useless here, off |
+| numerical range (enclosures, heights, tail) | Lanczos with M^-1 | tops of Hermitian pencils on ker B, certified by inertia (`bfs/mfree.py`) |
+| winding count tail | M-norms of b and c | an H^1 bound (the wall-shear sensor is not of the form M psi) |
+| plant poles of the winding count | enclosure with M^-1 | the same enclosure, M-free; cached per mesh (`bfs/plant_cert.py`) |
+| massops | M factor | forbidden (raise) |
 
-**Plant spectrum** (`plant_spectrum`)
-- Shift-invert Arnoldi on `OP = (A - s M)^-1 M`, at shifts i w_j on [0, band + pad], in the pool.
-- The start vector is purified (`OP^2 v0`), so the infinite eigenvalues of the singular pencil stay out.
-- Test plant: 95 eigenvalues; the rightmost is -0.1148 (the BFS at Re = 600 is globally stable).
+**gamma: option A, certified on [0, 10]** (user 2026-10-02: b = 10)
+- The level-set certificate of GL (`certify_sparse.hinf_certified_sparse`, Schwerdtner-Mengi-Voigt disks) on [0, b], every round.
+- Disks from the converged nearest eigenvalues of the even pencil at each shift i theta. Measured on the test plant: the norm-based free radius (now M-free, below) is 1e-7 to 1e-10 where the nearest eigenvalue is 0.015 to 0.5 away; the pencil is that non-normal. So `certify_sparse.FREE_DISK = False` for the BFS: a set that does not converge is retried with a larger subspace, else the interval is bisected (strict disks).
+- Arnoldi: k = 4 nearest (the pencil's eigenvalues come in pairs mirrored across the axis), `NEAR_NCV = 100`, first attempt 60 restarts (`STRICT_MAXITER`). ncv 100 needs 100-190 applications where 30 needed 450-1480, same nearest eigenvalue; a loose tolerance (1e-6) returned a wrong one, so the tolerance stays 1e-9.
+- Cost, test plant, serial: 334 s for one certificate (it was 1040 s with ncv 30). The full-size 2n pencil: LU 58 s and 3.9 GB in the sandbox, solve 0.6 s; the first generation of the sweep is split over the workers (`--cert-split 23`).
+- `--bfs-sampled N > 0` keeps the sampled maximum (option B) for comparison.
 
-**Stability of a design**
-- Stability is established as at GL scale: the line certificate (nothing on Re = -eps over the band) plus continuation from a stable anchor (the watch list tracked at every accepted step).
-- The anchor is the start of section 6, which is reached by continuation from the open loop.
+**The free-radius bound without M^-1** (`SparsePencil.free_radius`, `sparse_spectrum.free_radius`)
+- E = R^T J R with R never formed: rho((A - sE)^-1 E) <= ||R P^-1 R^T||, whose square is lambda_max(P^-H W P^-1 W), W = R^T R = blockdiag(M_cl, M_cl) semi-definite: Arnoldi, no inverse. For an SPD M it equals the earlier lambda_max(X^H W X, W): identical to 1e-15 on GL, so one code path.
 
-**Certification, option B** (proposed 2026-10-01, no reply yet; proceeding with B)
-- The level-set certificate does not work at this scale: shift-invert Arnoldi on the 2n even pencil needs 300-560 operator applications per shift away from the spectrum.
-- So gamma is the sampled maximum: a full-model grid of the band, plus the reduced model's peaks, each local maximum climbed with the full model's sigma and slope.
-- It is a lower bound flagged as uncertified.
-- Option A, a certified level set with an M-free radius bound, remains open (section 9).
+**The numerical range on divergence-free velocities, certified by inertia** (`bfs/mfree.py`)
+- Every eigenvalue is a Rayleigh quotient u^H A_vv u / u^H M u with B u = 0 (B the divergence block), so it lies in the numerical range W on ker B. Its bounds are tops of Hermitian pencils (H, M) on ker B.
+- sigma M - H is positive definite on ker B iff [[sigma M - H, B^T], [B, -delta I]] has exactly n_p negative pivots (saddle-point inertia; the direction a certificate needs holds for every delta > 0). One sparse LDL^T (qdldl, real arithmetic: MUMPS reports no inertia in complex), doubling and bisection on sigma: every accepted sigma is a proof.
+- Complex Hermitian H is embedded as a real symmetric matrix of twice the size.
+- Validated on a 1,279-dof mesh against dense generalised eigenproblems on ker B: equal to 1e-7, from above. 3 s per test at n = 191,720 (real).
+- Test plant: max Re W <= 1.758, |Im W| <= 87.9, S-lemma heights 26.8 (right of -0.5) to 87.9 (right of -50); the H^1 constant beta = 2.48.
+- `sparse_spectrum.plant_rectangle` uses it whenever `massops.FORBIDDEN`; the BFS's depths stop at 50 (the heights reach the bare bound there), and the bare bound closes the list.
+
+**All-frequency stability: the winding count** (`BFSPlant.winding`)
+- `winding_cert.winding_count` with the plant's data and a plant-supplied tail bound (`gbound`), `real_sym=True` (the march covers [0, W_T] and doubles: f(conj s) = conj f(s)).
+- Tail: |G(s)| <= ||c||_{L^-1} ||psi_a||_M sqrt((1/d + (beta - Re s)_+ / d^2) / nu1), d the numerical-range distance, L the velocity stiffness (exported with the operators), nu1 = nu/2 -- the H^1 estimate (note). It decays like d^-1/2 (the Stokes layer makes that rate genuine), so W_T grows like the square of the feedthrough K; test plant, a feasible start with K = 0.005: W_T = 120.
+- Plant data: the plant eigenvalues right of line - 0.6, certified complete by the M-free enclosure (rectangle + tiles exhausted by nearest-k shift-invert; the norm-based empty tile is off for the BFS, `sparse_spectrum.FREE_TILE = False`). Test plant: none right of -0.025, 282 within 0.6 of it (36 min serial, once per mesh).
+- Used at the end of every run (record: `wind_count`, `wind_info`) and to check the feasible start (count right of -eps, which must be 0).
+- `bfs/plant_cert.py` (`bfs/slurm/plant_cert.slurm`) computes the plant data once per mesh, over the pool, cached next to the operator file.
+
+**Plant spectrum near the axis** (`plant_spectrum`): shift-invert at shifts on [0, band + pad], once, cached for the line certificate's region (test plant: rightmost -0.1148; fine mesh: -0.1149).
+
+**Stability between rounds**: as at GL scale, the line certificate (nothing on Re = -eps over the band) plus continuation (the watch list tracked at every accepted step); the winding count checks the start and the result over all frequencies.
 
 ## 5. The driver
 
@@ -172,18 +204,18 @@ ones.
 
 **Plant and start**
 - `--plant bfs`: builds `BFSPlant` with no massops warm-up and no seed catalogue.
-- The start comes from `--init` (d, e, f, nvec, K, xa(2), xs(2)), with no rescaling and no warm-start selection.
+- The start comes from `--init` (d, e, f, nvec, K, xa (2), xs (1)), with no rescaling and no warm-start selection.
 
 **Band**
-- `[0, --bfs-band]` (default 8), plus the pad.
+- `[0, --bfs-band]` (default 10), plus the pad.
 - `D.band_of` makes the stability certificate follow the run's band.
 - The band is widened to the compensator poles only (no plant enclosure).
 
 **Gamma**
-- `--bfs-sampled N` (default 33): the sampled gamma of section 4. Its grid replaces the 241-point reference sweep.
+- Certified on the band every round (`--bfs-sampled 0`, the default; section 4). `--bfs-sampled N` gives the sampled maximum instead.
 
 **Reduced oracle input basis**
-- Built from the ports' second-order jets (g, g_x, g_y, g_xx, g_xy, g_yy), via `BFSPlant.jet` and their M-images.
+- Built from the ports' second-order jets in their positions (`BFSPlant.port_jet`: 6 actuator vectors, 3 sensor vectors).
 - Rebuilt at every round at the round's design, as the atoms' tangent basis is (`_jet_basis`).
 - Without it the reduced pencil missed the true near-line pairs, and the full certificate ran every evaluation.
 
@@ -196,16 +228,15 @@ ones.
 - A resubmission resumes from the checkpoint (auto-resume, unchanged).
 
 **End of run and record**
-- The M^-1 certificates are skipped with a message (section 4).
+- The all-frequency winding count right of -eps/2 (section 4); the final band check is not run.
 - The record stores 2-D centres as lists.
 - The tag is `K_B_C_s0_bfs` (it was `_ne200`).
 
 ## 6. Starts, and the small test plant
 
 **HIFOO draw** (`bfs/hifoo_init.py`)
-- The `hifoo` arm of `tools/randstart.py` (STAGE2: the better arm at GL), made real.
-- Every controller entry is N(0, 1): d, e, f, nvec and K.
-- Each centre is uniform in the domain, at least the margin inside (rejection sampling).
+- The `hifoo` arm of `tools/randstart.py` (STAGE2: the better arm at GL), made real: every controller entry N(0, 1) -- d, e, f, nvec and K.
+- Positions (`--positions`): `paper` (default, user 2026-10-02) puts every start at the paper's B2 (0.6, 1.0) and C1 window start 2.0; `random` draws the actuator centre uniformly inside the domain and the sensor window start uniformly on the floor.
 - The catalogue is deterministic in (seed, n); the slurm array takes entry `SLURM_ARRAY_TASK_ID`.
 
 **Why the GL phase does not carry over**
@@ -225,7 +256,9 @@ ones.
    - Each step then needs the line certificate at -eps to be clear, with every eigenvalue it sees left of -eps - delta (the cushion, delta = `--stab-delta`).
    - Growth is geometric (x4, then doubling, capped at x16) until the first refusal. After that it is bisection in log tau, down to 5 %, between the last certified tau and the smallest refused one. A large motion shortens the step without counting as a refusal.
 3. Result: the largest certified tau <= 1. This is HIFOO's draw, with the compensator shifted and the gain scaled until feasible.
-   - Test plant, hifoo_000: compensator shifted by 1.18, gain x 0.018 to 0.020, alpha -0.054 to -0.053.
+   - Then checked independently of the chain: the all-frequency winding count right of -eps must be 0 (section 4); a contradiction aborts the start.
+   - Test plant, hifoo_000 at the Gaussian ports: compensator shifted by 1.18, gain x 0.018 to 0.020, alpha -0.054 to -0.053.
+   - Test plant, hifoo_000 at the paper's devices: gain x 0.0111, alpha -0.0531 (11 steps).
    - 16 steps (the first version, which re-grew the step after refusals, took 38).
    - The driver's anchor verified it (alpha = -0.0530).
 - The pyGRANSO phase is not used for the BFS. `stabilise.py` is untouched.
@@ -252,26 +285,28 @@ ones.
 - `bfs/setup_cluster.sh`, once, on the login node:
   - installs clarabel (the SQP's solver; `check_env.py` never checked it) if it is missing, and meshio and h5py for the test plant;
   - then imports everything the fork needs.
-- `bfs/slurm/smoke.slurm` (1 node, under 1 h):
-  1. the operators;
+- `bfs/slurm/smoke.slurm` (1 node, 3 h limit; expected 1 to 1.5 h):
+  1. the operators (always rebuilt: the file now carries the shear trace and the stiffness);
   2. the gains against the archive;
   3. `bench_mumps.py` (96 ranks factor and solve at once, which is the per-task cost under full-node contention);
-  4. one HIFOO start on the test plant (feasible start plus 1 round) over 8 MPI ranks.
+  4. the test plant's certified range and poles (`plant_cert.py`, 24 ranks);
+  5. one start end to end on the test plant, 24 ranks: feasible start and its count, one round with gamma certified on [0, 10], the all-frequency count at the end.
+- `bfs/slurm/plant_cert.slurm` (once per mesh, 48 ranks, under 8 h): the full mesh's certified range and poles, cached next to `ops_fx.npz`.
 - `bfs/slurm/codesign.slurm`:
-  - an array job, one HIFOO start per task;
-  - 24 ranks per start (the driver and 23 workers), so slurm packs 4 starts per 96-core node; 120 GB per start;
-  - 15 h limit, `--deadline` at 14 h 30, with 30 min reserved for the final save;
-  - resubmitting resumes unfinished starts.
+  - an array job, one start per task (HIFOO's controller draw at the paper's B2 and C1);
+  - 24 ranks per start (the driver and 23 workers) and 240 GB: two starts per 96-core node (the gamma certificate's 2n pencil factor is 3.9 GB in every worker);
+  - 15 h limit, `--deadline` at 14 h 30, with 30 min reserved for the final save and count;
+  - resubmitting resumes unfinished starts; it refuses to start without the plant certificate.
 - The launcher is the conda env's `mpiexec` (`LAUNCHER=` to change).
 
-**Run time** (measured 2026-10-02 in the sandbox; projected to the cluster)
+**Run time** (measured 2026-10-02; projected to the cluster)
 
 *Ledger.* Each BFS round prints a `[ledger]` line:
 - wall time;
 - the driver's own MUMPS factorisations and solves (`bfs/mumps_lu.STATS`);
 - the pool's task time, with what it would take on 23 and on 95 workers (`fullpar.CALLS` / `estimate(W)`: per call, `max(work / W, longest task)`).
 
-*Measured on the test plant* (MPI, 2 ranks, one core; start hifoo_000):
+*Measured on the test plant, Gaussian ports, sampled gamma* (MPI, 2 ranks, one core; start hifoo_000):
 
 | phase | pool task time | on 23 / 95 workers | driver MUMPS | driver other |
 |---|---|---|---|---|
@@ -280,32 +315,30 @@ ones.
 | round 0 (gamma 1517.7 -> 1448.8) | 702 s | 103 / 103 s | 62 s (56 factors, 2153 solves) | ~62 s |
 
 The pool's calls hold about 14 tasks on average (407 tasks in 30 calls), so
-23 workers are as fast as 95. The longest task (the line-certificate segment
-holding the eigenvalue, a slope climb) sets each call's time.
+23 workers are as fast as 95.
 
-*Scale factor.* One rank, idle machine (`bench_mumps.py`):
+*Certified gamma* (test plant, paper devices, serial): one certificate on
+[0, 10] costs 334 s; a round goes from 241 s (sampled) to 587 s (certified),
+the start-up from 150 s to 710 s (the start's certificate).
 
-| | factor | solve |
+*Per-operation costs* (`bench_mumps.py`; the cluster numbers are from the
+smoke test, 96 ranks at once on one node):
+
+| | sandbox, idle | cluster, 96 at once |
 |---|---|---|
-| n = 191,720 | 7.85 s | 0.17 s |
-| n = 33,593 | 0.57 s | 0.012 s |
+| n LU, n = 191,720 | 7.85 s | 4.5 s |
+| n solve | 0.17 s | 0.20 s |
+| 2n LU of the gamma pencil | 58 s, 3.9 GB | (~35 s expected) |
+| 2n solve | 0.6 s | |
+| n LU, test plant (n = 33,593) | 0.57 s | |
 
-So every MUMPS-bound time scales by 14. The rest is the reduced model, the QPs
-and length-n vector operations, and scales by between 1 and n/n_test = 5.7.
-
-*Projection to n = 191,720, per start:*
-- **Start-up:** 167 x 14 + 21 x 14 + ~90 to 500 s, about 50 to 55 min.
-- **One round:** 103 x 14 (pool) + 62 x 14 (driver MUMPS) + 62 to 350 s, about 2400 to 2700 s, i.e. **40 to 45 min**.
-- **Full-node contention:** four starts per node means 96 MUMPS ranks at once. Memory-bandwidth contention may add 10 to 30 % to the MUMPS parts. The smoke test's `bench_mumps` (96 ranks) measures it.
-- **In the 15 h job:** about 50 min start-up, 30 min reserved, about **17 to 20 rounds** (15 with heavy contention). GL K+B+C needed 20 to 40 rounds to converge.
-- **Expected outcome:** one job gives a substantially optimised design. Convergence (the progress stop: 3 rounds under 0.15 %) may need a second 15 h job, which resumes from the checkpoint.
-- **Throughput:** 8 starts on 2 nodes; 16 starts on 4 nodes.
-
-*The main serial cost left* is the driver's own MUMPS work, about 35 % of a
-round: the slope climbs of the sampled gamma (sequential sigma and slope
-evaluations), the eigenvector solves, and the SQP refinement's full-model
-checks. Moving the climbs to the pool is the next speed-up if the cluster
-numbers confirm this.
+*Projection to n = 191,720, per start, on the cluster:*
+- **Plant certificate** (once per mesh): about 2 h on 48 ranks.
+- **Start-up:** plant spectrum, feasible start, its winding count, the anchor and the start's certificate: about 1 to 1.5 h.
+- **One round:** 30 to 40 min as before (the cluster's faster factorisation offsets the slower solves under load) plus the certificate, 5 to 10 min over 23 workers: **35 to 50 min**.
+- **End:** the final certificate and the all-frequency count, 30 to 50 min (the deadline leaves at least 1 h: no round starts that would end after 14 h).
+- **In the 15 h job:** about **15 to 20 rounds**. GL K+B+C needed 20 to 40 rounds to converge; a second job (resume from the checkpoint) may be needed.
+- **Throughput:** 2 starts per node; 8 starts on 4 nodes.
 
 ## 8. Validation log
 
@@ -317,7 +350,7 @@ numbers confirm this.
   - the mpipool environment test.
 - Operators and gains: section 1.
 - MPI task farm, 3 ranks: identical to serial.
-- Test plant, MUMPS, serial (1 core), from `bfs/data/init_test.npz` (a stable hand-made start):
+- Test plant, MUMPS, serial (1 core), from `bfs/data/init_test.npz` (a stable hand-made start; file removed with the Gaussian ports):
   - plant spectrum 82 s;
   - round 0: gamma 2240.09 -> 1413.73 (about 10 min);
   - round 1: gamma -> 1398.64 (about 6 min).
@@ -327,9 +360,21 @@ numbers confirm this.
   - MPI, 2 ranks: feasible start (gain x 0.0194), round 0 1517.68 -> 1448.82, identical in two runs.
 - MPI task-farm deadlock found and fixed: PETSc is now initialised on COMM_SELF (section 3).
 
+*Paper devices and M-free certification (2026-10-02; test plant, n = 33,593)*
+- Ports: placement derivatives db/dx_a (2 rows) and dc/dx_s against finite differences, 1e-9.
+- Inertia bounds (`bfs/mfree.py`) on a 1,279-dof mesh against dense generalised eigenproblems on ker B: equal to 1e-7, from above.
+- Free radius M-free vs the M-based one on GL: equal to 1e-15. On the step: 1e-7 to 1e-10 where the nearest eigenvalue is 0.015 to 0.5 away (switched off).
+- Plant data: max Re W <= 1.758, beta = 2.4785, heights 26.76 to 87.88 (2447 s serial); plant poles right of -0.025: 0, hot 282 (2166 s serial).
+- HIFOO start hifoo_000 at the paper's B2 (0.6, 1.0) and C1 (2.0): compensator shifted by 1.1847, gain x 0.01109 (11 steps, 4 refused), alpha -0.0531.
+- One round with gamma certified on [0, 10]: 1655.32 -> 1645.2110 (2009 s serial); the certificate at that design: 1645.211708, equal to the sampled maximum, every disk converged, nothing retried or bisected (334 s; 1040 s with ncv 30).
+- All-frequency winding count right of -0.025 at that design (alpha = -0.0501): **0** (winding -4.6e-15), W_T = 120, 3617 points on [0, 120] (real symmetry), 2161 s serial, no hints.
+- The same count pooled (MPI, 2 ranks: 8 segments on the workers, the path of every production run): **0** (winding 8.2e-16), 3374 points, 2013 s of task time; the ledger's projection on 23 workers is 261 s (the longest segment).
+
 ## 9. Open items
 
-- **Certification, option A or B** (section 4): awaiting the user's choice. Running with B.
-- **Plant spectrum:** it is not a proof that no eigenvalue is missed (no M-free enclosure).
+- **The disks of the gamma certificate** are certificates by exhibition: each comes from eigenvalues Arnoldi returned converged (residual 1e-9) nearest the shift. A set that does not converge is retried, then the interval bisected; nothing is assumed. The norm-based (eigenvalue-free) radius is rigorous but 1e-7 to 1e-10 here, so it cannot replace them (section 4).
+- **Plant certificate on the full mesh:** about 2 h on 48 ranks projected from the test plant (41 + 36 min serial); not yet run.
+- **Winding count cost:** about 0.6 s per frequency point on the test plant (3400 to 3600 points), dense near the 282 hot plant poles; on the full mesh the n LU is 14 times dearer. Over 23 workers (92 segments) the test plant's 2013 s of task time is 90 s of wall, so 20 to 40 min on the full mesh, twice per start (feasible start, end of run); to be measured on the cluster.
+- **The paper's own domain** ([-20, 100] x [0, 20], n = 400,775) is larger than the archive's ([-1.5, 30] x [0, 3.5]); gains differ by orders of magnitude (fig. 2a ~2e3 vs 2.2e6 here). The devices and the floor positions are the paper's; the domain stays the user's.
 - **MIMO** (2 x 2, decentralised): not part of the fork yet (`bc` raises).
 - **The KS weight:** kept for later (user).

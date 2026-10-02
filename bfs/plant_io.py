@@ -10,6 +10,11 @@ One .npz:
   bc          Dirichlet dof indices
   pts, tri    mesh vertices / triangles; edges, edge_labels (boundary geometry
               for the actuator / sensor position constraints)
+  L           the velocity stiffness (grad u, grad v) with the Dirichlet rows/
+              columns identity: the H^1 seminorm of the sensor tail bound
+  shear_S, shear_x, shear_w
+              the floor's wall-shear trace (ops_dolfinx.floor_shear_trace):
+              (S q)_k = du/dy at (x_k, 0), Gauss weights w_k
   Re, source  provenance
 """
 import numpy as np
@@ -29,9 +34,9 @@ def _get(z, name):
 
 def save_ops(path, ops, source=''):
     d = {}
-    for k in ('A', 'M'):
+    for k in ('A', 'M', 'L', 'shear_S'):
         _put(d, k, ops[k])
-    for k in ('comp', 'xy', 'bc', 'pts', 'tri', 'edges', 'edge_labels'):
+    for k in ('comp', 'xy', 'bc', 'pts', 'tri', 'edges', 'edge_labels', 'shear_x', 'shear_w'):
         d[k] = np.asarray(ops[k])
     d['Re'] = float(ops['Re']); d['source'] = np.array(source)
     np.savez(path, **d)
@@ -40,8 +45,8 @@ def save_ops(path, ops, source=''):
 
 def load_ops(path):
     z = np.load(path, allow_pickle=False)
-    out = {k: _get(z, k) for k in ('A', 'M')}
-    for k in ('comp', 'xy', 'bc', 'pts', 'tri', 'edges', 'edge_labels'):
+    out = {k: _get(z, k) for k in ('A', 'M', 'L', 'shear_S')}
+    for k in ('comp', 'xy', 'bc', 'pts', 'tri', 'edges', 'edge_labels', 'shear_x', 'shear_w'):
         out[k] = z[k]
     out['Re'] = float(z['Re']); out['source'] = str(z['source'])
     return out

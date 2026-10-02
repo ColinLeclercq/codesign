@@ -36,6 +36,44 @@ def _csr(Mat):
     return S
 
 
+def floor_shear_trace(W, msh, ft, xy, nq=6, label=2):
+    """The wall-shear trace on the floor y = 0 (BFS.md 2): quadrature points
+    x_q along the label-`label` facets lying on y = 0, Gauss weights w_q (facet
+    length included) and the sparse matrix S with (S q)_q = d u / d y (x_q, 0)
+    for the P2 velocity u of the state q.  A shear sensor with window chi is
+    then the vector c = S^T (w * chi(x_q)) -- the Barbagallo et al. (2012) /
+    FreeFEM measurement m = int1d(th, 2)(dy(u) * select).  The P2 basis
+    gradients come from the six u-dofs of the facet's cell by a local
+    Vandermonde fit on the monomials 1, x, y, x^2, xy, y^2 (exact for P2 on
+    straight triangles)."""
+    Vu = W.sub(0).sub(0)
+    f2c = msh.topology.connectivity(1, 2)
+    from dolfinx import mesh as dmesh
+    fac = ft.indices[ft.values == label]
+    geo = dmesh.entities_to_geometry(msh, 1, fac)
+    X = msh.geometry.x[:, :2]
+    gx, gw = np.polynomial.legendre.leggauss(nq)
+    rows, cols, vals, xq, wq = [], [], [], [], []
+    for f, g in zip(fac, geo):
+        P = X[g]
+        if abs(P[:, 1]).max() > 1e-10:
+            continue
+        cell = f2c.links(f)[0]
+        dofs = np.asarray(Vu.dofmap.cell_dofs(cell))
+        Z = xy[dofs]
+        V = np.column_stack([np.ones(6), Z[:, 0], Z[:, 1], Z[:, 0] ** 2, Z[:, 0] * Z[:, 1], Z[:, 1] ** 2])
+        Ci = np.linalg.inv(V)                       # column j: monomial coefficients of basis j
+        a, b = P[:, 0].min(), P[:, 0].max()
+        for t, w in zip(gx, gw):
+            x = 0.5 * (a + b) + 0.5 * (b - a) * t
+            dmono = np.array([0.0, 0.0, 1.0, 0.0, x, 0.0])   # d/dy of the monomials at (x, 0)
+            rows += [len(xq)] * 6; cols += list(dofs); vals += list(dmono @ Ci)
+            xq.append(x); wq.append(0.5 * (b - a) * w)
+    xq = np.array(xq); o = np.argsort(xq)
+    S = sp.csr_matrix((vals, (rows, cols)), shape=(len(xq), len(xy)))[o]
+    return S, xq[o], np.array(wq)[o]
+
+
 def assemble(folder, baseflow, Re=600.0):
     """The operators (and the unconstrained velocity mass Mfull, for
     check_gains.py) on folder's mesh, base flow folder/baseflow."""
@@ -43,6 +81,7 @@ def assemble(folder, baseflow, Re=600.0):
     from petsc4py import PETSc
     from dolfinx import fem, mesh as dmesh
     from dolfinx.fem.petsc import assemble_matrix
+    import ufl
     import nsforms as ns
     t0 = time.time()
     comm = MPI.COMM_SELF
@@ -55,7 +94,9 @@ def assemble(folder, baseflow, Re=600.0):
     mJ = assemble_matrix(fem.form(ns.jacobian(wb, nu)), bcs=bcs, diag=1.0); mJ.assemble()
     Mb = assemble_matrix(fem.form(ns.mass(W)), bcs=bcs, diag=0.0); Mb.assemble()
     Mf = assemble_matrix(fem.form(ns.mass(W))); Mf.assemble()
-    A, M, Mfull = -_csr(mJ), _csr(Mb), _csr(Mf)
+    (u_, _), (v_, _) = ufl.TrialFunctions(W), ufl.TestFunctions(W)
+    Lk = assemble_matrix(fem.form(ufl.inner(ufl.grad(u_), ufl.grad(v_)) * ufl.dx), bcs=bcs, diag=1.0); Lk.assemble()
+    A, M, Mfull, L = -_csr(mJ), _csr(Mb), _csr(Mf), _csr(Lk)
     n = A.shape[0]
     comp = np.full(n, -1, dtype=np.int8); xy = np.zeros((n, 2))
     for c, (X, dofs) in enumerate(subs):            # 0 = u, 1 = v, 2 = p
@@ -67,8 +108,12 @@ def assemble(folder, baseflow, Re=600.0):
     edges = dmesh.entities_to_geometry(msh, 1, ft.indices)
     print(f"assembled n = {n} ({int((comp < 2).sum())} velocity, {int((comp == 2).sum())} pressure dofs), "
           f"{len(bc)} Dirichlet dofs, nnz(A) = {A.nnz}, nnz(M) = {M.nnz} ({time.time() - t0:.1f} s)", flush=True)
-    return dict(A=A, M=M, Mfull=Mfull, comp=comp, xy=xy, bc=bc, Re=Re,
-                pts=msh.geometry.x[:, :2].copy(), tri=tri, edges=np.asarray(edges), edge_labels=ft.values.copy())
+    Sh, xq, wq = floor_shear_trace(W, msh, ft, xy)
+    if (comp[Sh.indices] != 0).any():
+        raise RuntimeError("shear trace touches non-u dofs")
+    return dict(A=A, M=M, Mfull=Mfull, L=L, comp=comp, xy=xy, bc=bc, Re=Re,
+                pts=msh.geometry.x[:, :2].copy(), tri=tri, edges=np.asarray(edges), edge_labels=ft.values.copy(),
+                shear_S=Sh, shear_x=xq, shear_w=wq)
 
 
 def main():

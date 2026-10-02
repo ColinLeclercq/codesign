@@ -106,7 +106,6 @@ class SparsePencil:
         Mcl = sp.block_diag((M.tocsc(), sp.identity(self.r, format='csc')),
                             format='csc')
         self.Ap, self.MP, self.Mcl = Ap, MP, Mcl
-        self._M_plant = M                     # the mass matrix object (its one LU: massops)
         # A_H^base and E_H (sparse)
         self.AHb = sp.bmat([[Ap, g2inv * MP], [MP, Ap.conj().T.tocsc()]],
                            format='csc')
@@ -172,10 +171,11 @@ class SparsePencil:
             matvec=lambda x: self.solve(self.EH @ x), dtype=complex)
         kk = min(k, 2 * self.N - 2)
         self.last_converged = True
+        ncv = ncv if ncv else (NEAR_NCV if NEAR_NCV else max(2 * kk + 2, 30))
         try:
             th = spla.eigs(OP, k=kk, which='LM', tol=tol, maxiter=maxiter,
                            v0=_v0(2 * self.N),
-                           ncv=min(2 * self.N - 1, ncv if ncv else max(2 * kk + 2, 30)),
+                           ncv=min(2 * self.N - 1, max(ncv, 2 * kk + 2)),
                            return_eigenvectors=False)
         except spla.ArpackNoConvergence as e:
             # PARTIAL results are not necessarily the eigenvalues NEAREST the
@@ -188,35 +188,32 @@ class SparsePencil:
     # ---------- a provably eigenvalue-free disk without the eigenvalues ----------
     def free_radius(self, s, safety=1.01, tol=1e-6):
         """Radius of a disk around s PROVABLY free of eigenvalues of the pencil,
-        from a norm instead of the nearest eigenvalues (STAGE6 6.31): an eigenpair
-        A v = lam E v gives v = (lam - s) X v with X = (A - s E)^-1 E, so
-        |lam - s| >= 1 / ||X||_W for any norm; W = blockdiag(M_cl, M_cl) (= |E_H|,
-        positive definite) and ||X||_W^2 = lambda_max(X^H W X, W), Hermitian
-        Lanczos on the factors of the shift already held.  Far from the
-        spectrum the nearest eigenvalues of the even pencil are many and at
-        similar distances and shift-invert Arnoldi does not converge (GL ne=200,
-        |w| = 60-250: the disks of the all-w question were left uncovered); a
-        Hermitian largest eigenvalue converges regardless.  The Ritz value
-        approaches lambda_max from below: `safety` covers the tolerance."""
-        import massops
+        from a norm instead of the nearest eigenvalues (STAGE6 6.31), with no
+        mass inverse (BFS.md 4, note_algebra BFS section).  An eigenpair
+        A v = lam E v (E v != 0) gives v = (lam - s) X v, X = (A - s E)^-1 E, so
+        |lam - s| >= 1 / rho(X).  Write E = E_H = R^T J R with R = blockdiag(
+        R_cl, R_cl), R_cl^T R_cl = M_cl (R is never formed) and J = diag(I, -I):
+        the nonzero spectrum of X = P^-1 R^T J R is that of R P^-1 R^T J, so
+        rho(X) <= ||R P^-1 R^T||_2, and ||R P^-1 R^T||_2^2 = lambda_max of
+        P^-H W P^-1 W, W = R^T R = blockdiag(M_cl, M_cl) (positive SEMI-definite:
+        the singular velocity mass is fine).  That operator is self-adjoint in
+        the W semi-inner product with a real nonnegative spectrum; Arnoldi on
+        the factors of the shift already held.  Far from the spectrum the
+        nearest eigenvalues of the even pencil are many and at similar
+        distances and shift-invert Arnoldi does not converge (GL ne=200,
+        |w| = 60-250); a largest eigenvalue of this kind converges regardless.
+        The Ritz value approaches lambda_max from below: `safety` covers the
+        tolerance.  (For an SPD M this is the earlier lambda_max(X^H W X, W):
+        similar operators, J W = W J.)"""
         self.factor(s)
         n2 = 2 * self.N
         W = sp.block_diag((self.Mcl, self.Mcl), format='csc')
-        Mp = self._M_plant
 
-        def XHWX(v):
-            x = self.solve(self.EH @ v)
-            return self.EH @ self.solveH(W @ x)
-
-        def Winv(v):
-            v = np.asarray(v, complex)
-            return np.concatenate([massops.block_solve(Mp, self.r, v[:self.N]),
-                                   massops.block_solve(Mp, self.r, v[self.N:])])
-        Hop = spla.LinearOperator((n2, n2), dtype=complex, matvec=XHWX)
-        Wi = spla.LinearOperator((n2, n2), dtype=complex, matvec=Winv)
-        lam = spla.eigsh(Hop, k=1, M=spla.aslinearoperator(W), Minv=Wi, which='LA', tol=tol,
-                         maxiter=3000, v0=_v0(n2).astype(complex), return_eigenvectors=False)
-        return 1.0 / (safety * np.sqrt(max(float(lam[0].real), 1e-300)))
+        def YW(v):
+            return self.solveH(W @ self.solve(W @ np.asarray(v, complex)))
+        Yop = spla.LinearOperator((n2, n2), dtype=complex, matvec=YW)
+        lam = spla.eigs(Yop, k=1, which='LM', tol=tol, maxiter=3000, v0=_v0(n2), return_eigenvectors=False)
+        return 1.0 / (safety * np.sqrt(max(float(np.abs(lam[0])), 1e-300)))
 
     # ---------- contour-integral eigenvalue COUNT (completeness certificate) --
 
@@ -277,7 +274,7 @@ def certify_greater(A, M, b, c, Ac, Bc, nvec, Kfb, gam, sigma_of_w,
     # Arnoldi iterations gets the retry and the free disk instead of 800
     # iterations (far from the spectrum they never converge: 3 s each at
     # ne = 200; STAGE6 6.31).  The frozen path keeps 800.
-    eig_kw = dict(maxiter=300) if DISK_STRICT else {}
+    eig_kw = dict(maxiter=STRICT_MAXITER) if DISK_STRICT else {}
     # CERT_SPLIT > 1 starts the queue with that many equal intervals: a first
     # generation as wide as the pool (the default 1 is the serial algorithm;
     # other shifts, the same rigorous cover and decision)
@@ -375,7 +372,7 @@ def certify_greater(A, M, b, c, Ac, Bc, nvec, Kfb, gam, sigma_of_w,
             theta = 0.5 * (lo + hi)
             st['nshift'] += 1
             out = merge(lo, hi, theta, _shift_eval(P, theta, k, DISK_STRICT and st['n_bisect'] < DISK_BISECT_MAX,
-                                                   eig_kw, free=DISK_STRICT))
+                                                   eig_kw, free=DISK_STRICT and FREE_DISK))
             if out is not None:
                 return out
             continue
@@ -385,7 +382,7 @@ def certify_greater(A, M, b, c, Ac, Bc, nvec, Kfb, gam, sigma_of_w,
         CI[:] = rest
         import fullpar
         res = fullpar.pmap(_shift_task, [(key, (b, c, Ac, Bc, nvec, Kfb, gam), 0.5 * (lo + hi), k, DISK_STRICT, eig_kw,
-                                          DISK_STRICT) for lo, hi in batch])
+                                          DISK_STRICT and FREE_DISK) for lo, hi in batch])
         for (lo, hi), r_ in zip(batch, res):
             st['nshift'] += 1
             out = merge(lo, hi, 0.5 * (lo + hi), r_)
@@ -461,6 +458,14 @@ N_DISK_FREE = 0       # ... retry failed: the norm-based free disk used instead 
 LAST_INCOMPLETE = False  # the last certify_greater left an interval uncovered (strict)
 DISK_BISECT_MAX = 16  # bisections per certify_greater call in strict mode
 DISK_STRICT = False   # driver --cert-disk strict (the nominal scripts); False = the frozen behaviour
+STRICT_MAXITER = 300  # strict disks: Arnoldi restarts of the first attempt (GL); BFS 60 (BFS.md 4)
+NEAR_NCV = None       # Krylov subspace of the nearest-eigenvalue Arnoldi (None: max(2k + 2, 30), GL).
+                      # The backward-facing step's even pencil has clustered eigenvalues at similar
+                      # distances from every shift: ncv = 100 needs 100-190 applications where 30
+                      # needed 450-1480, same nearest eigenvalue (BFS.md 4)
+FREE_DISK = True      # strict disks: the norm-based free radius when Arnoldi fails (GL).  The backward-
+                      # facing step's even pencil is so non-normal that it is 1e-7 - 1e-10 where the
+                      # nearest eigenvalue is 0.01 - 0.5 away: useless there (BFS.md 4), off
 N_CLIMB_FAILED = 0   # times the decision found a higher level set the climb could not locate (reported inconclusive)
 
 

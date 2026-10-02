@@ -149,15 +149,17 @@ factorisations per round, ~70 with reduced-model certification every 4th round.
 | item | state | where |
 |---|---|---|
 | operators from the user's nsforms.py (dolfinx), gains vs archive | **done** (1e-15) | BFS.md 1 |
-| real plant / controller, 2-D Gaussian ports, interior constraint (hard SQP rows) | **done** | BFS.md 2 |
+| real plant / controller; Barbagallo et al. (2012) devices (vertical Gaussian force, floor wall-shear window), free positions, hard SQP rows | **done** | BFS.md 2 |
 | MUMPS LU, no M^-1 / Cholesky, MPI task farm, pooled line certificate | **done** | BFS.md 3 |
-| gamma | **sampled** (option B; certified option A open, user) | BFS.md 4 |
-| HIFOO starts, feasibility by loop-gain continuation | **done** (test plant) | BFS.md 6 |
-| cluster scripts (setup, smoke, production array <= 15 h) | **ready**, not run | BFS.md 7 |
+| gamma | **certified** on [0, 10] (option A, nearest-eigenvalue disks) | BFS.md 4 |
+| numerical range on ker B, certified by inertia (no M^-1) | **done** | BFS.md 4, note |
+| all-frequency stability: winding count with H^1 wall-shear tail | **done** (test plant) | BFS.md 4 |
+| HIFOO starts at the paper's B2/C1, feasibility by loop-gain continuation | **done** (test plant) | BFS.md 6 |
+| cluster scripts (setup into `codesign`, smoke, plant_cert, production array <= 15 h) | **ready**; smoke passed before the device change | BFS.md 7 |
 
 ## Next
 
-0. Before 2-D scale: the 6.28 list is **done and validated** (STAGE6 6.29: reduced-space rows, M once at warm-up, mesh-independent winding tail, LU ordering in one place, certificate economies, blocked enrichment, the moderate items). The parallel full-model tasks are done too (6.30). MUMPS in `sparse_lu`: done on branch `bfs` (BFS.md 3); the singular-M bounds: open (BFS.md 4).
+0. Before 2-D scale: the 6.28 list is **done and validated** (STAGE6 6.29: reduced-space rows, M once at warm-up, mesh-independent winding tail, LU ordering in one place, certificate economies, blocked enrichment, the moderate items). The parallel full-model tasks are done too (6.30). MUMPS in `sparse_lu`: done on branch `bfs` (BFS.md 3); the singular-M bounds: done, M-free (BFS.md 4).
 0. MIMO: done at ne=100 (STAGE6); open: the K+B+C centralized tail (-0.25 %/round when stopped) and a start from
    the 5.339317 decentralized record (cluster), multistart (the decentralized problems are multimodal),
    `--sqp-stat pred` for SISO (cluster regression), control-cost weight W K S (later, user). The compensator's

@@ -1372,6 +1372,146 @@ The open number is the subspace dimension in 2-D: GL needs $30$--$60$; the cavit
 near-axis spectrum may need several times more, which is still small but decides the
 estimate above, and it is the first thing to measure.}
 
+%======================================================================
+\section{The backward-facing step: algebra without $M^{-1}$}\label{sec:bfs}
+
+{\small [Added October 2, 2026 (branch \code{bfs}; implementation notes in \code{BFS.md}).
+The plant is the rounded backward-facing step of Dergham, Sipp \& Robinet (2013) at
+$Re=600$, Taylor--Hood P2--P2--P1, $n=191{,}720$; the devices are those of Barbagallo,
+Dergham, Sipp, Schmid \& Robinet (JFM 2012) with free positions.  Rule of this section:
+\emph{no inverse and no Cholesky factor of the velocity mass}; $M$ is only multiplied,
+scaled and added.]}
+
+\subsection{Weights in weak form: $BB\tp=C\tp C=Q$}
+The state $q=(u,p)\in\R^n$; $Q=M$ is the mass matrix, zero on the pressure block and on the
+Dirichlet rows and columns; $Q'$ is its velocity block ($n_v\times n_v$, positive definite on
+the free velocity dofs); $P$ is the prolongation $\R^{n_v}\to\R^n$ that pads a zero pressure,
+so $Q=PQ'P\tp$.  The disturbance $w$ is a velocity field with $\|w\|^2=w\tp Q'w$ entering in
+weak form, $Q\dot q=Aq+QPw+b\,u$; the performance is the whole state in the $Q$ seminorm.  With
+the normalised input $w=Q'^{-1/2}\hat w$ and output $z=Rq$, $R\tp R=Q$:
+\[
+B=QPQ'^{-1/2}\ (n\times n_v),\qquad
+BB\tp=QPQ'^{-1}P\tp Q=PQ'Q'^{-1}Q'P\tp=Q,\qquad
+C\tp C=R\tp R=Q .
+\]
+$B$ and $C\tp$ have different shapes, but their Gram products are the same $n\times n$
+matrix, and the Hamiltonian/even pencil needs only these products.  $Q'^{-1/2}$ and $R$
+appear in the derivation and cancel; they are never formed.  (For GL the input entered in
+strong form, $E\dot q=Aq+E^{-1/2}w$, giving $BB\tp=E^{-1}$; premultiplying by
+$G=\mathrm{diag}(E,I,\dots)$ removes it.  In weak form the inverse never appears.)  Hence
+\[
+\sigma_1^2(\omega)=\lambda_{\max}\bigl(Q\,T\hp Q\,T\bigr),\qquad T=(i\omega M_{\mathrm{cl}}-A_{\mathrm{cl}})^{-1},
+\]
+an operator self-adjoint in the $Q$ semi-inner product (real nonnegative spectrum), and
+the $\gamma$-pencil of \S\ref{sec:cert} is
+\[
+\begin{pmatrix}A_{\mathrm{cl}}&\gamma^{-2}Q_{\mathrm{cl}}\\ Q_{\mathrm{cl}}&A_{\mathrm{cl}}\hp\end{pmatrix}
+-s\begin{pmatrix}M_{\mathrm{cl}}&0\\0&-M_{\mathrm{cl}}\end{pmatrix},
+\qquad Q_{\mathrm{cl}}=\mathrm{diag}(Q,0_r),
+\]
+sparse plus the rank-4 controller coupling (Woodbury), exactly as on GL.  The archive's
+optimal gains are reproduced to $10^{-14}$--$10^{-15}$ with it.
+
+\subsection{Devices}
+Actuator: a vertical body force $\psi_a=(0,g)$,
+$g=\exp(-|x-x_a|^2/2\sigma^2)$, $\sigma=0.5/\sqrt{\ln2}$, load $b=M\psi_a$, free centre
+$x_a\in\R^2$.  Sensor: the wall shear on the floor $y=0$,
+$y=\int\chi(x-x_s)\,\partial_yu\,dx$, i.e.\ the vector $c=S\tp(w\odot\chi)$ where
+$(Sq)_k=\partial_yu(x_k,0)$ at Gauss points $x_k$ (built once from the P2 basis) and $\chi$ a
+length-$0.6$ window with $\tanh$ edges of width $0.05$; free start $x_s\in\R$.  Both are
+unnormalised.  $\partial b/\partial x_a=M\,\partial\psi_a/\partial x_a$ and
+$\partial c/\partial x_s=S\tp(w\odot\partial_{x_s}\chi)$, so the placement gradients are the
+GL formulas with these vectors (checked against finite differences to $10^{-9}$).  The
+sensor is \emph{not} of the form $M\psi$: this matters for the tail bound below.
+
+\subsection{Eigenvalue-free disks without $M^{-1}$, and why they do not help here}
+For a pencil $(\mathcal A,\mathcal E)$ and a shift $s$, an eigenpair with $\mathcal Ev\ne0$
+gives $v=(\lambda-s)Xv$, $X=(\mathcal A-s\mathcal E)^{-1}\mathcal E$, so
+$|\lambda-s|\ge1/\rho(X)$.  Write $\mathcal E=R\tp JR$ with $J$ a signature and
+$W=R\tp R\succeq0$ ($\mathcal E_H=\mathrm{diag}(M_{\mathrm{cl}},-M_{\mathrm{cl}})$: $W=\mathrm{diag}(M_{\mathrm{cl}},M_{\mathrm{cl}})$).  The nonzero
+spectrum of $X=P^{-1}R\tp JR$ is that of $RP^{-1}R\tp J$, so
+\[
+\rho(X)\le\|RP^{-1}R\tp\|_2,\qquad \|RP^{-1}R\tp\|_2^2=\lambda_{\max}\bigl(P^{-\mathsf H}WP^{-1}W\bigr),
+\]
+the second equality again by cycling.  The operator on the right is self-adjoint in the
+$W$ semi-inner product: Arnoldi on the factors of the shift, no inverse of $W$, $R$ never
+formed.  For an SPD mass this equals the earlier $\lambda_{\max}(X\hp WX,W)$ (similar
+operators, $JW=WJ$); the code now uses one form for both plants (equal to $10^{-15}$ on GL).
+
+\emph{Measured on the step} (test plant, a stabilising design, $\gamma=1645$): the free radius
+at $i\theta$ is $10^{-7}$--$10^{-10}$ where the nearest eigenvalue of the even pencil is
+$0.015$--$0.5$ away.  The convective resolvent is so non-normal that norm-based radii are
+useless; the disks of the $\gamma$-certificate must come from the \emph{nearest eigenvalues}
+(shift-invert Arnoldi, converged), the Schwerdtner--Mengi--Voigt construction.  The free
+radius is therefore switched off for the step, and an Arnoldi set that does not converge is
+retried with a larger subspace or the interval bisected.
+
+\subsection{The numerical range on divergence-free velocities, certified by inertia}
+$A=\begin{pmatrix}A_{vv}&B\tp\\B&0\end{pmatrix}$ (Dirichlet rows $-I$), $M=\mathrm{diag}(M_{vv},0)$.
+An eigenvector $(u,p)$ has $Bu=0$, $u=0$ on Dirichlet dofs, and
+$\lambda=u\hp A_{vv}u/u\hp M_{vv}u$ ($u\hp B\tp p=(Bu)\hp p=0$): the spectrum lies in the
+numerical range $W$ of $A_{vv}$ in the $M$ inner product on $\ker B$.  Its bounds are tops of
+Hermitian pencils $(H,M)$ on $\ker B$: $H=\tfrac12(A+A\tp)$ for $\max\mathrm{Re}$, $\pm\tfrac1{2i}(A-A\tp)$
+for the heights, and the S-lemma combinations $\pm S+\tau(H-s_0M)$ of \S\ref{sec:ns}.
+Certificate: by the saddle-point inertia theorem,
+\[
+\sigma M-H\succ0\ \text{on}\ \ker B
+\iff
+\mathrm{In}\begin{pmatrix}\sigma M_{vv}-H_{vv}&B\tp\\B&-\delta I\end{pmatrix}=(n_v,\,n_p,\,0)
+\]
+for small $\delta>0$, and the implication ``$\Leftarrow$'' holds for \emph{every} $\delta>0$ (on
+$\ker B$ the term $B\tp B/\delta$ vanishes) --- the direction a certificate needs.  The
+inertia is read from one sparse $LDL\tp$ without pivoting (the matrix is quasi-definite
+exactly when the test passes; a breakdown or a wrong count answers ``not certified''), by
+Sylvester's law.  A complex Hermitian $H_r+iH_i$ is embedded as the real symmetric
+$\begin{pmatrix}H_r&-H_i\\H_i&H_r\end{pmatrix}$.  $\lambda_{\max}\le\sigma$ is then found by doubling and
+bisection on $\sigma$: every accepted $\sigma$ is a proof, no Ritz value from below.  This is
+an $LDL\tp$ of $\sigma M-H$, never of $M$.  (MUMPS reports no inertia in complex arithmetic,
+so the factorisation is \code{qdldl}'s, in real arithmetic: $3$\,s at $n=191{,}720$.)
+Validated on a $1{,}279$-dof mesh against dense generalised eigenproblems on $\ker B$:
+equal to $10^{-7}$, from above.  On the test plant $\max\mathrm{Re}\,W\le1.76$, $|\mathrm{Im}|\le87.9$.
+
+\subsection{The winding count for a wall-shear sensor: an $H^1$ tail}
+The count of \eqref{eq:count} needs $|k(s)G(s)|<\tfrac12$ beyond a frequency $W_T$, from a
+bound on $G(s)=c\hp(sM-A)^{-1}M\psi_a$.  With $x=(u,p)$ the response,
+\[
+s\|u\|_M^2-u\hp A_{vv}u=(u,\psi_a)_M,\qquad Bu=0 .
+\]
+(i) $\mathrm{dist}(s,W)\,\|u\|_M^2\le\|u\|_M\|\psi_a\|_M$, so $\|u\|_M\le\|\psi_a\|_M/d$,
+$d\le\mathrm{dist}(s,W)$ from the heights (\code{numrange\_distance}).  (ii) The shear sensor
+is bounded only in $H^1$: $|c\hp u|\le\|c\|_{L^{-1}}\|u\|_L$, $L$ the velocity stiffness,
+$\|c\|_{L^{-1}}^2=c\tp L^{-1}c$ (one solve).  (iii) With
+$\beta\ge\lambda_{\max}(\tfrac12(A_{vv}+A_{vv}\tp)+\nu'L,\,M)$ on $\ker B$ (certified as above,
+$\nu'=\nu/2$), $-\mathrm{Re}\,u\hp A_{vv}u\ge\nu'\|u\|_L^2-\beta\|u\|_M^2$, and the real part of
+the identity gives $\nu'\|u\|_L^2\le\|u\|_M\|\psi_a\|_M+(\beta-\mathrm{Re}\,s)_+\|u\|_M^2$.  Hence
+\[
+|G(s)|\le\|c\|_{L^{-1}}\|\psi_a\|_M\sqrt{\frac{1/d+(\beta-\mathrm{Re}\,s)_+/d^2}{\nu'}}
+=O(d^{-1/2}).
+\]
+The $d^{-1/2}$ decay is genuine, not an artefact of the estimate: at high frequency the
+response to a smooth forcing is its Leray projection over $s$, which slips at the wall, and
+the Stokes layer of thickness $\sqrt{\nu/\omega}$ carries a wall shear of order
+$\omega^{-1}\sqrt{\omega/\nu}=(\nu\omega)^{-1/2}$.  With a feedthrough $K\ne0$,
+$W_T\sim(2|K|\,C)^2$: the tracked segment is longer than for an $M\psi$ sensor (whose tail
+decays like $1/d$), by an amount the record reports.  $P_{\mathrm{plant}}$ and the near-line
+plant poles come from the enclosure of \S\ref{sec:ns} with the inertia bounds above and the
+tiles' nearest-eigenvalue exhaustion; they are design-independent and cached per mesh.
+The plant is real, so $f(\bar s)=\overline{f(s)}$ and the march covers $[0,W_T]$ only, the phase
+change doubled.  Measured on the test plant ($n=33{,}593$; $\max\mathrm{Re}\,W\le1.758$,
+$\beta=2.48$; no plant pole right of $-0.025$, $282$ within $0.6$ of it) at a design with
+$\alpha=-0.0501$, $K=0.0046$: $W_T=120$, $3617$ points, winding $-4.6\times10^{-15}$, count $0$.
+
+\subsection{The abscissa, and random starts}
+The line certificate of \S\ref{sec:cert} proves only that nothing lies \emph{on}
+$\mathrm{Re}\,s=-\eps$; it reports the eigenvalues near its shifts.  For an unstable design it
+is not the abscissa.  Measured: a HIFOO phase driven by it at $\mathrm{Re}=-0.08$ stopped at
+``$\alpha=-0.0655$'' while the certificate at $-0.05$ then found $-0.0438+0.66i$.  The count
+above gives the abscissa properly: $\#\{\mathrm{Re}\,\lambda>\ell\}$ at any $\ell$, bisected on
+$\ell$.  For the starts in use, feasibility is reached by continuation in the loop gain
+$\tau(n,K)$ from the open loop (stable plant, compensator shifted into the margin), every
+step gated like an accepted design; the count certifies the result independently of the
+chain.
+
 \section{Cost accounting}\label{sec:cost}
 
 \begin{center}
@@ -1423,6 +1563,9 @@ guaranteed by momentum-equation inputs and velocity outputs.  Record the two mod
 rules that fall out (pressure sensors make $G$ proper, not strictly proper, and shift the
 tail disk to $1-KG(\infty)$; inputs must never enter the constraint equation).  Validate
 on a Stokes or lid-driven benchmark where a dense generalised eigensolve still exists.
+\emph{Done for the step} (\S\ref{sec:bfs}): the range on $\ker B$ by inertia, with no
+projector and no $M_v^{-1}$, and an $H^1$ tail for the wall-shear sensor; validated on a
+$1{,}279$-dof mesh against dense eigensolves on $\ker B$.
 \item \textbf{Once-per-mesh constants, tight values with certified bounds}.  Replace the ARPACK \code{which='SM'} call in
 \code{plant\_tail\_constants} by shift-invert Lanczos (Cholesky- or CG-based) for a
 \emph{tight} $\lambda_{\min}(M)$, and compute $\|A\|_2$ by Lanczos on $A\hp A$ (matvecs
@@ -1436,7 +1579,10 @@ certificate (one Hermitian Lanczos plus one $LDL\hp$ per bound); Beyn contour co
 probes, cross-validated at two quadrature orders and two probe blocks, left edge at
 $\ell-\delta$; shift-invert polish of every counted eigenvalue.  Engine decision:
 \textbf{Beyn}, per \S\ref{sec:contour}.  Prototype at GL against the dense count that
-\code{plant\_pole\_data} already provides.
+\code{plant\_pole\_data} already provides.  \emph{For the step} (\S\ref{sec:bfs}) the rectangle
+uses the inertia certificate as here, with a sparse $LDL\tp$ in place of Lanczos (bisection on
+$\sigma$), and the tiles are exhausted by nearest-$k$ shift-invert instead of Beyn; Beyn
+remains the engine to decide for the cavity.
 \item \textbf{Parallel winding certificate} (\S\ref{sec:winding-num}).
 Interval decomposition at the knots, two-pass (knot values, then a work queue with
 midpoint splitting of intervals that bisect below a threshold), phase subtotals summed.

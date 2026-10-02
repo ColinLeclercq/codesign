@@ -4,25 +4,35 @@ BFSPlant has the interface the GL pipeline uses on FECoDesign (A, M, n, r,
 mc, cl, bc, grads, norm_M, alpha_certified, hinf, ...), on the operators of
 bfs/plant_io.py:
 
-    M q' = A q + b u + M f,     y = c^H q,      performance ||q||_M
+    M q' = A q + b u + M P w,     y = c^H q,      performance ||q||_M
 
-  A = J = -dF/dW (real, Dirichlet rows -identity), M = velocity mass with the
-  Dirichlet rows/columns and the pressure block zero (singular).  The
-  disturbance is a momentum forcing f (load M f: forcing vanishing at
-  Dirichlet dofs; the archive's gains are reproduced to 1e-10 with it), the
-  performance the kinetic energy.  M only ever multiplies: no M^-1, no
-  Cholesky factor (the gain eigenproblem W = M T^H M T, closedloop_sparse).
+  A = J = -dF/dW (real, Dirichlet rows -identity), M = Q, the velocity mass
+  with the Dirichlet rows/columns and the pressure block zero (singular).
+  The noise w is a [u, v] field (P pads a zero pressure), measured in the
+  velocity mass Q'; the performance is the whole state in the Q seminorm;
+  so B B^T = C^T C = Q (BFS.md 4).  M only ever multiplies: no M^-1, no
+  Cholesky factor.
 
-Ports (user, 2026-10-01): isotropic Gaussians of standard deviation h/2 = 0.5
-(step height h = 1) with FREE CENTRES (x, y):
-  actuator  forces the y-momentum only:   psi_a = (0, g(x - xa)),  b = M psi_a
-  sensor    measures u only:               psi_s = (g(x - xs), 0),  c = M psi_s,
-            y = c^H q = int g_s u dx
-both normalised to ||psi||_M = 1 (the controller absorbs the scale, as in GL).
-A position is a 2-vector; the placement gradient has two components.
+Ports (user, 2026-10-02): the devices of Barbagallo, Dergham, Sipp, Schmid &
+Robinet (JFM 2012), with free positions:
+  actuator  a body force on the VERTICAL momentum (paper section 2.3; the
+            user's actuator_sensor.edp forces u -- `act_comp`), shaped like
+            the script's Gaussians: exp(-|x - x_a|^2 / (2 sig^2)),
+            sig = 0.5 / sqrt(ln 2) (half amplitude at distance 0.5), peak 1,
+            in weak form b = M psi_a; free centre x_a = (x, y).  The script
+            truncates it at radius 2 (an amplitude jump of 0.4 %, 1e-5 of
+            its energy): not done here, so b is smooth in x_a.
+  sensor    wall shear stress on the floor y = 0,
+            y = int chi(x - x_s) du/dy dx,  c = S^T (w * chi)
+            (the script's int1d(th, 2)(dy(u) * select)); chi a window of
+            length L = 0.6 (Cp = [11, 11.6] in both; figure 1 for C1..C4)
+            with tanh edges of width delta = 0.05 (the script's P2
+            interpolant of the indicator ramps over one element, 0.04 on the
+            fine floor); free start x_s (one number).
+Unnormalised (physical) ports: the controller gain absorbs the scale.
 
 The plant, the ports and the controller are REAL: sigma(-w) = sigma(w) and
-eigenvalues come in conjugate pairs (the driver's --real-plant uses w >= 0).
+eigenvalues come in conjugate pairs (the driver's band is w >= 0).
 """
 from __future__ import annotations
 import numpy as np
@@ -31,19 +41,23 @@ import scipy.sparse as sp
 from fe_codesign import FECoDesign
 from closedloop_sparse import ClosedLoopResolvent
 
-SIGMA_PORT = 0.5          # h / 2
-POS_MARGIN = 0.25         # centres at least sigma / 2 inside the domain (BFS.md 2; --bfs-margin)
+SIG_ACT = 0.5 / np.sqrt(np.log(2.0))   # Barbagallo et al. / actuator_sensor.edp
+SENSOR_LEN = 0.6
+SENSOR_EDGE = 0.05
+FLOOR_X0 = 2.0                         # the floor y = 0 starts at the end of the arc
+POS_MARGIN = 0.05                      # centres / windows this far inside (BFS.md 2; --bfs-margin)
 
 
 class BFSPlant(FECoDesign):
-    pos_dim = 2
+    pos_dims = {'a': 2, 's': 1}      # actuator centre (x, y); sensor window start x_s
     real_plant = True
 
-    def __init__(self, ops, r=5, mc=1.0, sigma=SIGMA_PORT):
+    def __init__(self, ops, r=5, mc=1.0, act_comp='v'):
         from bfs.plant_io import load_ops
         o = load_ops(ops) if isinstance(ops, str) else ops
         self.ops_path = ops if isinstance(ops, str) else None
         self.A, self.M = o['A'].tocsc(), o['M'].tocsc()
+        self.L = o['L'].tocsr()
         self.n = self.A.shape[0]; self.r = r; self.mc = mc; self.ne = 0
         self.comp, self.xyd = o['comp'], o['xy']
         self.iu, self.iv = np.where(self.comp == 0)[0], np.where(self.comp == 1)[0]
@@ -51,7 +65,12 @@ class BFSPlant(FECoDesign):
         self.pts, self.tri = o['pts'], o['tri']
         self.edges, self.edge_labels = o['edges'], o['edge_labels']
         self.Re = o['Re']
-        self.sigma_port = float(sigma)
+        self.act_comp = act_comp
+        self.sig_act = SIG_ACT
+        self.shear_S = o['shear_S'].tocsr(); self.shear_x = o['shear_x']; self.shear_w = o['shear_w']
+        self.shear_S = sp.csr_matrix(self.shear_S.multiply(
+            np.isin(np.arange(self.n), self.bc_dofs, invert=True)[None, :]))   # Dirichlet columns: zero, as b's rows
+        self.sensor_len, self.sensor_edge = SENSOR_LEN, SENSOR_EDGE
         self.pos_margin = POS_MARGIN
         self.xn = None                       # no 1-D node array (field cases are GL only)
         self.Kstiff = None
@@ -70,87 +89,102 @@ class BFSPlant(FECoDesign):
         massops.FORBIDDEN = True             # M is singular: never factorised (BFS.md 4)
         import closedloop_sparse
         closedloop_sparse.GAIN_NCV = 8       # BFS.md 5
+        import certify_sparse                # the gamma certificate's disks (BFS.md 4)
+        certify_sparse.FREE_DISK = False
+        certify_sparse.STRICT_MAXITER = 60
+        certify_sparse.NEAR_NCV = 100
+        import sparse_spectrum
+        sparse_spectrum.FREE_TILE = False
 
     # ------------------------------------------------------------------ ports
-    def _g(self, x0, idx):
+    def _gauss(self, x0, idx):
         X = self.xyd[idx]
         d2 = (X[:, 0] - x0[0]) ** 2 + (X[:, 1] - x0[1]) ** 2
-        return np.exp(-d2 / (2.0 * self.sigma_port ** 2))
+        return np.exp(-d2 / (2.0 * self.sig_act ** 2))
 
-    def raw(self, x0, which):
-        """The unnormalised port field on the full dof vector: 'a' -> v
-        component (y-momentum forcing), 's' -> u component (measured)."""
-        x0 = np.asarray(x0, float).ravel()
-        idx = self.iv if which == 'a' else self.iu
+    def _act_idx(self):
+        return self.iv if self.act_comp == 'v' else self.iu
+
+    def _window(self, xs, order=0):
+        """chi(x_q - x_s) and its derivatives in x_s (order 0, 1, 2) at the
+        floor quadrature points."""
+        t1 = np.tanh((self.shear_x - xs) / self.sensor_edge)
+        t2 = np.tanh((self.shear_x - xs - self.sensor_len) / self.sensor_edge)
+        if order == 0:
+            return 0.5 * (t1 - t2)
+        e = self.sensor_edge
+        if order == 1:                     # d/dxs: -(1/e) sech^2 terms
+            return -0.5 * ((1.0 - t1 ** 2) - (1.0 - t2 ** 2)) / e
+        return -((1.0 - t1 ** 2) * t1 - (1.0 - t2 ** 2) * t2) / e ** 2   # d2/dxs2
+
+    def act_field(self, xa):
         v = np.zeros(self.n, complex)
-        v[idx] = self._g(x0, idx)
+        idx = self._act_idx(); v[idx] = self._gauss(np.asarray(xa, float).ravel(), idx)
         return v
 
-    def draw(self, x0, which):
-        """d raw / d(x0, y0): (2, n)."""
-        x0 = np.asarray(x0, float).ravel()
-        idx = self.iv if which == 'a' else self.iu
-        X = self.xyd[idx]
-        g = self._g(x0, idx)
-        out = np.zeros((2, self.n), complex)
-        out[0, idx] = (X[:, 0] - x0[0]) / self.sigma_port ** 2 * g
-        out[1, idx] = (X[:, 1] - x0[1]) / self.sigma_port ** 2 * g
-        return out
-
-    def jet(self, x0, which):
-        """The raw port field and its first and second derivatives in the
-        centre, (6, n): g, g_x, g_y, g_xx, g_xy, g_yy.  Their M-images span the
-        port's moves to second order: the reduced model's input basis for a free
-        centre (BFS.md 5; the GL range basis covered a 1-D interval)."""
-        x0 = np.asarray(x0, float).ravel()
-        idx = self.iv if which == 'a' else self.iu
-        X = self.xyd[idx]; s2 = self.sigma_port ** 2
-        g = self._g(x0, idx); dx = X[:, 0] - x0[0]; dy = X[:, 1] - x0[1]
-        rows = [g, dx / s2 * g, dy / s2 * g, (dx * dx / s2 - 1.0) / s2 * g, dx * dy / s2 ** 2 * g,
-                (dy * dy / s2 - 1.0) / s2 * g]
-        out = np.zeros((6, self.n), complex)
-        for k, r_ in enumerate(rows):
-            out[k, idx] = r_
-        return out
-
-    def gauss(self, x0):
-        raise NotImplementedError("BFS ports differ by component: use raw(x0, 'a' | 's')")
+    def sensor_vec(self, xs, order=0):
+        xs = float(np.ravel(xs)[0])
+        return np.asarray(self.shear_S.T @ (self.shear_w * self._window(xs, order)), complex)
 
     def bc(self, xa, xs, va=None, vs=None):
+        """b = M psi_a (the actuator's weak-form load), c = S^T (w chi) (the
+        shear sensor); returns (b, c, psi_a, c, 1, 1) -- unnormalised ports."""
         if va is not None or vs is not None:
             raise NotImplementedError("free fields (FB/FC) are not part of the BFS fork")
-        if np.ndim(xa) > 1 or np.ndim(xs) > 1:
+        if np.ndim(xa) > 1 or np.size(xs) > 1:
             raise NotImplementedError("MIMO is not part of the BFS fork yet")
-        ra, rs = self.raw(xa, 'a'), self.raw(xs, 's')
-        na, ns = self.norm_M(ra), self.norm_M(rs)
-        if not (np.isfinite(na) and na > 1e-300 and np.isfinite(ns) and ns > 1e-300):
-            raise FloatingPointError(f"bc(): degenerate port field (|psi_a| {na}, |psi_s| {ns}): "
-                                     f"centre outside the domain?")
-        pa, ps = ra / na, rs / ns
-        return self.M @ pa, self.M @ ps, pa, ps, na, ns
+        pa = self.act_field(xa)
+        b = self.M @ pa
+        c = self.sensor_vec(xs)
+        if not (np.linalg.norm(b) > 0.0 and np.linalg.norm(c) > 0.0):
+            raise FloatingPointError("bc(): a port vanishes (centre / window outside the domain?)")
+        return b, c, pa, c, 1.0, 1.0
 
     def Mdpsi(self, x0, which):
-        """M d(psi)/d(x0, y0) for the UNIT-M-norm port field (the tangent
-        projection of the raw derivative, as FECoDesign.dpsi_dx): (2, n),
-        memoised on (x0, which)."""
-        key = (which, float(x0[0]), float(x0[1]))
+        """d(port vector)/d(position): actuator (2, n) = M d psi_a/d(x, y),
+        sensor (1, n) = d c/d x_s.  Memoised (reduced.placement, grads)."""
+        x0 = np.atleast_1d(np.asarray(x0, float))
+        key = (which,) + tuple(float(t) for t in x0)
         v = self._Mdpsi_cache.get(key)
         if v is None:
             if len(self._Mdpsi_cache) >= 16:
                 self._Mdpsi_cache.pop(next(iter(self._Mdpsi_cache)))
-            g = self.raw(x0, which); dg = self.draw(x0, which)
-            nv = self.norm_M(g); p = g / nv
-            Mp = self.M @ p
-            rows = []
-            for k in range(2):
-                t = float(np.real(np.vdot(dg[k], Mp)))
-                rows.append(self.M @ ((dg[k] - t * p) / nv))
-            v = self._Mdpsi_cache[key] = np.array(rows)
+            if which == 'a':
+                idx = self._act_idx(); X = self.xyd[idx]; g = self._gauss(x0, idx)
+                rows = []
+                for k in range(2):
+                    d = np.zeros(self.n, complex)
+                    d[idx] = (X[:, k] - x0[k]) / self.sig_act ** 2 * g
+                    rows.append(self.M @ d)
+                v = np.array(rows)
+            else:
+                v = self.sensor_vec(x0, 1)[None, :]
+            self._Mdpsi_cache[key] = v
         return v
+
+    def port_jet(self, x0, which):
+        """The port vector and its first and second derivatives in the position:
+        actuator (6, n) M-images of g, g_x, g_y, g_xx, g_xy, g_yy; sensor (3, n)
+        c, c', c''.  Their span is the reduced model's input basis for a free
+        port (BFS.md 5)."""
+        x0 = np.atleast_1d(np.asarray(x0, float))
+        if which == 's':
+            return np.array([self.sensor_vec(x0, k) for k in range(3)])
+        idx = self._act_idx(); X = self.xyd[idx]; s2 = self.sig_act ** 2
+        g = self._gauss(x0, idx); dx = X[:, 0] - x0[0]; dy = X[:, 1] - x0[1]
+        rows = [g, dx / s2 * g, dy / s2 * g, (dx * dx / s2 - 1.0) / s2 * g, dx * dy / s2 ** 2 * g,
+                (dy * dy / s2 - 1.0) / s2 * g]
+        out = np.zeros((6, self.n), complex)
+        for k, r_ in enumerate(rows):
+            v = np.zeros(self.n, complex); v[idx] = r_
+            out[k] = self.M @ v
+        return out
 
     # ------------------------------------------------------------- gradients
     def grads(self, cl, x, z, arow, nvec, Kfb, xa, xs, pa, ps, na, ns, flags, eta=1.0, _full=False):
-        """FECoDesign.grads with 2-D placements: 'xa' / 'xs' are 2-vectors."""
+        """FECoDesign.grads with vector placements ('xa' (2,), 'xs' (1,)):
+        d sigma / d pos = Re(z^H db S_a) and Re(S_c dc^H x) with db, dc the
+        derivatives of the port vectors (Mdpsi)."""
         if getattr(cl, 'is_reduced', False) and not _full and len(x) == cl.kd + cl._r.r:
             return cl.grads_reduced(self, x, z, arow, nvec, Kfb, xa, xs, pa, ps, na, ns, flags, eta)
         n = self.n
@@ -168,10 +202,10 @@ class BFSPlant(FECoDesign):
         Sc = np.vdot(zp, b) * Kfb + self.mc * np.sum(np.conj(zc))
         if flags['B']:
             ba = self.Mdpsi(xa, 'a')
-            out['xa'] = np.array([float(np.real(np.vdot(zp, ba[k]) * Sa / eta)) for k in range(2)])
+            out['xa'] = np.array([float(np.real(np.vdot(zp, ba[k]) * Sa / eta)) for k in range(len(ba))])
         if flags['C']:
             cs = self.Mdpsi(xs, 's')
-            out['xs'] = np.array([float(np.real(Sc * np.vdot(cs[k], xp) / eta)) for k in range(2)])
+            out['xs'] = np.array([float(np.real(Sc * np.vdot(cs[k], xp) / eta)) for k in range(len(cs))])
         return out
 
     # --------------------------------------------------------------- geometry
@@ -207,27 +241,32 @@ class BFSPlant(FECoDesign):
         g = (y - w) / s
         return g, np.array([-dw / s - (y - w) * dw * ddw / s ** 3, 1.0 / s])
 
-    def position_constraints(self, x0, margin=None):
-        """The interior constraint of one centre, as rows c(x0) <= 0 with their
-        gradients: x_lo + m <= x <= x_hi - m, y <= y_hi - m, clearance >= m
-        (m = pos_margin; BFS.md 2)."""
+    def position_constraints(self, x0, which='a', margin=None):
+        """The interior constraint of one port, as rows c(x0) <= 0 with their
+        gradients (m = pos_margin; BFS.md 2):
+          actuator centre  x_lo + m <= x <= x_hi - m, y <= y_hi - m,
+                           clearance from the lower wall >= m;
+          sensor window    on the floor: FLOOR_X0 <= x_s, x_s + L <= x_hi - m."""
         m = self.pos_margin if margin is None else margin
         x_lo, x_hi, _, y_hi = self.box()
+        if which == 's':
+            xs = float(np.ravel(x0)[0])
+            return [(FLOOR_X0 - xs, np.array([-1.0])), (xs + self.sensor_len - x_hi + m, np.array([1.0]))]
         x, y = float(x0[0]), float(x0[1])
         g, dg = self.clearance(x0)
         return [(x_lo + m - x, np.array([-1.0, 0.0])), (x - x_hi + m, np.array([1.0, 0.0])),
                 (y - y_hi + m, np.array([0.0, 1.0])), (m - g, -dg)]
 
-    def inside(self, x0, margin=None):
-        return all(c <= 0.0 for c, _ in self.position_constraints(x0, margin))
+    def inside(self, x0, which='a', margin=None):
+        return all(c <= 0.0 for c, _ in self.position_constraints(x0, which, margin))
 
     def position_rows(self, xa, xs, flags):
-        """The interior rows of the FREE centres for the SQP subproblem (hard
+        """The interior rows of the FREE ports for the SQP subproblem (hard
         linear rows c + g.d <= 0, sqp_inner.Evaluator): [(c, {'xa'|'xs': g})]."""
         out = []
-        for key, x0, on in (('xa', xa, flags.get('B')), ('xs', xs, flags.get('C'))):
+        for key, side, x0, on in (('xa', 'a', xa, flags.get('B')), ('xs', 's', xs, flags.get('C'))):
             if on:
-                out += [(c, {key: g}) for c, g in self.position_constraints(x0)]
+                out += [(c, {key: g}) for c, g in self.position_constraints(x0, side)]
         return out
 
     # ---------------------------------------------------------------- loop
@@ -274,6 +313,107 @@ class BFSPlant(FECoDesign):
         key = (id(self.A), id(self.M), self.A.shape, self.A.nnz, self.M.nnz)
         csp._PLANT_EV_CACHE.clear(); csp._PLANT_EV_CACHE[key] = ev
         return ev
+
+    # ------------------------------------------------- all-frequency stability
+    # The winding count of winding_cert, M-free (BFS.md 4): the plant's
+    # numerical-range data and pole data are design-independent and computed
+    # once per mesh (sparse_spectrum with massops.FORBIDDEN -> bfs/mfree.py),
+    # cached on disk next to the operator file.
+    def _range_path(self):
+        return (self.ops_path[:-4] + '_range.npz') if self.ops_path else None
+
+    def range_data(self):
+        """(s_far, Hd, beta, nu1): the right edge s_far and the S-lemma
+        heights Hd of the numerical range W of A_vv on the divergence-free
+        velocities (sparse_spectrum.plant_heights), and the H^1 constant
+        beta = lambda_max(sym(A_vv) + nu1 L, M) on ker B with nu1 = nu / 2 --
+        all certified upper bounds (inertia).  Once per mesh."""
+        if getattr(self, '_range', None) is not None:
+            return self._range
+        path = self._range_path()
+        import os
+        if path and os.path.exists(path):
+            z = np.load(path)
+            self._range = (float(z['s_far']), [tuple(r) for r in z['Hd']], float(z['beta']), float(z['nu1']))
+            return self._range
+        from sparse_spectrum import plant_heights
+        from bfs.mfree import saddle_range
+        # depths to 50: on the test plant the S-lemma heights reach the bare
+        # bound max |Im W| by depth 50 (2447 s serial for GL's 17 depths, the
+        # last 10 all equal); the bare bound, valid at every depth, closes the
+        # list (numrange_distance then grows without a cap)
+        s_far, Hd = plant_heights(self.A, self.M, depths=(0.5, 1, 2, 5, 10, 20, 50))
+        R = saddle_range(self.A, self.M)
+        T = ((self.A - self.A.T) * 0.5).tocsr(); Z = sp.csr_matrix(self.A.shape)
+        h_bare = max(R.lmax(Z, -T, rtol=1e-2), R.lmax(Z, T, rtol=1e-2))
+        Hd = list(Hd) + [(1e12, h_bare)]
+        nu1 = 0.5 / self.Re
+        H = ((self.A + self.A.T) * 0.5).tocsr()
+        beta = R.lmax(H + nu1 * self.L)
+        self._range = (float(s_far), [tuple(map(float, r)) for r in Hd], float(beta), float(nu1))
+        if path:
+            np.savez(path, s_far=self._range[0], Hd=np.array(self._range[1]), beta=beta, nu1=nu1)
+        return self._range
+
+    def _Llu(self):
+        if getattr(self, '_Llu_', None) is None:
+            import sparse_lu
+            v = np.isin(np.arange(self.n), self.bc_dofs, invert=True) & (self.comp < 2)
+            self._Lv = np.where(v)[0]
+            self._Llu_ = sparse_lu.factor(self.L[self._Lv][:, self._Lv].tocsc())
+        return self._Llu_
+
+    def gbound(self, pa, c, line):
+        """w -> a bound on |G(line + i w')| for every |w'| >= w, G = c^H (s M -
+        A)^-1 M psi_a, M-free (note_algebra BFS section):
+            |G| <= ||c||_{L^-1} ||psi_a||_M sqrt((1/d + (beta - line)_+ / d^2) / nu1)
+        with d <= dist(line + i w, W) from the heights.  The shear sensor is
+        not of the form M psi (no M-norm bound): an H^1 estimate instead, the
+        viscous term controlling ||u||_L."""
+        from sparse_spectrum import numrange_distance
+        s_far, Hd, beta, nu1 = self.range_data()
+        lu = self._Llu(); cv = np.asarray(c, complex)[self._Lv]
+        cL = float(np.sqrt(max(np.real(np.vdot(cv, lu.solve(cv))), 0.0)))
+        pM = float(np.sqrt(max(np.real(np.vdot(pa, self.M @ pa)), 0.0)))
+        ex = max(beta - line, 0.0)
+
+        def gb(w):
+            d = numrange_distance(w, s_far, Hd, line=line)
+            if d <= 0:
+                return np.inf
+            return cL * pM * np.sqrt((1.0 / d + ex / d ** 2) / nu1)
+        return gb
+
+    def plant_poles(self, line, keep=0.6):
+        """(count right of line, hot list) of the plant (winding_cert), from the
+        certified sparse enclosure (sparse_spectrum.plant_eigs_right, M-free),
+        cached on disk per line."""
+        cache = getattr(self, '_poles', None)
+        if cache is None:
+            cache = self._poles = {}
+        key = round(float(line), 9)
+        if key not in cache:
+            import os
+            path = self._range_path()
+            pp = path[:-4] + f'_poles_{key:+.6f}.npz' if path else None
+            if pp and os.path.exists(pp):
+                z = np.load(pp)
+                cache[key] = (int(z['count']), [tuple(h) for h in z['hot']])
+            else:
+                from sparse_spectrum import plant_pole_data_sparse
+                cnt, hot = plant_pole_data_sparse(self.A, self.M, line, keep)
+                cache[key] = (cnt, hot)
+                if pp:
+                    np.savez(pp, count=cnt, hot=np.array(hot).reshape(-1, 2))
+        return cache[key]
+
+    def winding(self, pa, b, c, arow, nvec, K, line, zeros_hint=None):
+        """#{closed-loop eigenvalues with Re > line}, all frequencies
+        (winding_cert.winding_count with the M-free plant data and tail)."""
+        import winding_cert as wc
+        cnt, hot = self.plant_poles(line)
+        return wc.winding_count(self.A, self.M, b, c, arow, nvec, K, line=line, mc=self.mc, p_plant=cnt, hot=hot,
+                                zeros_hint=zeros_hint, ctrl_exact=True, gbound=self.gbound(pa, c, line), real_sym=True)
 
     def cl(self, b, c):
         R = ClosedLoopResolvent(self.M, self.A, b, c, r=self.r, mc=self.mc)

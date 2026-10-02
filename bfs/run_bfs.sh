@@ -10,12 +10,14 @@
 #   DEADLINE  seconds after which no new round starts (default 0 = off)
 #   WALL      the driver's --wall (inner-solve clock budgets; default 54000)
 #   CERT_NSEG line-certificate segments over the MPI pool (default 16; serial runs: 1)
+#   CERT_SPLIT first generation of the gamma certificate's disk sweep (default 23 = the workers)
 #   STABILISE 1 = HIFOO's abscissa-descent phase when the start is infeasible (default 1)
 #
 # The flags are the nominal SISO set of the GL production (STAGE6, the K+B+C
 # runs: SQP inner solve, reduced oracle, slope-climb certificate, progress
-# stop), plus the BFS ones: --plant bfs, MUMPS, the sampled gamma
-# (--bfs-sampled), the band [0, --bfs-band], the interior margin.
+# stop), plus the BFS ones: --plant bfs, MUMPS, gamma certified on [0, 10]
+# (option A; --bfs-sampled N for the sampled value), the interior margin, the
+# nearest-eigenvalue disks with k = 4 (the even pencil's pairs).
 # --nproc 1: the full-model pool is the MPI ranks (bfs/mpipool.py), never a
 # fork pool, and the GL |Omega|-constraint pool (parallel.py) is not used.
 set -eo pipefail
@@ -27,11 +29,11 @@ cd "$(dirname "$0")/.."
 STAB=()
 [ "${STABILISE:-1}" = "1" ] && STAB=(--stabilise)
 exec ${LAUNCH} ${PY:-python} -u run_case_epi.py --plant bfs --ops "${OPS:-bfs/data/ops_fx.npz}" --lu-order mumps \
-    --init "$init" --cold --case K+B+C --r 5 --eps 0.05 --start 0 --nproc 1 --cert_nseg "${CERT_NSEG:-16}" --wlo 0 --whi 8 \
+    --init "$init" --cold --case K+B+C --r 5 --eps 0.05 --start 0 --nproc 1 --cert_nseg "${CERT_NSEG:-16}" --cert-split "${CERT_SPLIT:-23}" --wlo 0 --whi 10 \
     --outer "${OUTER:-40}" --deadline "${DEADLINE:-0}" --wall "${WALL:-54000}" "${STAB[@]}" \
     --inner-budget iters --inner-maxit 10 --inner-maxit-adapt --select-cons on --ctrl-imcap off \
     --cont-anchor defer --sigma2 on --oracle reduced --oracle-inputs on --ctrl-line eps --cert-sweep 0 \
-    --cert-disk strict --cert-near-k 2 --cert-climb slope --wind-ctrl exact --cert-rtol 1e-6 --alpha-argmax on \
+    --cert-disk strict --cert-near-k 4 --cert-climb slope --wind-ctrl exact --cert-rtol 1e-6 --alpha-argmax on \
     --enroll-rel 0.05 --peak-follow on --row-screen 0.05 --converge --inner sqp --sqp-carry --sqp-trust 0.01 \
     --sqp-ctrl block --sqp-row-res-tol 1e-3 --sqp-refine 1e-4 --sqp-clblock on --sigma2-active-gap 0.15 \
     --follow-scan 0 --stop-progress 3:0.0015 --wind-accept off --dense_check 0 --outdir "$out" "$@"

@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""hifoo_init.py -- random starts for the backward-facing step, HIFOO's draw
-(STAGE2: the `hifoo` arm of tools/randstart.py, the better of the two arms at
-GL), REAL (BFS.md 6).
+"""hifoo_init.py -- starts for the backward-facing step: HIFOO's controller
+draw (STAGE2: the `hifoo` arm of tools/randstart.py, the better of the two
+arms at GL), REAL, at the devices of Barbagallo et al. (2012) (BFS.md 6).
 
 Per start: every controller entry N(0, 1) -- the tridiagonal A_c = (d, e, f),
-the output row nvec, the feedthrough K, all real -- and the actuator and
-sensor centres uniform in the domain at least --bfs-margin inside (rejection
-on bfs/plant.py's interior constraint).  The ports are unit-norm, so no
-scaling.  The draw is NOT stabilised here: run_case_epi.py --stabilise does
-HIFOO's abscissa-descent phase (stabilise.py, the sparse line certificate on
-this plant) when the start is infeasible, as at GL.
+the output row nvec, the feedthrough K, all real.  Positions (--positions):
+  paper   (default, user 2026-10-02) the actuator B2 at (0.6, 1.0) -- near
+          separation, figure 1 of the paper (the user's actuator_sensor.edp
+          has (0.87, 1.0)) -- and the sensor C1 window [2.0, 2.6] (figure 1;
+          the script's upstream spy is [2.0, 2.4])
+  random  the actuator centre uniform in the domain, the sensor window start
+          uniform on the floor, both at least --margin inside (rejection)
+The draw is NOT stabilised here: run_case_epi.py --stabilise makes it
+feasible (feasible_start below) when it is not.
 
     python bfs/hifoo_init.py --ops bfs/data/ops_fx.npz --n 8 --seed 0 --out bfs/data/starts
 writes bfs/data/starts/hifoo_000.npz ... (the --init format of run_case_epi.py)
@@ -21,19 +24,25 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [os.path.dirname(HERE)]
 
 
-def draw(rng, r, D, x_range=None, max_tries=100000):
-    x_lo, x_hi, y_lo, y_hi = D.box()
-    if x_range is not None:
-        x_lo, x_hi = max(x_lo, x_range[0]), min(x_hi, x_range[1])
+PAPER_XA = (0.6, 1.0)          # B2, Barbagallo et al. (2012) figure 1
+PAPER_XS = 2.0                 # C1 = [2.0, 2.6], ibid.
 
-    def centre():
-        for _ in range(max_tries):
-            x0 = np.array([rng.uniform(x_lo, x_hi), rng.uniform(y_lo, y_hi)])
-            if D.inside(x0):
-                return x0
-        raise RuntimeError("no interior point drawn")
-    return dict(d=rng.normal(size=r), e=rng.normal(size=r - 1), f=rng.normal(size=r - 1),
-                nvec=rng.normal(size=r), K=float(rng.normal()), xa=centre(), xs=centre())
+
+def draw(rng, r, D, positions='paper', max_tries=100000):
+    ctrl = dict(d=rng.normal(size=r), e=rng.normal(size=r - 1), f=rng.normal(size=r - 1),
+                nvec=rng.normal(size=r), K=float(rng.normal()))
+    if positions == 'paper':
+        return dict(ctrl, xa=np.array(PAPER_XA), xs=np.array([PAPER_XS]))
+    x_lo, x_hi, y_lo, y_hi = D.box()
+    for _ in range(max_tries):
+        xa = np.array([rng.uniform(x_lo, x_hi), rng.uniform(y_lo, y_hi)])
+        if D.inside(xa, 'a'):
+            break
+    else:
+        raise RuntimeError("no interior actuator centre drawn")
+    from bfs.plant import FLOOR_X0
+    xs = np.array([rng.uniform(FLOOR_X0, x_hi - D.pos_margin - D.sensor_len)])
+    return dict(ctrl, xa=xa, xs=xs)
 
 
 def feasible_start(D, arow, nvec, K, b, c, eps, delta=3e-3, tau0=1e-6, pool=None, log=print):
@@ -125,9 +134,8 @@ def main():
     ap.add_argument('--r', type=int, default=5)
     ap.add_argument('--n', type=int, default=8)
     ap.add_argument('--seed', type=int, default=0)
-    ap.add_argument('--margin', type=float, default=0.25, help='as run_case_epi.py --bfs-margin')
-    ap.add_argument('--x-range', dest='x_range', nargs=2, type=float, default=None,
-                    help='restrict the centres\' x (default: the whole domain)')
+    ap.add_argument('--margin', type=float, default=0.05, help='as run_case_epi.py --bfs-margin')
+    ap.add_argument('--positions', choices=['paper', 'random'], default='paper')
     ap.add_argument('--out', default='bfs/data/starts')
     a = ap.parse_args()
     from bfs.plant import BFSPlant
@@ -136,14 +144,15 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     rows = []
     for i in range(a.n):
-        s = draw(rng, a.r, D, a.x_range)
+        s = draw(rng, a.r, D, a.positions)
         nm = f"hifoo_{i:03d}"
-        np.savez(os.path.join(a.out, nm + '.npz'), **s, seed=a.seed, index=i, margin=a.margin)
+        np.savez(os.path.join(a.out, nm + '.npz'), **s, seed=a.seed, index=i, margin=a.margin, positions=a.positions)
         import controller as ctl
         al_c = float(np.max(np.linalg.eigvals(ctl.A_of(s['d'] + 0j, s['e'] + 0j, s['f'] + 0j)).real))
         rows.append(dict(name=nm, xa=np.round(s['xa'], 3).tolist(), xs=np.round(s['xs'], 3).tolist(),
                          K=round(s['K'], 3), alpha_ctrl=round(al_c, 3)))
-    print(json.dumps(dict(out=a.out, n=a.n, seed=a.seed, r=a.r, margin=a.margin, starts=rows), indent=1))
+    print(json.dumps(dict(out=a.out, n=a.n, seed=a.seed, r=a.r, margin=a.margin, positions=a.positions,
+                     starts=rows), indent=1))
 
 
 if __name__ == '__main__':

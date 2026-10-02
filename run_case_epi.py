@@ -445,7 +445,7 @@ def solve_epigraph(D, pk, flags, z0, Omega, t0, eps, wall, H0mode='auto',
             gei = np.array([_Gm[i, i + 1] for i in range(_rr - 1)])
             gfi = np.array([_Gm[i + 1, i] for i in range(_rr - 1)])
             try:
-                _gz = pk.zero_grad() if (getattr(pk, 'mimo', False) or getattr(pk, 'pd', 1) > 1) else dict(n=np.zeros(_rr, complex), K=0j, xa=0.0, xs=0.0)
+                _gz = pk.zero_grad() if (getattr(pk, 'mimo', False) or getattr(pk, 'vec_pos', False)) else dict(n=np.zeros(_rr, complex), K=0j, xa=0.0, xs=0.0)
                 _gz.update(d=gdi, e=gei, f=gfi)
                 g_im = np.real(pk.grad(_gz))
             except Exception:
@@ -455,7 +455,7 @@ def solve_epigraph(D, pk, flags, z0, Omega, t0, eps, wall, H0mode='auto',
             gd = np.array([_G[i, i] for i in range(_rr)])
             ge = np.array([_G[i, i + 1] for i in range(_rr - 1)])
             gf = np.array([_G[i + 1, i] for i in range(_rr - 1)])
-            gc = pk.zero_grad() if (getattr(pk, 'mimo', False) or getattr(pk, 'pd', 1) > 1) else dict(n=np.zeros(_rr, complex), K=0j, xa=0.0, xs=0.0)
+            gc = pk.zero_grad() if (getattr(pk, 'mimo', False) or getattr(pk, 'vec_pos', False)) else dict(n=np.zeros(_rr, complex), K=0j, xa=0.0, xs=0.0)
             gc.update(d=gd.real * 0 + gd, e=ge, f=gf)
             try:
                 g_ctrl = np.real(pk.grad(gc))
@@ -1621,15 +1621,19 @@ def main():
     ap.add_argument('--plant', choices=['gl', 'bfs'], default='gl',
                     help='gl: the Ginzburg-Landau mesh (--ne); bfs: the backward-facing step from --ops (BFS.md)')
     ap.add_argument('--ops', default=None, help='--plant bfs: the operator file (bfs/plant_io.py)')
-    ap.add_argument('--bfs-sampled', dest='bfs_sampled', type=int, default=33,
-                    help='--plant bfs: gamma from a full-model grid of this many points + the reduced model\'s peaks, '
-                         'climbed (no level-set certificate yet, BFS.md 5); 0 = the GL level-set certificate')
-    ap.add_argument('--bfs-margin', dest='bfs_margin', type=float, default=0.25,
-                    help='--plant bfs: actuator and sensor centres stay this far inside the domain (box sides, top, '
-                         'and the lower wall\'s tangent line), hard SQP rows (BFS.md 2)')
-    ap.add_argument('--bfs-band', dest='bfs_band', type=float, default=8.0,
-                    help='--plant bfs: the certified band is [0, this] (real plant: sigma(-w) = sigma(w)), widened '
-                         'to cover the controller poles; no all-frequency tail bound yet (BFS.md 4)')
+    ap.add_argument('--bfs-sampled', dest='bfs_sampled', type=int, default=0,
+                    help='--plant bfs: 0 = gamma CERTIFIED on the band by the level-set disk sweep (option A, BFS.md 4); '
+                         'N > 0 = the sampled maximum of a full-model grid of N points + the reduced model\'s peaks, '
+                         'climbed (not a certificate)')
+    ap.add_argument('--bfs-margin', dest='bfs_margin', type=float, default=0.05,
+                    help='--plant bfs: the actuator centre stays this far inside the domain (box sides, top, the lower '
+                         'wall\'s tangent line) and the sensor window this far from the outlet; hard SQP rows (BFS.md 2)')
+    ap.add_argument('--bfs-act-comp', dest='bfs_act_comp', choices=['v', 'u'], default='v',
+                    help='--plant bfs: the momentum component the actuator forces (v: Barbagallo et al. 2012; u: the '
+                         'user\'s actuator_sensor.edp)')
+    ap.add_argument('--bfs-band', dest='bfs_band', type=float, default=10.0,
+                    help='--plant bfs: gamma is certified on [0, this] (real plant: sigma(-w) = sigma(w); b = 10, '
+                         'user 2026-10-02), widened to cover the controller poles (BFS.md 4)')
     ap.add_argument('--lu-order', dest='lu_order', choices=['colamd', 'mmd_at_plus_a', 'mumps'], default='colamd',
                     help='column ordering of every full-model sparse LU (sparse_lu.py): colamd = scipy default '
                          '(bit-identical frozen path); mmd_at_plus_a = symmetric minimum degree for 2-D/3-D FE '
@@ -2246,8 +2250,9 @@ def main():
         # the backward-facing step (BFS.md): its M is the velocity mass,
         # singular, never factorised (no massops warm-up)
         from bfs.plant import BFSPlant
-        D = BFSPlant(a.ops, r=a.r); D.pos_margin = float(a.bfs_margin)
-        print(f"BFS plant: {a.ops}, n = {D.n}, Re = {D.Re:g}, ports: Gaussians of std {D.sigma_port}, "
+        D = BFSPlant(a.ops, r=a.r, act_comp=a.bfs_act_comp); D.pos_margin = float(a.bfs_margin)
+        print(f"BFS plant: {a.ops}, n = {D.n}, Re = {D.Re:g}, ports: Gaussian {D.act_comp}-forcing (sig {D.sig_act:.4f}), "
+              f"floor shear window (L {D.sensor_len}, edge {D.sensor_edge}), "
               f"LU backend {a.lu_order}", flush=True)
     else:
         D = FECoDesign(ne=a.ne, r=a.r, sob_len=a.sob_len)
@@ -2307,13 +2312,14 @@ def main():
     _ctrl_borrowed, _ctrl_default = False, None
     _resume_gamma = None
     if BFS:
-        # the start (bfs/hifoo_init.py): a REAL order-r controller for the
-        # unit-norm ports and the two centres; no seed catalogue, no rescaling
+        # the start (--init: bfs/hifoo_init.py, or the paper's devices): a REAL
+        # order-r controller, the actuator centre (x, y) and the sensor window
+        # start x_s; no seed catalogue, no rescaling
         flags['real_ctrl'] = True
         ini = np.load(a.init, allow_pickle=True)
         arow0 = tuple(np.asarray(ini[k], complex) for k in ('d', 'e', 'f'))
         nvec0 = np.asarray(ini['nvec'], complex); K0 = complex(ini['K'])
-        xa0, xs0 = np.asarray(ini['xa'], float), np.asarray(ini['xs'], float)
+        xa0, xs0 = np.asarray(ini['xa'], float).ravel(), np.atleast_1d(np.asarray(ini['xs'], float))
         va0 = vs0 = None
     else:
         ini = np.load(a.init or f"init_ne{a.ne}.npz")
@@ -2583,7 +2589,7 @@ def main():
         print(f"BFS plant spectrum near the axis (shift-invert, Im in [0, {a.whi + a.wpad:g}]): "
               f"{len(_ev)} eigenvalues, rightmost {_ev[np.argmax(_ev.real)]:.4f} "
               f"({'converged' if D.plant_ev_ok else 'NOT all shifts converged'}, {time.time() - _t0:.0f} s)", flush=True)
-        _bad = [k_ for k_, x_ in (('actuator', xa0), ('sensor', xs0)) if not D.inside(x_)]
+        _bad = [k_ for k_, x_, sd_ in (('actuator', xa0, 'a'), ('sensor', xs0, 's')) if not D.inside(x_, sd_)]
         if _bad:
             raise SystemExit(f"BFS: the start's {' and '.join(_bad)} centre is not inside the domain "
                              f"(margin {D.pos_margin:g}, --bfs-margin)")
@@ -2603,6 +2609,19 @@ def main():
             if _fi['tau'] <= 0.0:
                 print("FATAL: the open loop is not certified inside the margin (BFS.md 6)", flush=True)
                 return
+            if a.wind:
+                # the continuation chain's result, checked independently of it:
+                # the all-frequency count right of -eps (BFS.md 4)
+                _bb_, _cc_, _pa_, *_ = D.bc(xa0, xs0)
+                _t0 = time.time()
+                _wo = D.winding(_pa_, _bb_, _cc_, arow0, nvec0, K0, -a.eps)
+                _stab_rec['count_right_of_eps'] = int(_wo['count']) if _wo['ok'] else None
+                print(f"  feasible start: {_stab_rec['count_right_of_eps']} closed-loop eigenvalue(s) right of "
+                      f"Re = {-a.eps:g} over all frequencies (winding count, {_wo['npts']} pts, "
+                      f"{time.time() - _t0:.0f} s)", flush=True)
+                if _wo['ok'] and _wo['count'] > 0:
+                    print("FATAL: the count contradicts the continuation chain (BFS.md 6)", flush=True)
+                    return
     pk_args = (arow0, nvec0, K0, xa0, xs0, va0, vs0)
     if a.field_basis != 'none' and (flags.get('FB') or flags.get('FC')):
         # FREE FIELDS ON A TRUNCATED BASIS (STAGE5 6): va = Phi_a beta_a,
@@ -3075,12 +3094,13 @@ def main():
                 _tangent_sides.add(key)
                 return U_[:, s_ > 1e-12 * s_[0]]
             if BFS:
-                # free 2-D centres (BFS.md 5): the ports' second-order jets at
-                # the round's design, rebuilt every round (as the atoms' tangent)
+                # free ports (BFS.md 5): the port vectors' second-order jets in
+                # their positions at the round's design, rebuilt every round (as
+                # the atoms' tangent)
                 def _jet_basis(z_, key):
                     _xa_j, _xs_j = pk.unpack(z_)[3:5]
-                    J_ = D.jet(_xa_j if key == 'xa' else _xs_j, 'a' if key == 'xa' else 's')
-                    U_, s_, _ = np.linalg.svd(np.asarray(D.M @ J_.T, complex), full_matrices=False)
+                    J_ = D.port_jet(_xa_j if key == 'xa' else _xs_j, 'a' if key == 'xa' else 's')
+                    U_, s_, _ = np.linalg.svd(np.asarray(J_.T, complex), full_matrices=False)
                     _tangent_sides.add(key)
                     return U_[:, s_ > 1e-12 * s_[0]]
                 _tangent_basis_fields = _tangent_basis
@@ -4395,12 +4415,11 @@ def main():
     band_check = {}
     _band_lam_final = []                  # the located set of the final band check
     if BFS:
-        # the final band check, the winding count and the all-frequency tail
-        # bound all rest on enclosures that use M^-1 (the plant's numerical
-        # range); the singular velocity mass has none (BFS.md 4)
-        print(f"BFS: end-of-run certificates not run (final band check, winding count, all-w tail: M^-1 "
-              f"enclosures); gamma is the {'sampled maximum' if certified_norm.sampled else 'level-set value'} "
-              f"on [0, {a.whi:g}], stability the line certificate on the band", flush=True)
+        # gamma on the band [0, b] (the level-set certificate, or the sampled
+        # maximum with --bfs-sampled > 0); stability over ALL frequencies by
+        # the M-free winding count below; the final band check is not run
+        print(f"BFS: gamma is the {'sampled maximum' if certified_norm.sampled else 'certified level-set value'} "
+              f"on [0, {a.whi:g}]; stability: the winding count over all frequencies (BFS.md 4)", flush=True)
     if a.ctrl_imcap == 'off' and not BFS:
         try:
             _hwf = band_from_closedloop(arow, nvec, K, b, c, count=True)
@@ -4426,7 +4445,24 @@ def main():
     # Re = -eps/2 exactly, matrix-free, with the near-line eigenvalues the
     # sweep already harvested serving as resolution hints for the tracker.
     wind_n = None
-    if a.wind and not BFS:                   # the count's tail needs the plant enclosure (M^-1, BFS.md 4)
+    wind_info = None
+    if a.wind and BFS:
+        # the M-free count (bfs/plant.BFSPlant.winding: plant data from the
+        # inertia-certified enclosure, H^1 tail for the wall-shear sensor)
+        _line = -0.5 * a.eps
+        try:
+            _t0 = time.time()
+            _out = D.winding(pa, b, c, arow, nvec, K, _line, zeros_hint=[z for z in (watch_cur or []) if z is not None])
+            wind_n = int(_out['count']) if _out['ok'] else None
+            wind_info = dict(count=wind_n, npts=int(_out.get('npts', 0)), wtail=float(_out.get('wtail', np.nan)),
+                             p_plant=int(_out.get('p_plant', -1)), seconds=round(time.time() - _t0, 1))
+            print(f"winding certificate: {wind_n if wind_n is not None else 'INCONCLUSIVE'} eigenvalue(s) right of "
+                  f"Re={_line:+.4f} over all frequencies ({wind_info['npts']} pts, tail from |w| = "
+                  f"{wind_info['wtail']:.1f}, {wind_info['seconds']:.0f} s)"
+                  + (" -- UNCONDITIONALLY stable with eps/2 margin" if wind_n == 0 else ""), flush=True)
+        except Exception as _e:
+            print(f"winding certificate failed non-fatally: {_e!r}", flush=True)
+    if a.wind and not BFS:
         # 0 right of -eps at acceptance (the same design) implies 0 right of
         # -eps/2: the save-time count is then not repeated (STAGE6 6.29)
         _implied = _wind_best is not None and np.array_equal(_wind_best[0], zbest)
@@ -4647,7 +4683,7 @@ def main():
                 band_incomplete=int(n_band_incomplete[0]), band_check=band_check, all_w=all_w,
                 all_w_outside_band=int(n_allw_outside[0]),
                 eps=float(a.eps),
-                wind_count=wind_n,
+                wind_count=wind_n, wind_info=wind_info,
                 sym=bool(a.sym),
                 sym_branch=(float(flags.get('sym_branch', 1.0))
                             if a.sym else None),

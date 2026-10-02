@@ -10,14 +10,20 @@
 # also needs:
 #   clarabel   the SQP subproblem's conic solver (sqp_inner.py; GL used it too,
 #              but check_env.py never checked it)
+#   qdldl      the sparse LDL^T whose inertia certifies the numerical-range
+#              bounds without M^-1 (bfs/mfree.py; MUMPS gives no inertia in
+#              complex arithmetic)
 #   meshio     only for bfs/mesh_coarse.py (the small test plant)
 #   h5py       idem
-# Nothing else is installed or upgraded; numpy/scipy/PETSc stay as they are.
+# Each missing one is pip-installed INTO the active env (codesign's
+# $CONDA_PREFIX), so the env itself is completed, once; present ones are left
+# alone.  Nothing else is installed or upgraded; numpy/scipy/PETSc stay as
+# they are.
 set -eo pipefail
 cd "$(dirname "$0")/.."
 source ./env.sh
 echo "python: $(command -v python) ($(python -V 2>&1))"
-for mod in clarabel meshio h5py; do
+for mod in clarabel qdldl meshio h5py; do
     if python -c "import $mod" 2>/dev/null; then
         echo "  $mod: present ($(python -c "import $mod; print(getattr($mod, '__version__', '?'))"))"
     else
@@ -29,7 +35,7 @@ done
 # the pieces the fork imports, in one go (no MPI_Init here: petsc4py is
 # imported without initialising on a login node)
 python - <<'EOF'
-import numpy, scipy, clarabel, torch
+import numpy, scipy, clarabel, qdldl, torch
 from pygranso.pygranso import pygranso
 import mpi4py, petsc4py, slepc4py, dolfinx
 print(f"numpy {numpy.__version__}, scipy {scipy.__version__}, clarabel {clarabel.__version__}, "

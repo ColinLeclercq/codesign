@@ -47,9 +47,12 @@ class Packer:
         self.sx = 0.30          # placement scale
         self.nth = len(th)
         # backward-facing step (BFS.md 2): a REAL controller (only the real
-        # parts are design variables) and 2-D placements (pos_dim entries each)
+        # parts are design variables) and vector placements (D.pos_dims: the
+        # actuator centre (x, y), the sensor window start x_s); scalar (GL) else
         self.real_ctrl = bool(flags.get('real_ctrl'))
-        self.pd = int(getattr(D, 'pos_dim', 1))
+        pds = getattr(D, 'pos_dims', None)
+        self.vec_pos = pds is not None
+        self.pd_a, self.pd_s = (int(pds['a']), int(pds['s'])) if pds else (1, 1)
 
     def z0(self):
         z = []
@@ -111,14 +114,15 @@ class Packer:
         else:
             arow, nvec, K = self.arow0, self.nvec0, self.K0
         xa = self.xa0; xs = self.xs0
-        pd = self.pd
         if self.f['B']:
-            xa = float(z[i] * self.sx) if pd == 1 else np.asarray(z[i:i + pd], float) * self.sx; i += pd
+            pd = self.pd_a
+            xa = np.asarray(z[i:i + pd], float) * self.sx if self.vec_pos else float(z[i] * self.sx); i += pd
         if self.f['C']:
             if self.sym_pos:
                 xs = -xa
             else:
-                xs = float(z[i] * self.sx) if pd == 1 else np.asarray(z[i:i + pd], float) * self.sx; i += pd
+                pd = self.pd_s
+                xs = np.asarray(z[i:i + pd], float) * self.sx if self.vec_pos else float(z[i] * self.sx); i += pd
         va = vs = None
         Pa, Ps = getattr(self.D, 'field_basis_a', None), getattr(self.D, 'field_basis_s', None)
         Aa, As = getattr(self.D, 'atoms_a', None), getattr(self.D, 'atoms_s', None)
@@ -245,7 +249,7 @@ class Packer:
         r, n = self.D.r, self.D.n
         return dict(d=np.zeros(r, complex), e=np.zeros(max(r - 1, 0), complex), f=np.zeros(max(r - 1, 0), complex),
                     n=np.zeros(r, complex), K=0j,
-                    xa=(0.0 if self.pd == 1 else np.zeros(self.pd)), xs=(0.0 if self.pd == 1 else np.zeros(self.pd)),
+                    xa=(np.zeros(self.pd_a) if self.vec_pos else 0.0), xs=(np.zeros(self.pd_s) if self.vec_pos else 0.0),
                     va=np.zeros(n, complex), vs=np.zeros(n, complex))
 
     def atom_params(self, z):

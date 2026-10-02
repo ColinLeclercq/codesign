@@ -92,9 +92,9 @@ class _ProxyCL:
     def placement(self, D, side, x0):
         """W^H M dpsi(x0) (actuator side) / V^H M dpsi(x0) (sensor side), once per
         design and position."""
-        if getattr(D, 'pos_dim', 1) == 2:
-            # backward-facing step (BFS.md 2): a 2-D centre, (kd, 2)
-            key = (side, float(x0[0]), float(x0[1]))
+        if getattr(D, 'pos_dims', None) is not None:
+            # backward-facing step (BFS.md 2): vector positions, (kd, pos_dims[side])
+            key = (side,) + tuple(float(t) for t in np.atleast_1d(x0))
             v = self._pl.get(key)
             if v is None:
                 B = self._W if side == 'a' else self._V
@@ -128,7 +128,7 @@ class _ProxyCL:
         bt = np.asarray(self._r.b, complex).ravel(); ct = np.asarray(self._r.c, complex).ravel()
         Sa = Kfb * np.vdot(ct, xp) + np.dot(nv, xc)
         Sc = np.vdot(zp, bt) * Kfb + D.mc * np.sum(np.conj(zc))
-        if getattr(D, 'pos_dim', 1) == 2:
+        if getattr(D, 'pos_dims', None) is not None:
             if flags['B']:
                 out['xa'] = np.real((zp.conj() @ self.placement(D, 'a', xa)) * Sa / eta)
             if flags['C']:
