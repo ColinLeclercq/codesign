@@ -23,6 +23,7 @@
 #   5. one start end to end on the test plant, 24 ranks (bfs/run_bfs.sh):
 #      feasible start, one round with gamma certified on [0, 10], the
 #      all-frequency winding count
+#   6. its figures (bfs/postproc.py)
 # Send me the log: steps 3 to 5 fix the production job's size.
 #
 # LAUNCH: the conda env's mpiexec (the MPI petsc4py/mpi4py were built with).
@@ -35,7 +36,7 @@ echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none}  $(date -Is) ==="
 source ./env.sh
 echo "=== python: $(command -v python) ($(python -V 2>&1)) ==="
 LAUNCHER=${LAUNCHER:-mpiexec}
-python -c "import clarabel, qdldl" || { echo "*** clarabel / qdldl missing: run bash bfs/setup_cluster.sh on the login node"; exit 1; }
+python -c "import clarabel, qdldl, matplotlib" || { echo "*** clarabel / qdldl / matplotlib missing: run bash bfs/setup_cluster.sh on the login node"; exit 1; }
 
 echo "=== 1. operators (dolfinx, nsforms.py) ==="
 # always rebuilt (seconds): the file format grows with the code (the shear trace
@@ -59,4 +60,8 @@ echo "===    certified on [0, 10], the all-frequency winding count at the end ==
 python bfs/hifoo_init.py --ops bfs/data/ops_coarse.npz --n 1 --seed 0 --out smoke_bfs/starts
 export OPS=bfs/data/ops_coarse.npz OUTER=1 LAUNCH="$LAUNCHER -n 24" PY=python
 time bash bfs/run_bfs.sh smoke_bfs/run smoke_bfs/starts/hifoo_000.npz
+
+echo "=== 6. its figures (bfs/postproc.py), 24 ranks: singular values with/without control, modes, Bode ==="
+time $LAUNCHER -n 24 python -u bfs/postproc.py --ops bfs/data/ops_coarse.npz --rec smoke_bfs/run/K_B_C_s0_bfs.npz
+ls smoke_bfs/run/K_B_C_s0_bfs_post
 echo "=== smoke test done $(date -Is) ==="

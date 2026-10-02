@@ -3280,6 +3280,7 @@ def main():
             print(f"continuation anchor verified: alpha={_al0:+.4f}, watching "
                   f"{len(watch_cur)} near-line eigenvalue(s)", flush=True)
     _t_round = []                                # round start times (--deadline)
+    _deadline_stop = False                       # stopped by --deadline: the checkpoint stays (resume)
     for it in range(a.outer):
         if BFS:
             # the run-time ledger (BFS.md 7): wall so far, the driver's own MUMPS
@@ -3295,6 +3296,7 @@ def main():
             if it > 0 and (_t_round[-1] - t_start) + 1.25 * _dur + a.deadline_final > a.deadline:
                 print(f"  DEADLINE STOP: {(_t_round[-1] - t_start) / 3600:.2f} h elapsed, the longest round took "
                       f"{_dur / 3600:.2f} h, --deadline {a.deadline / 3600:.2f} h", flush=True)
+                _deadline_stop = True
                 break
         # ALWAYS restart the inner solve from the best CERTIFIED point.  The
         # inner problem only sees Omega, so its optimum can sit where an
@@ -4565,7 +4567,10 @@ def main():
     # Lanczos -- the S-lemma heights of sparse_spectrum -- plus the loop's gain
     # bound), then the sparse level set proves nothing exceeds gamma on [-W, W].
     # Together: gamma over ALL w, at any n.
-    all_w = dict(sampled=True, band=[0.0, float(a.whi)]) if BFS else {}
+    # BFS: gamma is the level-set value on the band (certified, or the sampled maximum with
+    # --bfs-sampled N); beyond the band nothing is checked (BFS.md 4)
+    all_w = (dict(certified=not a.bfs_sampled, sampled=bool(a.bfs_sampled), band=[0.0, float(a.whi)],
+                  beyond_band='not checked') if BFS else {})
     if _allw_best is not None and np.array_equal(_allw_best[0], zbest) and gam <= _allw_best[1] * (1.0 + 1e-12):
         # the best design's own all-w certificate, at acceptance, at this level:
         # not repeated (STAGE6 6.29)
@@ -4743,9 +4748,11 @@ def main():
                 parent_gamma=None, spike_suspect=bool(al > -0.01),
                 gain_peak_over_median=float(gain.max() /
                                             max(np.median(gain), 1e-30)),
-                history=hist)
+                history=hist, deadline_stop=bool(_deadline_stop))
     json.dump(summ, open(tag + '.json', 'w'), indent=1)
-    for _c in (tag + '_ckpt.npz', tag + '_ckpt.json'):
+    # a deadline stop is not the end of the run: the checkpoint stays, so the
+    # re-submitted job resumes from it (BFS.md 7); a finished run removes it
+    for _c in (() if _deadline_stop else (tag + '_ckpt.npz', tag + '_ckpt.json')):
         try:
             if os.path.exists(_c):
                 os.remove(_c)

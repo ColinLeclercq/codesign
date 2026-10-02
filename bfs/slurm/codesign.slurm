@@ -27,8 +27,9 @@
 # certified poles, once per mesh).
 #
 # Time: the driver stops starting rounds when one more would not fit before
-# DEADLINE (14 h 30 min after its start, with 30 min reserved for the final
-# certificate and save), so the job finishes inside its 15 h with a record
+# DEADLINE (14 h 15 min after its start; with the driver's 30 min reserve the
+# last round ends by 13 h 45, leaving 75 min for the final certificate, the
+# winding count, the save and the figures), so the job finishes inside its 15 h with a record
 # (OUT/start_XXX/K_B_C_s0_bfs.json/.npz).  Re-submitting the same command
 # resumes every unfinished start from its checkpoint (accepted designs, the
 # working set and the band are stored); a finished start is not redone.
@@ -47,14 +48,22 @@ echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none} (array ${SLURM_ARRAY_JOB_I
 echo "=== python: $(command -v python) ($(python -V 2>&1)); start $NAME (seed $SEED) -> $RUN ==="
 [ -f bfs/data/ops_fx.npz ] || { echo "*** bfs/data/ops_fx.npz missing: run bfs/slurm/smoke.slurm first"; exit 1; }
 [ -f bfs/data/ops_fx_range.npz ] || { echo "*** bfs/data/ops_fx_range.npz missing: run bfs/slurm/plant_cert.slurm first"; exit 1; }
+post() {      # the figures and data of the saved record (bfs/postproc.py, BFS.md 7)
+    $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/postproc.py --ops bfs/data/ops_fx.npz --rec "$RUN/K_B_C_s0_bfs.npz" \
+        || echo "*** postproc failed (the record is saved; rerun: sbatch the same array)"
+}
 if [ -f "$RUN/K_B_C_s0_bfs.json" ] && [ ! -f "$RUN/K_B_C_s0_bfs_ckpt.npz" ]; then
-    echo "start $NAME already finished ($RUN/K_B_C_s0_bfs.json)"; exit 0
+    echo "start $NAME already finished ($RUN/K_B_C_s0_bfs.json)"
+    [ -f "$RUN/K_B_C_s0_bfs_post/post.json" ] || post
+    exit 0
 fi
 # the catalogue is deterministic in (SEED, NSTART): every array task draws the
 # same set into its own directory and takes its own entry
 mkdir -p "$RUN"
 python bfs/hifoo_init.py --ops bfs/data/ops_fx.npz --n "$NSTART" --seed "$SEED" --out "$RUN/catalogue" > "$RUN.catalogue.json"
-export OPS=bfs/data/ops_fx.npz OUTER=${OUTER:-40} DEADLINE=${DEADLINE:-52200} PY=python
+export OPS=bfs/data/ops_fx.npz OUTER=${OUTER:-40} DEADLINE=${DEADLINE:-51300} PY=python
 export LAUNCH="$LAUNCHER -n ${SLURM_NTASKS:-24}"
 bash bfs/run_bfs.sh "$RUN" "$RUN/catalogue/$NAME.npz"
+# the figures of the saved record, finished or stopped at the deadline (then they show the progress)
+[ -f "$RUN/K_B_C_s0_bfs.json" ] && post
 echo "=== done $(date -Is) ==="

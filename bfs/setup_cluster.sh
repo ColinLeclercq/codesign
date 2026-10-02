@@ -15,20 +15,22 @@
 #              complex arithmetic)
 #   meshio     only for bfs/mesh_coarse.py (the small test plant)
 #   h5py       idem
+#   matplotlib the figures of bfs/postproc.py (run at the end of every start)
 # Each missing one is pip-installed INTO the active env (codesign's
 # $CONDA_PREFIX), so the env itself is completed, once; present ones are left
-# alone.  Nothing else is installed or upgraded; numpy/scipy/PETSc stay as
-# they are.
+# alone.  Only matplotlib brings its own small dependencies (pillow,
+# kiwisolver, ...); numpy/scipy/PETSc are never upgraded (pip installs only
+# what is missing).
 set -eo pipefail
 cd "$(dirname "$0")/.."
 source ./env.sh
 echo "python: $(command -v python) ($(python -V 2>&1))"
-for mod in clarabel qdldl meshio h5py; do
+for mod in clarabel qdldl meshio h5py matplotlib; do
     if python -c "import $mod" 2>/dev/null; then
         echo "  $mod: present ($(python -c "import $mod; print(getattr($mod, '__version__', '?'))"))"
     else
         echo "  $mod: MISSING -> pip install $mod (into $CONDA_PREFIX)"
-        python -m pip install --no-deps "$mod"
+        python -m pip install $([ "$mod" = matplotlib ] || echo --no-deps) "$mod"
         python -c "import $mod" && echo "  $mod: installed"
     fi
 done

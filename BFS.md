@@ -190,6 +190,7 @@ uses:
 - Tail: |G(s)| <= ||c||_{L^-1} ||psi_a||_M sqrt((1/d + (beta - Re s)_+ / d^2) / nu1), d the numerical-range distance, L the velocity stiffness (exported with the operators), nu1 = nu/2 -- the H^1 estimate (note). It decays like d^-1/2 (the Stokes layer makes that rate genuine), so W_T grows like the square of the feedthrough K; test plant, a feasible start with K = 0.005: W_T = 120.
 - Plant data: the plant eigenvalues right of line - 0.6, certified complete by the M-free enclosure (rectangle + tiles exhausted by nearest-k shift-invert; the norm-based empty tile is off for the BFS, `sparse_spectrum.FREE_TILE = False`). Test plant: none right of -0.025, 282 within 0.6 of it (36 min serial, once per mesh).
 - Used at the end of every run (record: `wind_count`, `wind_info`) and to check the feasible start (count right of -eps, which must be 0).
+- Where the points go (test plant, 2026-10-02): 13 of 3617 beyond w = 30 with W_T = 120; 17 with W_T = 1e3 or 1e4 (the step grows to W_T / 8 once f is smooth). The march's cost is the hot region below w = 30: the plant poles near the line and the loop's zeros, which do not depend on the sensor type. A velocity sensor (c = M psi_s, tail ~ 1/d instead of d^-1/2, W_T ~ |K| instead of K^2) would save a few points per count, nothing more.
 - `bfs/plant_cert.py` (`bfs/slurm/plant_cert.slurm`) computes the plant data once per mesh, over the pool, cached next to the operator file.
 
 **Plant spectrum near the axis** (`plant_spectrum`): shift-invert at shifts on [0, band + pad], once, cached for the line certificate's region (test plant: rightmost -0.1148; fine mesh: -0.1149).
@@ -225,12 +226,24 @@ ones.
 **Stopping before the time limit**
 - `--deadline S` (general; default 0 = off): no new round once elapsed time + 1.25 x the longest round + `--deadline-final` (default 1800 s) would pass S.
 - A job time limit then never cuts a round or the final save in half.
-- A resubmission resumes from the checkpoint (auto-resume, unchanged).
+- A resubmission resumes from the checkpoint (auto-resume). A deadline stop saves the record (`deadline_stop: true`) and now keeps the checkpoint; before 2026-10-02 the save removed it, so the resubmitted job took the start for finished.
 
 **End of run and record**
 - The all-frequency winding count right of -eps/2 (section 4); the final band check is not run.
 - The record stores 2-D centres as lists.
 - The tag is `K_B_C_s0_bfs` (it was `_ne200`).
+
+**What a run writes** (in its OUTDIR)
+- `K_B_C_s0_bfs.npz`: the design (d, e, f, nvec, K, xa, xs), psi_a and the sensor vector c, gamma, alpha, the certificate's active frequencies, and sigma_1 of the closed loop on the band (`omega_grid`, `gain`, from the reduced model, for a quick look).
+- `K_B_C_s0_bfs.json`: the summary: gamma, alpha, the band, `all_w` (`certified` on [0, whi] or `sampled`; beyond the band not checked), the feasible start (`stabilise`, its count right of -eps), `wind_count`/`wind_info`, the certificate's disk statistics, the per-round history, timings.
+- `K_B_C_s0_bfs_ckpt.npz`: the checkpoint (resume); removed when the run finishes, kept after a deadline stop.
+- The log (slurm `logs/`), with a `[ledger]` line per round.
+- `K_B_C_s0_bfs_post/` (`bfs/postproc.py`, run by `codesign.slurm` after every saved record, or by hand):
+  - `sigma.png`: sigma_1, sigma_2, sigma_3 on [0, W], W = the final band edge (at least 10), without control (open loop) and with it, and gamma as a horizontal line;
+  - `modes_w<w>.png`: at the open-loop peak, the closed-loop peak and `--omegas` (default 0.3, 1.5), the optimal forcing (right singular vector of sigma_1) and response (left), without and with control, Re u (`--comp v` for v), with the actuator (half-amplitude circle and centre) and the sensor window drawn on every panel; the forcing is zoomed on the step;
+  - `controller.png`: the controller's Bode plot (|k(i w)|, phase; the band shaded; its poles listed);
+  - `post.npz`: every number and field behind them (singular values, the forcing f and response q of sigma_1 as dof vectors with their coordinates, k(i w)); `post.json`: peaks and timings. `--replot` redraws the figures from `post.npz` alone.
+- How the vectors come without M^-1: sigma_k^2 are the eigenvalues of T^H M T M acting on the forcing f (the driver's M T^H M T with its factors cycled, so the eigenvector is the field itself, not its load M f); one LU per frequency serves both loops (Woodbury for the closed loop); k = 3, ARPACK.
 
 ## 6. Starts, and the small test plant
 
@@ -283,7 +296,7 @@ ones.
 
 **Cluster** (env.sh: conda `codesign`, DOLFINx 0.11, complex PETSc 3.25.3, SLEPc 3.25.1)
 - `bfs/setup_cluster.sh`, once, on the login node:
-  - installs clarabel (the SQP's solver; `check_env.py` never checked it) if it is missing, and meshio and h5py for the test plant;
+  - installs clarabel (the SQP's solver; `check_env.py` never checked it) and qdldl (the inertia certificates) if they are missing, meshio and h5py for the test plant, and matplotlib for the figures;
   - then imports everything the fork needs.
 - `bfs/slurm/smoke.slurm` (1 node, 3 h limit; expected 1 to 1.5 h):
   1. the operators (always rebuilt: the file now carries the shear trace and the stiffness);
@@ -291,11 +304,13 @@ ones.
   3. `bench_mumps.py` (96 ranks factor and solve at once, which is the per-task cost under full-node contention);
   4. the test plant's certified range and poles (`plant_cert.py`, 24 ranks);
   5. one start end to end on the test plant, 24 ranks: feasible start and its count, one round with gamma certified on [0, 10], the all-frequency count at the end.
+  6. its figures (`postproc.py`, 24 ranks).
 - `bfs/slurm/plant_cert.slurm` (once per mesh, 48 ranks, under 8 h): the full mesh's certified range and poles, cached next to `ops_fx.npz`.
 - `bfs/slurm/codesign.slurm`:
   - an array job, one start per task (HIFOO's controller draw at the paper's B2 and C1);
   - 24 ranks per start (the driver and 23 workers) and 240 GB: two starts per 96-core node (the gamma certificate's 2n pencil factor is 3.9 GB in every worker);
-  - 15 h limit, `--deadline` at 14 h 30, with 30 min reserved for the final save and count;
+  - 15 h limit, `--deadline` at 14 h 15: with the driver's 30 min reserve the last round ends by 13 h 45, leaving 75 min for the final certificate, the count, the save and the figures;
+  - then `bfs/postproc.py` on the saved record (also after a deadline stop: the figures then show the progress); a finished start re-submitted only draws missing figures;
   - resubmitting resumes unfinished starts; it refuses to start without the plant certificate.
 - The launcher is the conda env's `mpiexec` (`LAUNCHER=` to change).
 
@@ -336,7 +351,8 @@ smoke test, 96 ranks at once on one node):
 - **Plant certificate** (once per mesh): about 2 h on 48 ranks.
 - **Start-up:** plant spectrum, feasible start, its winding count, the anchor and the start's certificate: about 1 to 1.5 h.
 - **One round:** 30 to 40 min as before (the cluster's faster factorisation offsets the slower solves under load) plus the certificate, 5 to 10 min over 23 workers: **35 to 50 min**.
-- **End:** the final certificate and the all-frequency count, 30 to 50 min (the deadline leaves at least 1 h: no round starts that would end after 14 h).
+- **End:** the final certificate and the all-frequency count, 30 to 50 min.
+- **Figures** (`postproc.py`): test plant 245 frequencies x 1.7 s (both loops, k = 3, one LU each); full mesh about 24 s each, so about 100 min of task time, **5 to 10 min** over 23 workers.
 - **In the 15 h job:** about **15 to 20 rounds**. GL K+B+C needed 20 to 40 rounds to converge; a second job (resume from the checkpoint) may be needed.
 - **Throughput:** 2 starts per node; 8 starts on 4 nodes.
 
@@ -347,7 +363,8 @@ smoke test, 96 ranks at once on one node):
   - the SQP position rows;
   - the deadline;
   - the pooled-sweep harvest;
-  - the mpipool environment test.
+  - the mpipool environment test;
+  - the record's `all_w` label and the checkpoint kept after a deadline stop (2026-10-02).
 - Operators and gains: section 1.
 - MPI task farm, 3 ranks: identical to serial.
 - Test plant, MUMPS, serial (1 core), from `bfs/data/init_test.npz` (a stable hand-made start; file removed with the Gaussian ports):
@@ -370,7 +387,15 @@ smoke test, 96 ranks at once on one node):
 - All-frequency winding count right of -0.025 at that design (alpha = -0.0501): **0** (winding -4.6e-15), W_T = 120, 3617 points on [0, 120] (real symmetry), 2161 s serial, no hints.
 - The same count pooled (MPI, 2 ranks: 8 segments on the workers, the path of every production run): **0** (winding 8.2e-16), 3374 points, 2013 s of task time; the ledger's projection on 23 workers is 261 s (the longest segment).
 
+*Post-processing (2026-10-02; test plant, the design above)*
+- sigma_1 with control equals the driver's `gain` to 1e-10 at w = 0, 0.69, 5; at the certificate's peak 1645.2081 vs the record's certified 1645.2110 (the grid's 245 points, active frequencies included).
+- **Without control the peak is lower: 1463.87 at w = 0.74.** The HIFOO start (a random controller scaled to feasibility, gamma 1655.3) and its first round (1645.2) amplify more than no controller at all, everywhere below w = 1 (at w = 0: 121.8 vs 51.8). See section 9.
+- Forcing at the peak: concentrated on the step's corner and shear layer, under the actuator; response: the shear-layer wavepacket from x = 5 to the outlet at x = 30 (not decayed there: the truncated domain).
+- 425 s for the curves, 7 s for the vectors (MPI, 2 ranks).
+
 ## 9. Open items
+
+- **Starts below the open loop:** the zero controller is feasible (the plant is stable) with gamma = the open-loop peak (1463.9 on the test plant), while the HIFOO starts begin above it. A start at the zero controller (or a small multiple of a HIFOO draw) would begin the descent below; not yet in the catalogue.
 
 - **The disks of the gamma certificate** are certificates by exhibition: each comes from eigenvalues Arnoldi returned converged (residual 1e-9) nearest the shift. A set that does not converge is retried, then the interval bisected; nothing is assumed. The norm-based (eigenvalue-free) radius is rigorous but 1e-7 to 1e-10 here, so it cannot replace them (section 4).
 - **Plant certificate on the full mesh:** about 2 h on 48 ranks projected from the test plant (41 + 36 min serial); not yet run.
