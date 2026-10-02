@@ -57,17 +57,28 @@ def _design(rec, start=None):
     (None: not drawn)."""
     z = np.load(rec, allow_pickle=True)
     re = lambda key: np.real(np.asarray(z[key])).astype(float)       # a real controller, stored complex
-    arow = (re('d'), re('e'), re('f'))
+    mimo = 'Bc' in z.files                                            # m x p (BFS.md 5)
+    if mimo:
+        m, p = int(z['m']), int(z['p']); r = len(np.atleast_1d(z['d']))
+        arow = (re('d'), re('e'), re('f'), re('Bc').reshape(r, p))
+        nvec, K = re('nvec').reshape(m, r), re('K').reshape(m, p)
+    else:
+        m = p = 1
+        arow = (re('d'), re('e'), re('f'))
+        nvec, K = re('nvec'), complex(z['K'])
+    shp = lambda v, k: np.asarray(v, float).reshape(-1, k)          # positions as (ports, dims)
     if 'xa_start' in z.files:
-        xa0, xs0 = np.asarray(z['xa_start'], float).ravel(), np.asarray(z['xs_start'], float).ravel()
+        xa0, xs0 = shp(z['xa_start'], 2), shp(z['xs_start'], 1)
     elif start:
         s0 = np.load(start, allow_pickle=True)
-        xa0, xs0 = np.asarray(s0['xa'], float).ravel(), np.atleast_1d(np.asarray(s0['xs'], float)).ravel()
+        xa0, xs0 = shp(s0['xa'], 2), shp(s0['xs'], 1)
     else:
         xa0 = xs0 = None
-    return dict(arow=arow, nvec=re('nvec'), K=complex(z['K']),
-                xa=np.asarray(z['xa'], float).ravel(), xs=np.asarray(z['xs'], float).ravel(),
-                xa0=xa0, xs0=xs0, gamma=float(z['gamma']),
+    xa, xs = shp(z['xa'], 2), shp(z['xs'], 1)
+    if not mimo:
+        xa, xs = xa[0], xs[0]
+    return dict(arow=arow, nvec=nvec, K=K, m=m, p=p, mimo=mimo, struct=str(z['struct']) if 'struct' in z.files else '',
+                xa=xa, xs=xs, xa0=xa0, xs0=xs0, gamma=float(z['gamma']),
                 active=np.asarray(z['active_freqs'], float) if 'active_freqs' in z.files else np.zeros(0))
 
 
@@ -75,9 +86,10 @@ def svd_at(D, w, des, k=3, vectors=False):
     """Top-k singular values at frequency w, open and closed loop, from one
     LU; with vectors, sigma_1's forcing f and response q of each."""
     import scipy.sparse.linalg as spla
-    from closedloop_sparse import ClosedLoopResolvent, _v0
+    from closedloop_sparse import _v0
     b, c, *_ = D.bc(des['xa'], des['xs'])
-    R = ClosedLoopResolvent(D.M, D.A, b, c, r=D.r, mc=D.mc)
+    R = D.cl(b, c)                       # SISO or MIMO resolvent (one LU)
+    R.lu_cache = None; R.lu_pin = None
     lu = R.setup(float(w), des['arow'], des['nvec'], des['K'])['lu']
     n, r, M = D.n, D.r, D.M
     free = (D.comp < 2) & np.isin(np.arange(n), D.bc_dofs, invert=True)
@@ -112,10 +124,12 @@ def _task(t):
 
 def controller_tf(D, des, ws):
     """k(i w) = K + n^T (i w I - A_c)^-1 B_c (closedloop_sparse's controller:
-    u = K y + n^T x, x' = A_c x + B_c y)."""
+    u = K y + n^T x, x' = A_c x + B_c y); MIMO: the m x p matrix
+    D_c + C_c (i w I - A_c)^-1 B_c, one per frequency (N x m x p)."""
     from closedloop_sparse import ClosedLoopResolvent
     R = ClosedLoopResolvent(D.M, D.A, np.zeros(1), np.zeros(1), r=D.r, mc=D.mc)
-    Ac, Bc = R.L_of_a(des['arow']), R.B_of()
+    Ac = R.L_of_a(tuple(des['arow'][:3]))
+    Bc = np.asarray(des['arow'][3], complex) if des.get('mimo') else R.B_of()
     I = np.eye(D.r)
     return np.array([des['K'] + des['nvec'] @ np.linalg.solve(1j * w * I - Ac, Bc) for w in ws]), np.linalg.eigvals(Ac)
 
@@ -203,7 +217,8 @@ def fig_modes(path, D, w, rec, des, comp='u'):
     vid = idx[j]                                  # the P2 dof at each vertex
     tri = Triangulation(D.pts[:, 0], D.pts[:, 1], D.tri)
     x_lo, x_hi, y_lo, y_hi = D.box()
-    xzoom = min(x_hi, max(8.0, float(des['xs'][0]) + D.sensor_len + 2.0, float(des['xa'][0]) + 3.0))
+    XA = np.asarray(des['xa'], float).reshape(-1, 2); XS = np.asarray(des['xs'], float).reshape(-1)
+    xzoom = min(x_hi, max(8.0, float(XS.max()) + D.sensor_len + 2.0, float(XA[:, 0].max()) + 3.0))
     # forcing: zoomed on the step (it lives there), side by side; response: the whole domain
     fig = plt.figure(figsize=(12, 6.4))
     gs = fig.add_gridspec(3, 2, height_ratios=[2.0, 1.0, 1.0], hspace=0.45, wspace=0.08)
@@ -213,27 +228,36 @@ def fig_modes(path, D, w, rec, des, comp='u'):
               (fig.add_subplot(gs[2, :]), 'q_closed', 'response, with control', x_hi)]
     th = np.linspace(0, 2 * np.pi, 120)
     xx = np.linspace(x_lo, x_hi, 600)
-    xs = float(des['xs'][0])
     for ax, key, title, xr in panels:
         val = np.real(rec[key][vid])
         sel = D.pts[:, 0] <= xr + 1e-9
         m = float(np.abs(val[sel]).max()) or 1.0
         pc = ax.tripcolor(tri, val / m, cmap='RdBu_r', vmin=-1, vmax=1, shading='gouraud', rasterized=True)
         ax.plot(xx, D.wall(xx), color=INK2, lw=0.8)
+        lab = len(XA) > 1 or len(XS) > 1          # MIMO: number the ports
         if des.get('xa0') is not None:
-            # the start in grey, the actuator's move as an arrow; both sensor
+            # the start in grey, each actuator's move as an arrow; the sensor
             # windows as equal bars standing on the wall (Barbagallo et al. 2012,
-            # figure 1), the final one drawn over the start one
-            xa0, xs0 = des['xa0'], float(des['xs0'][0])
-            ax.plot(xa0[0] + 0.5 * np.cos(th), xa0[1] + 0.5 * np.sin(th), color=START, lw=0.9, ls=(0, (1.5, 1.5)))
-            ax.plot(*xa0, marker='x', color=START, ms=5, mew=1.0)
-            if np.linalg.norm(des['xa'] - xa0) > 1e-3:
-                ax.annotate('', xy=tuple(des['xa']), xytext=tuple(xa0),
-                            arrowprops=dict(arrowstyle='->', color=INK, lw=0.9, shrinkA=2, shrinkB=2))
-            ax.add_patch(Rectangle((xs0, 0.0), D.sensor_len, BAR, color=START, lw=0, zorder=5))
-        ax.plot(des['xa'][0] + 0.5 * np.cos(th), des['xa'][1] + 0.5 * np.sin(th), color=INK, lw=1.0, ls=(0, (3, 2)))
-        ax.plot(*des['xa'], marker='+', color=INK, ms=7, mew=1.2)
-        ax.add_patch(Rectangle((xs, 0.0), D.sensor_len, BAR, color=INK, lw=0, zorder=6))
+            # figure 1), the final ones drawn over the start ones
+            XA0 = np.asarray(des['xa0'], float).reshape(-1, 2); XS0 = np.asarray(des['xs0'], float).reshape(-1)
+            for i, xa0 in enumerate(XA0):
+                ax.plot(xa0[0] + 0.5 * np.cos(th), xa0[1] + 0.5 * np.sin(th), color=START, lw=0.9, ls=(0, (1.5, 1.5)))
+                ax.plot(*xa0, marker='x', color=START, ms=5, mew=1.0)
+                if i < len(XA) and np.linalg.norm(XA[i] - xa0) > 1e-3:
+                    ax.annotate('', xy=tuple(XA[i]), xytext=tuple(xa0),
+                                arrowprops=dict(arrowstyle='->', color=INK, lw=0.9, shrinkA=2, shrinkB=2))
+            for xs0 in XS0:
+                ax.add_patch(Rectangle((xs0, 0.0), D.sensor_len, BAR, color=START, lw=0, zorder=5))
+        for i, xa_ in enumerate(XA):
+            ax.plot(xa_[0] + 0.5 * np.cos(th), xa_[1] + 0.5 * np.sin(th), color=INK, lw=1.0, ls=(0, (3, 2)))
+            ax.plot(*xa_, marker='+', color=INK, ms=7, mew=1.2)
+            if lab:
+                ax.annotate(f'a{i + 1}', xy=(xa_[0], xa_[1] + 0.55), ha='center', va='bottom', color=INK, fontsize=7)
+        for j, xs_ in enumerate(XS):
+            ax.add_patch(Rectangle((xs_, 0.0), D.sensor_len, BAR, color=INK, lw=0, zorder=6))
+            if lab:
+                ax.annotate(f's{j + 1}', xy=(xs_ + 0.5 * D.sensor_len, BAR), ha='center', va='bottom', color=INK,
+                            fontsize=7)
         ax.set_aspect('equal')
         ax.set_xlim(x_lo, xr); ax.set_ylim(y_lo, y_hi)          # the bottom of the panel is the wall
         sig = rec['sigma1_vec_' + key.split('_')[1]]
@@ -260,9 +284,20 @@ def fig_controller(path, wk, kk, poles, W):
         for p in poles:
             if p.imag > 1e-9 * max(abs(p), 1.0) and wk[0] <= p.imag <= wk[-1]:
                 ax.axvline(p.imag, color=GRID, lw=1.0, ls=(0, (2, 2)))
-    a1.loglog(wk, np.abs(kk), color=C_CLOSED, lw=2.0)
+    kk = np.asarray(kk)
+    if kk.ndim == 3:
+        # MIMO: every entry that is not identically zero (decentral: the diagonal),
+        # k_ij = sensor j -> actuator i
+        cols = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100']
+        ent = [(i, j) for i in range(kk.shape[1]) for j in range(kk.shape[2]) if np.abs(kk[:, i, j]).max() > 0]
+        for q, (i, j) in enumerate(ent):
+            a1.loglog(wk, np.abs(kk[:, i, j]), color=cols[q % 4], lw=2.0, label=f'$k_{{{i + 1}{j + 1}}}$ (sensor {j + 1} -> actuator {i + 1})')
+            a2.semilogx(wk, np.degrees(np.unwrap(np.angle(kk[:, i, j]))), color=cols[q % 4], lw=2.0)
+        a1.legend(fontsize=8, frameon=False)
+    else:
+        a1.loglog(wk, np.abs(kk), color=C_CLOSED, lw=2.0)
+        a2.semilogx(wk, np.degrees(np.unwrap(np.angle(kk))), color=C_CLOSED, lw=2.0)
     a1.set_ylabel('|k(i$\\omega$)|', color=INK)
-    a2.semilogx(wk, np.degrees(np.unwrap(np.angle(kk))), color=C_CLOSED, lw=2.0)
     a2.set_ylabel('phase (deg)', color=INK)
     a2.set_xlabel('$\\omega$', color=INK)
     ps = ', '.join((f'{p.real:.3g}{p.imag:+.3g}i' if abs(p.imag) > 1e-9 * max(abs(p), 1.0) else f'{p.real:.3g}')

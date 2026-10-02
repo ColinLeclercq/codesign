@@ -2256,7 +2256,7 @@ def main():
                                                 (MIMO or 'FB' in a.case.split('+') or 'FC' in a.case.split('+')))
     n_wind_accept, n_wind_refused, n_gate_wind = [0], [0], [0]
 
-    def _wind_right_of_margin(bb_, cc_, aa_, nn_, KK_, seen_):
+    def _wind_right_of_margin(bb_, cc_, aa_, nn_, KK_, seen_, pa_=None):
         """Exact count of closed-loop eigenvalues right of Re = -eps (argument
         principle, global in w).  None when the plant pole data is unavailable
         (n above the dense limit).  The line certificate just proved nothing lies
@@ -2264,6 +2264,10 @@ def main():
         0 <=> alpha <= -eps, unconditionally."""
         import winding_cert as _wc
         _line = -a.eps
+        if BFS:
+            # the M-free count (BFSPlant.winding: certified plant data, H^1 tail)
+            _zh = [complex(x) for x in (seen_ or []) if abs(complex(x).real - _line) < 0.3]
+            return D.winding(pa_, bb_, cc_, aa_, nn_, KK_, _line, zeros_hint=_zh)
         if getattr(D, '_wind_plant_eps', None) is None:
             D._wind_plant_eps = _wc.plant_pole_data(D.A, D.M, _line)      # sparse enclosure (STAGE6 6.13)
         _pp, _hot = (D._wind_plant_eps if getattr(D, '_wind_plant_eps', None) else (None, None))
@@ -2280,6 +2284,24 @@ def main():
                        + ('_bfs' if a.plant == 'bfs' else f"_ne{a.ne}")
                        + (f"_mimo{a.n_act}x{a.n_sens}_{a.ctrl_struct}" if MIMO else ''))
     t_start = time.time()
+    if a.continue_record and not os.path.exists(tag + '_ckpt.npz') and os.path.exists(tag + '.npz'):
+        # CONTINUE A FINISHED RUN (--continue-record; BFS.md 7, 2026-10-02): its
+        # record becomes the checkpoint, so the run resumes from the saved design
+        # with its working set (the record's active frequencies), through the same
+        # anchor verification as any resume.  The finished run's summary is kept
+        # as tag_partN.json (its round history would otherwise be overwritten).
+        import shutil
+        _k = 1
+        while os.path.exists(f"{tag}_part{_k}.json"):
+            _k += 1
+        if os.path.exists(tag + '.json'):
+            shutil.copyfile(tag + '.json', f"{tag}_part{_k}.json")
+        shutil.copyfile(tag + '.npz', tag + '_ckpt.npz')
+        _gr = float(np.load(tag + '.npz', allow_pickle=True)['gamma'])
+        json.dump(dict(case=a.case, gamma=_gr, note=f'continued from the finished record (part {_k})'),
+                  open(tag + '_ckpt.json', 'w'))
+        print(f"CONTINUE: the finished record (gamma={_gr:.6f}) is the checkpoint; its summary kept as "
+              f"{os.path.basename(tag)}_part{_k}.json", flush=True)
 
     # The controller order is set by the SEED CATALOGUE (the common order from
     # the Hankel shoulder), not by --r.  Enlarging the catalogue moved it from
@@ -2345,7 +2367,8 @@ def main():
         print(f"warm-up: plant enclosure right of {-float(a.band_recut) - 0.6:+.2f} ({_t1 - _t0:.1f} s), "
               f"numerical-range heights ({time.time() - _t1:.1f} s)", flush=True)
     if MIMO:
-        _plant_warmup()
+        if not BFS:
+            _plant_warmup()
     D.alpha_argmax = (a.alpha_argmax == 'on')     # eigenvector of the eigenvalue ATTAINING alpha (2026-09-22)
     D.alpha_warm = bool(a.alpha_warm)
     D.alpha_warm_maxstep = a.alpha_maxstep
@@ -2370,12 +2393,21 @@ def main():
         # order-r controller, the actuator centre (x, y) and the sensor window
         # start x_s; no seed catalogue, no rescaling
         flags['real_ctrl'] = True
-        ini = np.load(a.init, allow_pickle=True)
-        arow0 = tuple(np.asarray(ini[k], complex) for k in ('d', 'e', 'f'))
-        nvec0 = np.asarray(ini['nvec'], complex); K0 = complex(ini['K'])
-        xa0, xs0 = np.asarray(ini['xa'], float).ravel(), np.atleast_1d(np.asarray(ini['xs'], float))
-        _pos_start = dict(xa_start=xa0.copy(), xs_start=xs0.copy())   # the --init positions, for the record (a resume keeps them)
-        va0 = vs0 = None
+        if MIMO:
+            # MIMO (BFS.md 5): the start record (--mimo-start, bfs/hifoo_init.py --m --p),
+            # read once here so the BFS start checks below see its m x p design
+            (arow0, nvec0, K0, xa0, xs0, va0, vs0), _mimo_g0 = _mimo_setup(a, D, flags, tag)
+            xa0 = np.asarray(xa0, float).reshape(int(flags['m']), -1)
+            xs0 = np.asarray(xs0, float).reshape(int(flags['p']), -1)
+            _mz = np.load(a.mimo_start, allow_pickle=True)
+            _pos_start = dict(xa_start=np.asarray(_mz['xa'], float), xs_start=np.asarray(_mz['xs'], float))
+        else:
+            ini = np.load(a.init, allow_pickle=True)
+            arow0 = tuple(np.asarray(ini[k], complex) for k in ('d', 'e', 'f'))
+            nvec0 = np.asarray(ini['nvec'], complex); K0 = complex(ini['K'])
+            xa0, xs0 = np.asarray(ini['xa'], float).ravel(), np.atleast_1d(np.asarray(ini['xs'], float))
+            _pos_start = dict(xa_start=xa0.copy(), xs_start=xs0.copy())   # the --init positions, for the record (a resume keeps them)
+            va0 = vs0 = None
     else:
         ini = np.load(a.init or f"init_ne{a.ne}.npz")
         arow0 = (ini['d'], ini['e'], ini['f']); nvec0 = ini['nvec']; K0 = 0j
@@ -2410,24 +2442,6 @@ def main():
     # checkpoint goes through the same resume path and the same anchor
     # verification (line sweep + dense at GL) as any other start.
     _ck = tag + '_ckpt.npz'
-    if a.continue_record and not os.path.exists(_ck) and os.path.exists(tag + '.npz'):
-        # CONTINUE A FINISHED RUN (--continue-record; BFS.md 7, 2026-10-02): its
-        # record becomes the checkpoint, so the run resumes from the saved design
-        # with its working set (the record's active frequencies), through the same
-        # anchor verification as any resume.  The finished run's summary is kept
-        # as tag_partN.json (its round history would otherwise be overwritten).
-        import shutil
-        _k = 1
-        while os.path.exists(f"{tag}_part{_k}.json"):
-            _k += 1
-        if os.path.exists(tag + '.json'):
-            shutil.copyfile(tag + '.json', f"{tag}_part{_k}.json")
-        shutil.copyfile(tag + '.npz', _ck)
-        _gr = float(np.load(tag + '.npz', allow_pickle=True)['gamma'])
-        json.dump(dict(case=a.case, gamma=_gr, note=f'continued from the finished record (part {_k})'),
-                  open(tag + '_ckpt.json', 'w'))
-        print(f"CONTINUE: the finished record (gamma={_gr:.6f}) is the checkpoint; its summary kept as "
-              f"{os.path.basename(tag)}_part{_k}.json", flush=True)
     if os.path.exists(_ck) and not MIMO:
         try:
             _ckg = float(json.load(open(tag + '_ckpt.json'))['gamma'])
@@ -2662,7 +2676,8 @@ def main():
         print(f"BFS plant spectrum near the axis (shift-invert, Im in [0, {a.whi + a.wpad:g}]): "
               f"{len(_ev)} eigenvalues, rightmost {_ev[np.argmax(_ev.real)]:.4f} "
               f"({'converged' if D.plant_ev_ok else 'NOT all shifts converged'}, {time.time() - _t0:.0f} s)", flush=True)
-        _bad = [k_ for k_, x_, sd_ in (('actuator', xa0, 'a'), ('sensor', xs0, 's')) if not D.inside(x_, sd_)]
+        _bad = [k_ for k_, x_, sd_ in (('actuator', xa0, 'a'), ('sensor', xs0, 's'))
+                if not all(D.inside(x1_, sd_) for x1_ in (np.asarray(x_, float).reshape(-1, D.pos_dims[sd_])))]
         if _bad:
             raise SystemExit(f"BFS: the start's {' and '.join(_bad)} centre is not inside the domain "
                              f"(margin {D.pos_margin:g}, --bfs-margin)")
@@ -2752,12 +2767,13 @@ def main():
             print(f"field atoms ({'actuator' if key == 'a' else 'sensor'}): {a.field_atoms} Gabor atoms, width >= {a.atom_smin}, "
                   f"|wavenumber| <= {a.atom_kmax}; {how}", flush=True)
     if MIMO:
-        pk_args, _mimo_g0 = _mimo_setup(a, D, flags, tag)
+        if not BFS:
+            pk_args, _mimo_g0 = _mimo_setup(a, D, flags, tag)
         from packer import PackerMIMO
         pk = PackerMIMO(D, flags, *pk_args)
         print(f"MIMO: {flags['m']} actuators, {flags['p']} sensors, {flags['struct']} compensator of order {D.r}"
               + (f" (loops {flags['loop_orders']})" if flags['struct'] == 'decentral' else '')
-              + f"; {pk.nth} free complex controller entries; start {a.mimo_start}"
+              + f"; {pk.nth} free {'real' if getattr(pk, 'real_ctrl', False) else 'complex'} controller entries; start {a.mimo_start}"
               + (f" (record gamma {_mimo_g0:.6f})" if _mimo_g0 is not None else ''), flush=True)
     else:
         pk = Packer(D, flags, *pk_args)
@@ -3174,7 +3190,9 @@ def main():
                 # the atoms' tangent)
                 def _jet_basis(z_, key):
                     _xa_j, _xs_j = pk.unpack(z_)[3:5]
-                    J_ = D.port_jet(_xa_j if key == 'xa' else _xs_j, 'a' if key == 'xa' else 's')
+                    _sd = 'a' if key == 'xa' else 's'
+                    _X = np.asarray(_xa_j if key == 'xa' else _xs_j, float).reshape(-1, D.pos_dims[_sd])
+                    J_ = np.vstack([D.port_jet(x1_, _sd) for x1_ in _X])      # MIMO: every port's jet
                     U_, s_, _ = np.linalg.svd(np.asarray(J_.T, complex), full_matrices=False)
                     _tangent_sides.add(key)
                     return U_[:, s_ > 1e-12 * s_[0]]
@@ -3655,7 +3673,7 @@ def main():
                 if _hw0 > a.whi * (1.0 + 1e-9):
                     print(f"    band widened to [{-_hw0:.2f}, {_hw0:.2f}] from the candidate's "
                           f"closed-loop spectrum (before its certificate)", flush=True)
-                    a.wlo, a.whi = -_hw0, _hw0
+                    a.wlo, a.whi = (0.0 if BFS else -_hw0), _hw0
             except Exception:
                 pass
         _prov = bool(a.cert_every > 1 and _ro is not None and (it % a.cert_every != 0)
@@ -3804,7 +3822,7 @@ def main():
                         # closed-loop branch out to |Im| ~ 850 (the band grew to +-1269 at
                         # ne=100 atoms) and the line sweep runs out of shifts on it (85
                         # uncovered); the exact winding count, global in w, decides.
-                        _o = _wind_right_of_margin(bb, cc, aa, nn, KK, _seen_c)
+                        _o = _wind_right_of_margin(bb, cc, aa, nn, KK, _seen_c, pa_=(D.bc(xa_, xs_, va_, vs_)[2] if BFS else None))
                         if _o is not None:
                             _wind_done = _o
                             if _o['ok'] and _o['count'] == 0:
@@ -3861,7 +3879,7 @@ def main():
                     if _hw > a.whi * (1.0 + 1e-9):
                         print(f"    band widened to [{-_hw:.2f}, {_hw:.2f}] from "
                               f"the closed-loop spectrum", flush=True)
-                        a.wlo, a.whi = -_hw, _hw
+                        a.wlo, a.whi = (0.0 if BFS else -_hw), _hw
                 except Exception as _e:
                     print(f"    band_from_closedloop unavailable "
                           f"({type(_e).__name__}); band kept", flush=True)
@@ -3907,7 +3925,7 @@ def main():
                     # count right of the MARGIN itself, Re = -eps (2026-09-25; was
                     # -eps/2, which left the gap (-eps, -eps/2) the Stage-0 report
                     # flagged)
-                    _o = _wind_right_of_margin(bb, cc, aa, nn, KK, _seen_c)
+                    _o = _wind_right_of_margin(bb, cc, aa, nn, KK, _seen_c, pa_=(D.bc(xa_, xs_, va_, vs_)[2] if BFS else None))
                     if _o is not None:
                         _wind_done = _o
                         if not (_o['ok'] and _o['count'] == 0):
@@ -3980,7 +3998,7 @@ def main():
                 # the dense save veto).  The winding count is global in w: every
                 # accepted candidate must have none right of Re = -eps.
                 try:
-                    _o = _wind_right_of_margin(bb, cc, aa, nn, KK, _seen_c)
+                    _o = _wind_right_of_margin(bb, cc, aa, nn, KK, _seen_c, pa_=(D.bc(xa_, xs_, va_, vs_)[2] if BFS else None))
                     n_wind_accept[0] += 1
                     if not (_o is not None and _o['ok'] and _o['count'] == 0):
                         _okc = False
@@ -4770,7 +4788,7 @@ def main():
             # acceptable there only because the run that wrote it enforced
             # the continuation gate.
             prev_ok = False
-            if MIMO:
+            if MIMO and not BFS:
                 prev_ok = ('alpha_dense' in pz.files and np.isfinite(float(pz['alpha_dense']))
                            and float(pz['alpha_dense']) + a.eps <= 0.0)
             elif a.dense_check and (D.n + D.r) <= a.dense_nmax:

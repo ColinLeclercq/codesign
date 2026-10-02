@@ -7,7 +7,10 @@
 #   LAUNCH    MPI launcher prefix, e.g. "mpiexec -n 96" (default: none = serial)
 #   OPS       operator file (default bfs/data/ops_fx.npz)
 #   OUTER     rounds (default 40)
-#   R         controller order (default 5; the start file must have the same order)
+#   R         controller order (default 5; the start file must have the same order; MIMO: the total)
+#   M, P      actuators, sensors (default 1, 1; MIMO when either is > 1: INIT is then the MIMO start,
+#             bfs/hifoo_init.py --m --p, and the record is K_B_C_s0_bfs_mimo<M>x<P>_<STRUCT>)
+#   STRUCT    MIMO compensator: central (one m x p) or decentral (m = p SISO loops); default central
 #   DEADLINE  seconds after which no new round starts (default 0 = off)
 #   WALL      the driver's --wall (inner-solve clock budgets; default 54000)
 #   CERT_NSEG line-certificate segments over the MPI pool (default 16; serial runs: 1)
@@ -30,6 +33,10 @@ mkdir -p "$out"
 cd "$(dirname "$0")/.."
 STAB=()
 [ "${STABILISE:-1}" = "1" ] && STAB=(--stabilise)
+MIMOF=()
+if [ "${M:-1}" != 1 ] || [ "${P:-1}" != 1 ]; then
+    MIMOF=(--n-act "$M" --n-sens "$P" --ctrl-struct "${STRUCT:-central}" --mimo-start "$init")
+fi
 exec ${LAUNCH} ${PY:-python} -u run_case_epi.py --plant bfs --ops "${OPS:-bfs/data/ops_fx.npz}" --lu-order mumps \
     --init "$init" --cold --case K+B+C --r "${R:-5}" --eps 0.05 --start 0 --nproc 1 --cert_nseg "${CERT_NSEG:-16}" --cert-split "${CERT_SPLIT:-23}" --wlo 0 --whi 10 \
     --outer "${OUTER:-40}" --deadline "${DEADLINE:-0}" --wall "${WALL:-54000}" "${STAB[@]}" \
@@ -38,4 +45,4 @@ exec ${LAUNCH} ${PY:-python} -u run_case_epi.py --plant bfs --ops "${OPS:-bfs/da
     --gate-prefix 1 --cert-disk strict --cert-near-k 4 --cert-climb slope --wind-ctrl exact --cert-rtol 1e-6 --alpha-argmax on \
     --enroll-rel 0.05 --peak-follow on --row-screen 0.05 --converge --inner sqp --sqp-carry --sqp-trust 0.01 \
     --sqp-ctrl block --sqp-row-res-tol 1e-3 --sqp-refine 1e-4 --sqp-clblock on --sigma2-active-gap 0.15 \
-    --follow-scan 0 --stop-progress 3:0.0015 --wind-accept off --dense_check 0 --outdir "$out" "$@"
+    --follow-scan 0 --stop-progress 3:0.0015 --wind-accept off --dense_check 0 --outdir "$out" "${MIMOF[@]}" "$@"

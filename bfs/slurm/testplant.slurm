@@ -12,6 +12,11 @@
 #   KIND=hifoo OUTER=5 sbatch bfs/slurm/testplant.slurm    (HIFOO start, 5 rounds)
 #   OUTER=300 sbatch --time=15:00:00 bfs/slurm/testplant.slurm
 #   R=10 OUTER=300 sbatch --time=15:00:00 bfs/slurm/testplant.slurm   (order 10)
+#   M=2 P=2 STRUCT=central   OUTER=300 sbatch --time=15:00:00 bfs/slurm/testplant.slurm
+#   M=2 P=2 STRUCT=decentral OUTER=300 sbatch --time=15:00:00 bfs/slurm/testplant.slurm
+#        (MIMO, BFS.md 5: two actuators at B2 and (1.6, 0.9), two sensors at C1 and C2;
+#         total order R = 10 by default, decentral = two loops of 5; each case has its
+#         own directory, e.g. testplant_bfs/zero_m2p2_central_o10_s0_r300)
 #        (as many rounds as fit: the driver stops before the job's end, or when
 #         progress stops)
 #   RESUME=1 OUT=testplant_bfs/zero_s0_r5 OUTER=10 sbatch bfs/slurm/testplant.slurm
@@ -35,10 +40,17 @@ source ./env.sh
 python bfs/version_check.py || { echo "*** mixed code versions (bfs/version_check.py): stop"; exit 1; }
 LAUNCHER=${LAUNCHER:-mpiexec}
 KIND=${KIND:-zero}; OUTER=${OUTER:-3}; SEED=${SEED:-0}
-export R=${R:-5}                          # controller order (R=10: an order-10 controller)
-OUT=${OUT:-testplant_bfs/${KIND}$([ "$R" = 5 ] || echo "_o$R")_s${SEED}_r${OUTER}}
+export M=${M:-1} P=${P:-1} STRUCT=${STRUCT:-central}   # MIMO: M actuators, P sensors, central | decentral
+MIMO=$([ "$M" = 1 ] && [ "$P" = 1 ] && echo 0 || echo 1)
+export R=${R:-$([ "$MIMO" = 1 ] && echo 10 || echo 5)}   # controller order (MIMO: the total, default 10)
+SUF=""
+if [ "$MIMO" = 1 ]; then SUF="_m${M}p${P}_${STRUCT}"; fi
+if [ "$R" != 5 ]; then SUF="${SUF}_o$R"; fi
+OUT=${OUT:-testplant_bfs/${KIND}${SUF}_s${SEED}_r${OUTER}}
+TAG=K_B_C_s0_bfs                                       # the driver's record name
+if [ "$MIMO" = 1 ]; then TAG=K_B_C_s0_bfs_mimo${M}x${P}_${STRUCT}; fi
 OPS=bfs/data/ops_coarse.npz
-echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none}  $(date -Is)  $KIND start, order $R, $OUTER rounds -> $OUT ==="
+echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none}  $(date -Is)  $KIND start, ${M}x${P} $([ "$MIMO" = 1 ] && echo "$STRUCT "), order $R, $OUTER rounds -> $OUT ==="
 python -c "import clarabel, qdldl, matplotlib" || { echo "*** clarabel / qdldl / matplotlib missing: run bash bfs/setup_cluster.sh on the login node"; exit 1; }
 if ! python -c "import numpy as np, sys; sys.exit(0 if 'shear_S_data' in np.load('$OPS').files else 1)" 2>/dev/null; then
     echo "=== test plant operators (missing or without the shear trace) ==="
@@ -51,20 +63,20 @@ if [ ! -f bfs/data/ops_coarse_range.npz ]; then
     time $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/plant_cert.py --ops "$OPS"
 fi
 CONT=()
-if [ "${RESUME:-0}" = "1" ] && [ -f "$OUT/run/K_B_C_s0_bfs.npz" -o -f "$OUT/run/K_B_C_s0_bfs_ckpt.npz" ]; then
+if [ "${RESUME:-0}" = "1" ] && [ -f "$OUT/run/$TAG.npz" -o -f "$OUT/run/${TAG}_ckpt.npz" ]; then
     echo "=== RESUME: $OUT/run continues (checkpoint if present, else the finished record) ==="
     CONT=(--continue-record 1)
 else
     rm -rf "$OUT"; mkdir -p "$OUT"
-    python bfs/hifoo_init.py --ops "$OPS" --n 1 --seed "$SEED" --kind "$KIND" --r "$R" --out "$OUT/starts" > "$OUT/starts.json"
+    python bfs/hifoo_init.py --ops "$OPS" --n 1 --seed "$SEED" --kind "$KIND" --r "$R" --m "$M" --p "$P" --struct "$STRUCT" --out "$OUT/starts" > "$OUT/starts.json"
 fi
 # the deadline from the job's own end time (any --time): no round starts that
 # would not end, 5 min kept for the figures (bfs/slurm_remaining.py)
 export DEADLINE=${DEADLINE:-$(python bfs/slurm_remaining.py --reserve 300)}
 export OPS OUTER PY=python LAUNCH="$LAUNCHER -n ${SLURM_NTASKS:-24}"
 time bash bfs/run_bfs.sh "$OUT/run" "$OUT/starts/${KIND}_000.npz" --deadline-final 600 "${CONT[@]}"   # the test plant's end: ~3 min
-time $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/postproc.py --ops "$OPS" --rec "$OUT/run/K_B_C_s0_bfs.npz"
-python - "$OUT/run/K_B_C_s0_bfs.json" "$OUT/run/K_B_C_s0_bfs_post/post.json" <<'EOF'
+time $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/postproc.py --ops "$OPS" --rec "$OUT/run/$TAG.npz"
+python - "$OUT/run/$TAG.json" "$OUT/run/${TAG}_post/post.json" <<'EOF'
 import json, sys
 r, p = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
 print("best gamma after each round:", [round(h['gamma_best'], 4) for h in r['history']],

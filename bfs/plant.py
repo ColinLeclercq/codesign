@@ -131,8 +131,15 @@ class BFSPlant(FECoDesign):
         shear sensor); returns (b, c, psi_a, c, 1, 1) -- unnormalised ports."""
         if va is not None or vs is not None:
             raise NotImplementedError("free fields (FB/FC) are not part of the BFS fork")
-        if np.ndim(xa) > 1 or np.size(xs) > 1:
-            raise NotImplementedError("MIMO is not part of the BFS fork yet")
+        if np.ndim(xa) == 2 or np.ndim(xs) == 2:
+            # MIMO (BFS.md 5): one column per port -- B = M Psi_a (n x m), C (n x p)
+            XA = np.asarray(xa, float).reshape(-1, 2); XS = np.asarray(xs, float).reshape(-1, 1)
+            PA = np.column_stack([self.act_field(x_) for x_ in XA])
+            B = np.asarray(self.M @ PA)
+            C = np.column_stack([self.sensor_vec(x_) for x_ in XS])
+            if not (np.all(np.linalg.norm(B, axis=0) > 0.0) and np.all(np.linalg.norm(C, axis=0) > 0.0)):
+                raise FloatingPointError("bc(): a port vanishes (centre / window outside the domain?)")
+            return B, C, PA, C, np.ones(B.shape[1]), np.ones(C.shape[1])
         pa = self.act_field(xa)
         b = self.M @ pa
         c = self.sensor_vec(xs)
@@ -187,6 +194,8 @@ class BFSPlant(FECoDesign):
         derivatives of the port vectors (Mdpsi)."""
         if getattr(cl, 'is_reduced', False) and not _full and len(x) == cl.kd + cl._r.r:
             return cl.grads_reduced(self, x, z, arow, nvec, Kfb, xa, xs, pa, ps, na, ns, flags, eta)
+        if getattr(cl, 'm', None) is not None:
+            return self.grads_mimo(cl, x, z, arow, nvec, Kfb, xa, xs, flags, eta)
         n = self.n
         xp, xc = x[:n], x[n:]
         zp, zc = z[:n], z[n:]
@@ -206,6 +215,30 @@ class BFSPlant(FECoDesign):
         if flags['C']:
             cs = self.Mdpsi(xs, 's')
             out['xs'] = np.array([float(np.real(Sc * np.vdot(cs[k], xp) / eta)) for k in range(len(cs))])
+        return out
+
+    def grads_mimo(self, cl, x, z, arow, nvec, Kfb, xa, xs, flags, eta=1.0):
+        """MIMO (BFS.md 5): the controller entries (d, e, f, B_c, C_c, D_c) from
+        the resolvent, and per port the SISO formulas with the actuator-side
+        act_i and sensor-side sen_j (ClosedLoopResolventMIMO.port_sides):
+        'xa' (m, 2), 'xs' (p, 1)."""
+        n = self.n
+        xp, zp = x[:n], z[:n]
+        res = dict(x=x, z=z)
+        out = {}
+        if flags['K']:
+            g = cl.design_grad_tri(res)
+            for k_ in ('d', 'e', 'f', 'Bc', 'n', 'K'):
+                out[k_] = np.asarray(g[k_]) / eta
+        act, sen = cl.port_sides(res, arow, nvec, Kfb)
+        if flags['B']:
+            XA = np.asarray(xa, float).reshape(-1, 2)
+            out['xa'] = np.array([[float(np.real(np.vdot(zp, ba) * act[i] / eta)) for ba in self.Mdpsi(XA[i], 'a')]
+                                  for i in range(len(XA))])
+        if flags['C']:
+            XS = np.asarray(xs, float).reshape(-1, 1)
+            out['xs'] = np.array([[float(np.real(sen[j] * np.vdot(cs, xp) / eta)) for cs in self.Mdpsi(XS[j], 's')]
+                                  for j in range(len(XS))])
         return out
 
     # --------------------------------------------------------------- geometry
@@ -265,7 +298,16 @@ class BFSPlant(FECoDesign):
         linear rows c + g.d <= 0, sqp_inner.Evaluator): [(c, {'xa'|'xs': g})]."""
         out = []
         for key, side, x0, on in (('xa', 'a', xa, flags.get('B')), ('xs', 's', xs, flags.get('C'))):
-            if on:
+            if not on:
+                continue
+            if np.ndim(x0) == 2:
+                # MIMO: every port's rows, each gradient in the packer's (ports, dims) shape
+                X = np.asarray(x0, float)
+                for i in range(len(X)):
+                    for c, g in self.position_constraints(X[i], side):
+                        G = np.zeros_like(X); G[i] = g
+                        out.append((c, {key: G}))
+            else:
                 out += [(c, {key: g}) for c, g in self.position_constraints(x0, side)]
         return out
 
@@ -373,8 +415,16 @@ class BFSPlant(FECoDesign):
         from sparse_spectrum import numrange_distance
         s_far, Hd, beta, nu1 = self.range_data()
         lu = self._Llu(); cv = np.asarray(c, complex)[self._Lv]
-        cL = float(np.sqrt(max(np.real(np.vdot(cv, lu.solve(cv))), 0.0)))
-        pM = float(np.sqrt(max(np.real(np.vdot(pa, self.M @ pa)), 0.0)))
+        if cv.ndim == 2:
+            # MIMO: operator norms, ||G||_2 <= ||C||_{L^-1} ||Psi_a||_M sqrt(...) with
+            # ||C||_{L^-1}^2 = lambda_max(C^H L^-1 C), ||Psi_a||_M^2 = lambda_max(Psi_a^H M Psi_a)
+            LC = np.column_stack([lu.solve(cv[:, j]) for j in range(cv.shape[1])])
+            PA = np.asarray(pa, complex)
+            cL = float(np.sqrt(max(np.linalg.eigvalsh(cv.conj().T @ LC).max(), 0.0)))
+            pM = float(np.sqrt(max(np.linalg.eigvalsh(PA.conj().T @ (self.M @ PA)).max(), 0.0)))
+        else:
+            cL = float(np.sqrt(max(np.real(np.vdot(cv, lu.solve(cv))), 0.0)))
+            pM = float(np.sqrt(max(np.real(np.vdot(pa, self.M @ pa)), 0.0)))
         ex = max(beta - line, 0.0)
 
         def gb(w):
@@ -412,7 +462,7 @@ class BFSPlant(FECoDesign):
         (winding_cert.winding_count with the M-free plant data and tail)."""
         import winding_cert as wc
         cnt, hot = self.plant_poles(line)
-        if not np.any(nvec) and K == 0:
+        if not np.any(nvec) and not np.any(K):
             # the open loop (zero controller): f = 1 - k G = 1 identically, so the
             # count is the plant's (certified) plus the compensator's, exactly
             import controller as ctl
@@ -424,7 +474,11 @@ class BFSPlant(FECoDesign):
                                 zeros_hint=zeros_hint, ctrl_exact=True, gbound=self.gbound(pa, c, line), real_sym=True)
 
     def cl(self, b, c):
-        R = ClosedLoopResolvent(self.M, self.A, b, c, r=self.r, mc=self.mc)
+        if np.ndim(b) == 2 or np.ndim(c) == 2:
+            from closedloop_mimo import ClosedLoopResolventMIMO
+            R = ClosedLoopResolventMIMO(self.M, self.A, b, c, r=self.r, mc=self.mc)
+        else:
+            R = ClosedLoopResolvent(self.M, self.A, b, c, r=self.r, mc=self.mc)
         R.lu_cache = self._lu_cache
         R.lu_cache_max = self.lu_cache_max
         R.lu_pin = self._lu_pin

@@ -301,7 +301,16 @@ class PackerMIMO:
         self.off = {}; o = 0
         for nm_, sz in self.sizes:
             self.off[nm_] = (o, o + sz); o += sz
-        self.xa0 = np.atleast_1d(np.asarray(xa0, float)); self.xs0 = np.atleast_1d(np.asarray(xs0, float))
+        # backward-facing step (BFS.md 5): a REAL controller and vector positions
+        # per port (D.pos_dims: actuator (x, y), sensor window start); GL unchanged
+        self.real_ctrl = bool(flags.get('real_ctrl'))
+        pds = getattr(D, 'pos_dims', None)
+        self.vec_pos = pds is not None
+        self.pd_a, self.pd_s = (int(pds['a']), int(pds['s'])) if pds else (1, 1)
+        if self.vec_pos:
+            self.xa0 = np.asarray(xa0, float).reshape(m, self.pd_a); self.xs0 = np.asarray(xs0, float).reshape(p, self.pd_s)
+        else:
+            self.xa0 = np.atleast_1d(np.asarray(xa0, float)); self.xs0 = np.atleast_1d(np.asarray(xs0, float))
         self.va0, self.vs0 = va0, vs0
         # free mask
         mode = flags.get('ctrl_mode', 'full')
@@ -349,7 +358,12 @@ class PackerMIMO:
             if g.size == 0:
                 continue
             nz = g[g > 0]
-            if m == 1 and p == 1:
+            if self.real_ctrl and not nz.size:
+                # BFS (real controller, the zero start: C_c = D_c = 0): the SISO
+                # packer's floor, 1e-3 x the largest entry -- not 1.0, which would
+                # make the first steps in the gains ~300 x those of the SISO runs
+                sc[a_:b_] = gfloor
+            elif m == 1 and p == 1:
                 # the SISO rule: identical trajectories at m = p = 1 (STAGE6 6.16)
                 zfloor = max(gfloor, 0.1 * float(np.median(nz)) if nz.size else 1.0)
                 sc[a_:b_] = np.where(g > 0, np.maximum(g, gfloor), zfloor)
@@ -376,11 +390,11 @@ class PackerMIMO:
         z = []
         th = self.th0[self.free]; sc = self.sc[self.free]
         if self.nth:
-            z += [th.real / sc, th.imag / sc]
+            z += [th.real / sc] + ([] if self.real_ctrl else [th.imag / sc])
         if self.f['B']:
-            z += [self.xa0 / self.sx]
+            z += [self.xa0.ravel() / self.sx]
         if self.f['C']:
-            z += [self.xs0 / self.sx]
+            z += [self.xs0.ravel() / self.sx]
         Pa, Ps, Aa, As = self._fields_cfg()
         for key, flag, P_, A_, v0, cnt in (('va', 'FB', Pa, Aa, self.va0, self.m), ('vs', 'FC', Ps, As, self.vs0, self.p)):
             if not self.f[flag]:
@@ -400,15 +414,24 @@ class PackerMIMO:
         th = self.th0.copy()
         if self.nth:
             k = self.nth; sc = self.sc[self.free]
-            th[self.free] = (z[i:i + k] + 1j * z[i + k:i + 2 * k]) * sc; i += 2 * k
+            if self.real_ctrl:
+                th[self.free] = z[i:i + k] * sc + 0j; i += k
+            else:
+                th[self.free] = (z[i:i + k] + 1j * z[i + k:i + 2 * k]) * sc; i += 2 * k
         g = lambda nm_: th[slice(*self.off[nm_])]
         arow = (g('d'), g('e'), g('f'), g('Bc').reshape(r, p))
         nvec = g('n').reshape(m, r); K = g('K').reshape(m, p)
         xa, xs = self.xa0.copy(), self.xs0.copy()
         if self.f['B']:
-            xa = z[i:i + m] * self.sx; i += m
+            na_ = m * self.pd_a
+            xa = z[i:i + na_] * self.sx; i += na_
+            if self.vec_pos:
+                xa = xa.reshape(m, self.pd_a)
         if self.f['C']:
-            xs = z[i:i + p] * self.sx; i += p
+            ns_ = p * self.pd_s
+            xs = z[i:i + ns_] * self.sx; i += ns_
+            if self.vec_pos:
+                xs = xs.reshape(p, self.pd_s)
         va = vs = None
         Pa, Ps, Aa, As = self._fields_cfg()
         import fieldbasis as _fb
@@ -435,7 +458,8 @@ class PackerMIMO:
         m, p, r, n = self.m, self.p, self.r, self.D.n
         return dict(d=np.zeros(r, complex), e=np.zeros(max(r - 1, 0), complex), f=np.zeros(max(r - 1, 0), complex),
                     Bc=np.zeros((r, p), complex), n=np.zeros((m, r), complex), K=np.zeros((m, p), complex),
-                    xa=np.zeros(m), xs=np.zeros(p),
+                    xa=(np.zeros((m, self.pd_a)) if self.vec_pos else np.zeros(m)),
+                    xs=(np.zeros((p, self.pd_s)) if self.vec_pos else np.zeros(p)),
                     va=[np.zeros(n, complex)] * m, vs=[np.zeros(n, complex)] * p)
 
     def grad(self, g, z=None):
@@ -445,11 +469,11 @@ class PackerMIMO:
             gz = self.zero_grad()
             gc = np.concatenate([np.asarray(g.get(k_, gz[k_]), complex).ravel() for k_ in ('d', 'e', 'f', 'Bc', 'n', 'K')])
             gc = gc[self.free]; sc = self.sc[self.free]
-            out += [np.real(gc) * sc, -np.imag(gc) * sc]
+            out += [np.real(gc) * sc] + ([] if self.real_ctrl else [-np.imag(gc) * sc])
         if self.f['B']:
-            out += [np.asarray(g.get('xa', np.zeros(m)), float) * self.sx]
+            out += [np.asarray(g.get('xa', np.zeros(m * self.pd_a)), float).ravel() * self.sx]
         if self.f['C']:
-            out += [np.asarray(g.get('xs', np.zeros(p)), float) * self.sx]
+            out += [np.asarray(g.get('xs', np.zeros(p * self.pd_s)), float).ravel() * self.sx]
         Pa, Ps, Aa, As = self._fields_cfg()
         import fieldbasis as _fb
         zz = np.asarray(z if z is not None else self._atom_z[0], float)
@@ -480,7 +504,8 @@ class PackerMIMO:
         import fieldbasis as _fb
         Pa, Ps, Aa, As = self._fields_cfg()
         zz = np.asarray(z if z is not None else self._atom_z[0], float)
-        i = (2 * self.nth if self.nth else 0) + (self.m if self.f['B'] else 0) + (self.p if self.f['C'] else 0)
+        i = ((1 if self.real_ctrl else 2) * self.nth if self.nth else 0) + (self.m * self.pd_a if self.f['B'] else 0) \
+            + (self.p * self.pd_s if self.f['C'] else 0)
         out = {}
         for key, flag, P_, A_, cnt in (('va', 'FB', Pa, Aa, self.m), ('vs', 'FC', Ps, As, self.p)):
             if not self.f[flag]:
@@ -505,16 +530,16 @@ class PackerMIMO:
         out = []; i = 0
         if self.nth:
             fr = np.flatnonzero(self.free); k = self.nth
-            for part in ('re', 'im'):
+            for part in (('re',) if self.real_ctrl else ('re', 'im')):
                 for nm_, (a_, b_) in self.off.items():
                     idx = [j for j, q in enumerate(fr) if a_ <= q < b_]
                     if idx:
                         out.append((f'{nm_}.{part}', np.array(idx) + i))
                 i += k
         if self.f['B']:
-            out.append(('xa', np.arange(i, i + self.m))); i += self.m
+            out.append(('xa', np.arange(i, i + self.m * self.pd_a))); i += self.m * self.pd_a
         if self.f['C']:
-            out.append(('xs', np.arange(i, i + self.p))); i += self.p
+            out.append(('xs', np.arange(i, i + self.p * self.pd_s))); i += self.p * self.pd_s
         Pa, Ps, Aa, As = self._fields_cfg()
         import fieldbasis as _fb
         for key, flag, P_, A_, cnt in (('va', 'FB', Pa, Aa, self.m), ('vs', 'FC', Ps, As, self.p)):

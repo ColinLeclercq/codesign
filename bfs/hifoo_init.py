@@ -42,6 +42,38 @@ PAPER_XS = 2.0                 # C1 = [2.0, 2.6], ibid.
 # 0.003, and the first step that closed the loop could not be certified even at
 # 1/16 of its length (cluster test plant, 2026-10-02: round 0 lost twice).
 ZERO_CTRL_DEPTH = 0.5
+# MIMO starts (--m 2 --p 2, user 2026-10-02): the actuators at B2 and one unit
+# downstream in the shear layer, the sensors at the paper's C1 and C2 windows
+MIMO_XA = ((0.6, 1.0), (1.6, 0.9))
+MIMO_XS = (2.0, 3.6)
+
+
+def draw_mimo(rng, R, m, p, struct, kind, xa, xs, mc=1.0):
+    """An m x p start of total compensator order R (BFS.md 5): HIFOO's draw
+    (every free entry N(0, 1)) under the structure, or the zero controller
+    (C_c = 0, D_c = 0: the loop open, gamma = the open-loop peak).
+      central    one R x R tridiagonal A_c, B_c (R x p) N(0, 1), C_c (m x R), D_c (m x p);
+      decentral  m = p loops of order R / m: A_c block tridiagonal (e, f zero across
+                 blocks), B_c the SISO gauge mc on each loop's block and sensor, C_c
+                 and D_c on the loop's own block / diagonal."""
+    d = rng.normal(size=R); e = rng.normal(size=R - 1); f = rng.normal(size=R - 1)
+    nvec = rng.normal(size=(m, R)); K = rng.normal(size=(m, p))
+    if struct == 'central':
+        Bc = rng.normal(size=(R, p)); orders = [R // m] * m
+    else:
+        if m != p or R % m:
+            raise SystemExit("decentral: m = p loops of equal order (R a multiple of m)")
+        orders = [R // m] * m
+        Bc = np.zeros((R, p)); Cm = np.zeros((m, R), bool); s0 = 0
+        for k, o in enumerate(orders):
+            Bc[s0:s0 + o, k] = mc; Cm[k, s0:s0 + o] = True; s0 += o
+            if s0 < R:
+                e[s0 - 1] = 0.0; f[s0 - 1] = 0.0
+        nvec = np.where(Cm, nvec, 0.0); K = np.diag(np.diag(K))
+    if kind == 'zero':
+        nvec = np.zeros((m, R)); K = np.zeros((m, p))
+    return dict(d=d, e=e, f=f, Bc=Bc, nvec=nvec, K=K, xa=np.asarray(xa, float).reshape(m, 2),
+                xs=np.asarray(xs, float).reshape(p), loop_orders=np.array(orders), gamma=np.inf)
 
 
 def draw(rng, r, D, positions='paper', max_tries=100000):
@@ -89,17 +121,19 @@ def feasible_start(D, arow, nvec, K, b, c, eps, delta=3e-3, tau0=1e-6, pool=None
     import controller as ctl
     import certify_sparse as csp
     d, e, f = (np.asarray(x, complex) for x in arow[:3])
+    mimo = len(arow) > 3                        # (d, e, f, B_c): m x p (BFS.md 5)
     al_c = float(np.max(np.linalg.eigvals(ctl.A_of(d, e, f)).real))
-    zero = not np.any(nvec) and K == 0          # the zero controller (--kind zero): the loop is open
+    zero = not np.any(nvec) and not np.any(K)   # the zero controller (--kind zero): the loop is open
     s = max(0.0, al_c + eps + (ZERO_CTRL_DEPTH if zero else 2.0 * delta))
     d = d - s
-    Ac = ctl.A_of(d, e, f); Bc = ctl.Bc_of((d, e, f), D.r, D.mc)
-    nvec = np.asarray(nvec, complex); K = complex(K)
+    tail = (np.asarray(arow[3], complex),) if mimo else ()
+    Ac = ctl.A_of(d, e, f); Bc = tail[0] if mimo else ctl.Bc_of((d, e, f), D.r, D.mc)
+    nvec = np.asarray(nvec, complex); K = np.asarray(K, complex) if mimo else complex(K)
     line = eps                     # the driver's line; accepted designs keep the cushion delta from it
 
     def cert(tau):
         seen = []
-        al, lam, v, u, cl, clear = D.alpha_certified((d, e, f), tau * nvec, tau * K, b, c, eps=line,
+        al, lam, v, u, cl, clear = D.alpha_certified((d, e, f) + tail, tau * nvec, tau * K, b, c, eps=line,
                                                      eigs_seen=seen)
         near = sorted(set(complex(x) for x in seen), key=lambda x: -x.real)
         return bool(clear) and al <= -line - delta, al, near[:12]
@@ -112,13 +146,13 @@ def feasible_start(D, arow, nvec, K, b, c, eps, delta=3e-3, tau0=1e-6, pool=None
     if not ok0:
         log(f"  feasible_start: tau = {tau0:g} is not certified (alpha {al0:+.4f}): the plant itself is "
             f"not inside the margin?")
-        return (d, e, f), 0.0 * nvec, 0j, info
+        return (d, e, f) + tail, 0.0 * nvec, 0.0 * K, info
     if zero:
         # the loop is open at every tau, so the certified anchor IS the start --
         # nothing to continue
         info['tau'] = 1.0
         log(f"  feasible_start: zero controller (open loop), compensator shifted by {s:.4f}; alpha {al0:+.4f}")
-        return (d, e, f), nvec, K, info
+        return (d, e, f) + tail, nvec, K, info
     tau, ratio, t_bad = tau0, 4.0, np.inf
     while tau < 1.0 and ratio > 1.05 and t_bad > 1.05 * tau:
         # geometric growth until the first refusal; then bisection (in log tau)
@@ -149,7 +183,7 @@ def feasible_start(D, arow, nvec, K, b, c, eps, delta=3e-3, tau0=1e-6, pool=None
             t_bad = min(t_bad, t1)     # a crossing before t1
     log(f"  feasible_start: compensator shifted by {s:.4f}; loop gain x {tau:.4g} "
         f"({info['steps']} steps, {info['split']} split, {info['rejected']} refused), alpha {info['alpha']:+.4f}")
-    return (d, e, f), tau * nvec, tau * K, info
+    return (d, e, f) + tail, tau * nvec, tau * K, info
 
 
 def main():
@@ -162,8 +196,15 @@ def main():
     ap.add_argument('--positions', choices=['paper', 'random'], default='paper')
     ap.add_argument('--kind', choices=['hifoo', 'zero'], default='hifoo',
                     help='zero: the same draws with nvec = 0, K = 0 (the open loop; gamma = its peak)')
+    ap.add_argument('--m', type=int, default=1, help='actuators (MIMO when m or p > 1; --r is then the total order)')
+    ap.add_argument('--p', type=int, default=1, help='sensors')
+    ap.add_argument('--struct', choices=['central', 'decentral'], default='central')
+    ap.add_argument('--xa', default=None, help="MIMO actuator centres 'x,y;x,y' (default: B2 and (1.6, 0.9))")
+    ap.add_argument('--xs', default=None, help="MIMO sensor window starts 'x,x' (default: the paper's C1, C2)")
     ap.add_argument('--out', default='bfs/data/starts')
     a = ap.parse_args()
+    if a.m > 1 or a.p > 1:
+        return main_mimo(a)
     from bfs.plant import BFSPlant
     D = BFSPlant(a.ops, r=a.r); D.pos_margin = a.margin
     rng = np.random.default_rng(a.seed)
@@ -181,6 +222,31 @@ def main():
                          K=round(s['K'], 3), alpha_ctrl=round(al_c, 3)))
     print(json.dumps(dict(out=a.out, n=a.n, seed=a.seed, r=a.r, margin=a.margin, positions=a.positions, kind=a.kind,
                      starts=rows), indent=1))
+
+
+def main_mimo(a):
+    from bfs.plant import BFSPlant
+    D = BFSPlant(a.ops, r=a.r); D.pos_margin = a.margin
+    xa = ([tuple(float(t) for t in q.split(',')) for q in a.xa.split(';')] if a.xa else list(MIMO_XA[:a.m]))
+    xs = ([float(t) for t in a.xs.split(',')] if a.xs else list(MIMO_XS[:a.p]))
+    if len(xa) != a.m or len(xs) != a.p:
+        raise SystemExit(f"--xa needs {a.m} centres and --xs {a.p} window starts")
+    bad = [f"actuator {x_}" for x_ in xa if not D.inside(np.array(x_), 'a')] + \
+          [f"sensor {x_}" for x_ in xs if not D.inside(np.array([x_]), 's')]
+    if bad:
+        raise SystemExit(f"not inside the domain (margin {a.margin}): {', '.join(bad)}")
+    rng = np.random.default_rng(a.seed)
+    os.makedirs(a.out, exist_ok=True)
+    rows = []
+    for i in range(a.n):
+        s = draw_mimo(rng, a.r, a.m, a.p, a.struct, a.kind, xa, xs, D.mc)
+        nm = f"{a.kind}_{i:03d}"
+        np.savez(os.path.join(a.out, nm + '.npz'), **s, seed=a.seed, index=i, margin=a.margin, kind=a.kind,
+                 struct=a.struct, m=a.m, p=a.p)
+        rows.append(dict(name=nm, xa=np.round(s['xa'], 3).tolist(), xs=np.round(s['xs'], 3).tolist(),
+                         loop_orders=s['loop_orders'].tolist()))
+    print(json.dumps(dict(out=a.out, n=a.n, seed=a.seed, r=a.r, m=a.m, p=a.p, struct=a.struct, kind=a.kind,
+                          starts=rows), indent=1))
 
 
 if __name__ == '__main__':

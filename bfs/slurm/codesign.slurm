@@ -38,7 +38,7 @@
 # the driver's own 30 min reserve the last round ends at least 75 min before the
 # end, for the final certificate, the winding count, the save and the figures),
 # so the job finishes inside its limit with a record
-# (OUT/KIND_XXX/K_B_C_s0_bfs.json/.npz).  Re-submitting the same command
+# (OUT/KIND_XXX/$TAG.json/.npz).  Re-submitting the same command
 # resumes every unfinished start from its checkpoint (accepted designs, the
 # working set and the band are stored); a finished start is not redone.
 set -eo pipefail
@@ -52,8 +52,14 @@ SEED=${SEED:-0}; NSTART=${NSTART:-64}
 OUT=${OUT:-results_bfs}
 IDX=${SLURM_ARRAY_TASK_ID:-0}
 KIND=${KIND:-hifoo}                      # hifoo | zero (the same draw, loop open: gamma starts at the open-loop peak)
-export R=${R:-5}                          # controller order; directories carry _o<R> when it is not 5
-SUF=$([ "$R" = 5 ] || echo "_o$R")
+export M=${M:-1} P=${P:-1} STRUCT=${STRUCT:-central}   # MIMO: M actuators, P sensors, central | decentral
+MIMO=$([ "$M" = 1 ] && [ "$P" = 1 ] && echo 0 || echo 1)
+export R=${R:-$([ "$MIMO" = 1 ] && echo 10 || echo 5)}   # controller order (MIMO: the total, default 10)
+SUF=""
+if [ "$MIMO" = 1 ]; then SUF="_m${M}p${P}_${STRUCT}"; fi
+if [ "$R" != 5 ]; then SUF="${SUF}_o$R"; fi
+TAG=K_B_C_s0_bfs                                       # the driver's record name
+if [ "$MIMO" = 1 ]; then TAG=K_B_C_s0_bfs_mimo${M}x${P}_${STRUCT}; fi
 NAME=$(printf "%s_%03d" "$KIND" "$IDX")
 RUN=$OUT/${KIND}${SUF}_$(printf "%03d" "$IDX")
 echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none} (array ${SLURM_ARRAY_JOB_ID:-}_$IDX)  $(date -Is) ==="
@@ -61,24 +67,24 @@ echo "=== python: $(command -v python) ($(python -V 2>&1)); start $NAME (seed $S
 [ -f bfs/data/ops_fx.npz ] || { echo "*** bfs/data/ops_fx.npz missing: run bfs/slurm/smoke.slurm first"; exit 1; }
 [ -f bfs/data/ops_fx_range.npz ] || { echo "*** bfs/data/ops_fx_range.npz missing: run bfs/slurm/plant_cert.slurm first"; exit 1; }
 post() {      # the figures and data of the saved record (bfs/postproc.py, BFS.md 7)
-    $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/postproc.py --ops bfs/data/ops_fx.npz --rec "$RUN/K_B_C_s0_bfs.npz" \
+    $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/postproc.py --ops bfs/data/ops_fx.npz --rec "$RUN/$TAG.npz" \
         || echo "*** postproc failed (the record is saved; rerun: sbatch the same array)"
 }
 CONT=()
-if [ -f "$RUN/K_B_C_s0_bfs.json" ] && [ ! -f "$RUN/K_B_C_s0_bfs_ckpt.npz" ]; then
+if [ -f "$RUN/$TAG.json" ] && [ ! -f "$RUN/${TAG}_ckpt.npz" ]; then
     if [ "${CONTINUE:-0}" = "1" ]; then
         echo "start $NAME finished: CONTINUE=1, OUTER more rounds from its record"
         CONT=(--continue-record 1)
     else
-        echo "start $NAME already finished ($RUN/K_B_C_s0_bfs.json; CONTINUE=1 to give it more rounds)"
-        [ -f "$RUN/K_B_C_s0_bfs_post/post.json" ] || post
+        echo "start $NAME already finished ($RUN/$TAG.json; CONTINUE=1 to give it more rounds)"
+        [ -f "$RUN/${TAG}_post/post.json" ] || post
         exit 0
     fi
 fi
 # the catalogue is deterministic in (SEED, NSTART): every array task draws the
 # same set into its own directory and takes its own entry
 mkdir -p "$RUN"
-python bfs/hifoo_init.py --ops bfs/data/ops_fx.npz --n "$NSTART" --seed "$SEED" --kind "$KIND" --r "$R" --out "$RUN/catalogue" > "$RUN.catalogue.json"
+python bfs/hifoo_init.py --ops bfs/data/ops_fx.npz --n "$NSTART" --seed "$SEED" --kind "$KIND" --r "$R" --m "$M" --p "$P" --struct "$STRUCT" --out "$RUN/catalogue" > "$RUN.catalogue.json"
 # the deadline from the job's own end time (any --time): 45 min kept after the
 # driver's last round for the figures, on top of its own 30 min for the final
 # certificate and count (bfs/slurm_remaining.py)
@@ -86,5 +92,5 @@ export OPS=bfs/data/ops_fx.npz OUTER=${OUTER:-40} DEADLINE=${DEADLINE:-$(python 
 export LAUNCH="$LAUNCHER -n ${SLURM_NTASKS:-24}"
 bash bfs/run_bfs.sh "$RUN" "$RUN/catalogue/$NAME.npz" "${CONT[@]}"
 # the figures of the saved record, finished or stopped at the deadline (then they show the progress)
-[ -f "$RUN/K_B_C_s0_bfs.json" ] && post
+[ -f "$RUN/$TAG.json" ] && post
 echo "=== done $(date -Is) ==="

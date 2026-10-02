@@ -160,6 +160,7 @@ factorisations per round, ~70 with reduced-model certification every 4th round.
 | zero-controller start (`--kind zero`, `KIND=zero`) | **done**; cluster test plant: 1464.4 -> 1209.6 (0.826 x open loop) in 3 rounds, count 0, 33 min | BFS.md 8 |
 | refused step -> its certified prefix (`--gate-prefix 1` in run_bfs.sh) | **done**, mock-tested; to see on the cluster | BFS.md 5 |
 | restart: resume from the checkpoint (stopped/killed), `CONTINUE=1` / `RESUME=1` (`--continue-record`) for finished runs | **done**, tested in the sandbox | BFS.md 7, 8 |
+| MIMO 2 x 2 (two Gaussian forces, two shear windows), central / decentral (`M=2 P=2 STRUCT=...`) | **done**: gradients FD-checked, 1 round each in the sandbox (1018 / 1110 from 1464) | BFS.md 5 |
 
 ## Next
 

@@ -211,12 +211,21 @@ class _ProxyCLMIMO(_ProxyCL):
             for k_ in ('d', 'e', 'f', 'Bc', 'n', 'K'):
                 out[k_] = np.asarray(g[k_]) / eta
         act, sen = self.port_sides(res, arow, nvec, Kfb)
-        if flags['B']:
-            out['xa'] = np.array([float(np.real(np.vdot(zp, self.placement(D, 'a', xa[i])) * act[i] / eta))
-                                  for i in range(self.m)])
-        if flags['C']:
-            out['xs'] = np.array([float(np.real(sen[j] * np.vdot(self.placement(D, 's', xs[j]), xp) / eta))
-                                  for j in range(self.p)])
+        if getattr(D, 'pos_dims', None) is not None:
+            # backward-facing step (BFS.md 5): vector positions per port, (m, pd_a) / (p, pd_s)
+            if flags['B']:
+                out['xa'] = np.array([np.real((zp.conj() @ self.placement(D, 'a', xa[i])) * act[i] / eta)
+                                      for i in range(self.m)])
+            if flags['C']:
+                out['xs'] = np.array([np.real(sen[j] * (xp @ self.placement(D, 's', xs[j]).conj()) / eta)
+                                      for j in range(self.p)])
+        else:
+            if flags['B']:
+                out['xa'] = np.array([float(np.real(np.vdot(zp, self.placement(D, 'a', xa[i])) * act[i] / eta))
+                                      for i in range(self.m)])
+            if flags['C']:
+                out['xs'] = np.array([float(np.real(sen[j] * np.vdot(self.placement(D, 's', xs[j]), xp) / eta))
+                                      for j in range(self.p)])
         if flags.get('FB'):
             out['va_packed'] = [self._field_row('va', i, zp, np.conj(act[i]) / eta) for i in range(self.m)]
         if flags.get('FC'):

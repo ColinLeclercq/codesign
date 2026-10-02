@@ -221,6 +221,15 @@ ones.
 - Rebuilt at every round at the round's design, as the atoms' tangent basis is (`_jet_basis`).
 - Without it the reduced pencil missed the true near-line pairs, and the full certificate ran every evaluation.
 
+**MIMO: two actuators, two sensors** (user 2026-10-02; `M=2 P=2 STRUCT=central|decentral` in `testplant.slurm` / `codesign.slurm`)
+- Ports of the same kinds: m vertical Gaussian forces, p wall-shear windows; `BFSPlant.bc` returns B = M Psi_a (n x m), C (n x p) when the positions come as (m, 2) / (p, 1).
+- Controller (`closedloop_mimo`, the GL MIMO algebra, M-free): central = one compensator of order R (default 10), B_c (R x p), C_c (m x R), D_c (m x p); decentral = m = p SISO loops of order R/m (5 + 5), sensor k -> actuator k. Real entries (`PackerMIMO` real_ctrl), positions per port (pos_dims), the zero-gain scale floor as the SISO packer's.
+- Starts (`hifoo_init.py --m 2 --p 2 --struct ...`, kind zero by default in testplant): actuators at B2 (0.6, 1.0) and (1.6, 0.9), sensors at the paper's C1 (2.0) and C2 (3.6); the compensator HIFOO's draw (decentral: block tridiagonal, B_c the SISO gauge per loop), shifted to -eps - 0.5.
+- Gradients (`BFSPlant.grads_mimo`, `_ProxyCLMIMO` with vector positions) checked against central differences on the test plant at w = 0.7: full model 6e-11 to 1e-8 relative for every group (d, e, f, B_c, C_c, D_c, both actuators' (x, y), both windows), central and decentral; reduced model 5e-10 to 8e-7.
+- The rest is the SISO path: gamma certified on [0, 10] (the MIMO even pencil), line certificate, continuation gate, certified prefix, winding count (the _FM count with the H^1 tail, operator norms), figures (each port numbered, k_ij Bode entries). Records: `K_B_C_s0_bfs_mimo2x2_<struct>`; directories `_m2p2_<struct>_o10`, so MIMO runs never share a directory with SISO ones.
+- No separation constraint between the two actuators (or windows): they may approach or overlap.
+- Sandbox check (test plant, serial, 1 round each, `--wind 0`): zero start 1464.37 -> central **1017.97** (alpha -0.0895), decentral **1109.67** (alpha -0.1163) after round 0 (SISO round 0: 1296.62); the records, the figures and the MIMO winding march (plumbing, 30 points) ran. Found on the way: a winding march stopped by the point budget counted as complete in the serial path (`winding_cert`, now not ok).
+
 **Interior margin**
 - `--bfs-margin` (section 2).
 

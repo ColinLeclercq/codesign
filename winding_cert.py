@@ -511,6 +511,7 @@ def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
     if nseg <= 1:
         mr = _march(F, line, w_lo, WT, knots, hot, hmin, WT, maxpts)
         total, w, f, npts, ok = mr['total'], mr['w'], mr['f'], mr['npts'], mr['ok']
+        ok = ok and w >= WT          # stopped short (the point budget): the contour is open, not a count
         args = [np.angle(mr['f0'])]
     else:
         kn_ = knots[knots > w_lo]
