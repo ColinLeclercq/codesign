@@ -38,8 +38,17 @@ def comm():
     return MPI.COMM_WORLD
 
 
+_LAUNCHER_SIZE = ('OMPI_COMM_WORLD_SIZE', 'PMI_SIZE', 'SLURM_STEP_NUM_TASKS')
+
+
 def active():
-    """True when this process is part of an MPI job with workers."""
+    """True when this process is part of an MPI job with workers.  Decided
+    from the launcher's environment FIRST: importing mpi4py initialises MPI,
+    and a singleton MPI_Init outside a job allocation aborts on the cluster
+    (check_env.py's notes) -- a GL run must never pay for that."""
+    import os
+    if not any(int(os.environ.get(k, '1') or 1) > 1 for k in _LAUNCHER_SIZE):
+        return False
     try:
         from mpi4py import MPI
         return MPI.COMM_WORLD.Get_size() > 1
@@ -137,7 +146,9 @@ def _build_plant(rec, cache):
         if rec['kind'] != 'BFSPlant':
             raise RuntimeError(f"MPI workers build BFS plants only (got {rec['kind']})")
         from bfs.plant import BFSPlant
+        import certify_sparse
         D = cache[key] = BFSPlant(rec['ops'], r=rec['r'], mc=rec['mc'])
+        certify_sparse.register_plant(D.A, D.M)      # tasks carry a tag for the plant, not A and M
     for k, v in rec['attrs'].items():
         try:
             setattr(D, k, v)

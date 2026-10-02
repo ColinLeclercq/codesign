@@ -816,6 +816,7 @@ def stability_and_abscissa(A, M, b, c, Ac, Bc, nvec, Kfb, eps=1e-3,
 
     Returns (clear, alpha_seen, n_shifts, uncovered_length, witness).
     """
+    global LAST_ARGMAX
     # SEGMENTED SWEEP.  The bisection is sequential -- each shift's radius
     # decides where the next goes -- but the band splits into independent
     # segments: a disk spilling across a boundary is simply re-derived by the
@@ -838,10 +839,15 @@ def stability_and_abscissa(A, M, b, c, Ac, Bc, nvec, Kfb, eps=1e-3,
         ns = sum(o[2] for o in out)
         unc = sum(o[3] for o in out)
         wit = next((o[4] for o in out if o[4] is not None), None)
-        # eigs_seen harvesting is a SERIAL-path feature (the workers are
-        # separate processes); in pooled mode only the witnesses come back.
+        # the workers return what their sweeps saw (o[5]), so the near-line
+        # eigenvalues (the continuation gate's watch list) are harvested in
+        # pooled mode too
         if eigs_seen is not None:
             eigs_seen.extend(o[4] for o in out if o[4] is not None)
+            for o in out:
+                eigs_seen.extend(o[5])
+        _all = [complex(x) for o in out for x in o[5]]
+        LAST_ARGMAX = max(_all, key=lambda x: x.real) if _all else None
         return clear, a_seen, ns, unc, wit
 
     r = Ac.shape[0]
@@ -855,7 +861,6 @@ def stability_and_abscissa(A, M, b, c, Ac, Bc, nvec, Kfb, eps=1e-3,
     nshift = 0
     alpha_seen = -np.inf
     lam_arg = None
-    global LAST_ARGMAX
     LAST_ARGMAX = None
     while CI and nshift < itmax:
         lo, hi = CI.pop(0)
@@ -1040,9 +1045,11 @@ def _seg_worker(t):
     (A, M, b, c, Ac, Bc, nvec, Kfb, eps, shrink, k, eps_int, itmax,
      lo, hi) = t
     A, M = _land(A, M)
-    return stability_and_abscissa(A, M, b, c, Ac, Bc, nvec, Kfb, eps=eps,
-                                  shrink=shrink, k=k, eps_int=eps_int,
-                                  itmax=itmax, wlo=lo, whi=hi)
+    seen = []
+    out = stability_and_abscissa(A, M, b, c, Ac, Bc, nvec, Kfb, eps=eps,
+                                 shrink=shrink, k=k, eps_int=eps_int,
+                                 itmax=itmax, wlo=lo, whi=hi, eigs_seen=seen)
+    return tuple(out) + (seen,)
 
 
 # ------------------------------------------------------------------ dense

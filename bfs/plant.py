@@ -32,6 +32,7 @@ from fe_codesign import FECoDesign
 from closedloop_sparse import ClosedLoopResolvent
 
 SIGMA_PORT = 0.5          # h / 2
+POS_MARGIN = 0.25         # centres at least sigma / 2 inside the domain (BFS.md 2; --bfs-margin)
 
 
 class BFSPlant(FECoDesign):
@@ -51,6 +52,7 @@ class BFSPlant(FECoDesign):
         self.edges, self.edge_labels = o['edges'], o['edge_labels']
         self.Re = o['Re']
         self.sigma_port = float(sigma)
+        self.pos_margin = POS_MARGIN
         self.xn = None                       # no 1-D node array (field cases are GL only)
         self.Kstiff = None
         # as FECoDesign.__init__ (the attributes its generic methods use)
@@ -186,15 +188,47 @@ class BFSPlant(FECoDesign):
         d = -x / np.sqrt(np.clip(6.25 - x ** 2, 1e-300, None))
         return np.where((x > 0.0) & (x < 2.0), d, 0.0)
 
+    def d2wall(self, x):
+        x = np.asarray(x, float)
+        on = (x > 0.0) & (x < 2.0)
+        return np.where(on, -6.25 / np.where(on, 6.25 - x ** 2, 1.0) ** 1.5, 0.0)
+
     def box(self):
         return (float(self.pts[:, 0].min()), float(self.pts[:, 0].max()),
                 float(self.pts[:, 1].min()), float(self.pts[:, 1].max()))
 
-    def inside(self, x0, margin=0.0):
-        x_lo, x_hi, y_lo, y_hi = self.box()
+    def clearance(self, x0):
+        """Distance of the centre to the lower wall's tangent line at x
+        (= the distance to the wall where it is straight; first order on the
+        arc), with its gradient in (x, y)."""
         x, y = float(x0[0]), float(x0[1])
-        return (x_lo + margin <= x <= x_hi - margin and y <= y_hi - margin
-                and y >= float(self.wall(x)) + margin)
+        w, dw, ddw = float(self.wall(x)), float(self.dwall(x)), float(self.d2wall(x))
+        s = np.sqrt(1.0 + dw * dw)
+        g = (y - w) / s
+        return g, np.array([-dw / s - (y - w) * dw * ddw / s ** 3, 1.0 / s])
+
+    def position_constraints(self, x0, margin=None):
+        """The interior constraint of one centre, as rows c(x0) <= 0 with their
+        gradients: x_lo + m <= x <= x_hi - m, y <= y_hi - m, clearance >= m
+        (m = pos_margin; BFS.md 2)."""
+        m = self.pos_margin if margin is None else margin
+        x_lo, x_hi, _, y_hi = self.box()
+        x, y = float(x0[0]), float(x0[1])
+        g, dg = self.clearance(x0)
+        return [(x_lo + m - x, np.array([-1.0, 0.0])), (x - x_hi + m, np.array([1.0, 0.0])),
+                (y - y_hi + m, np.array([0.0, 1.0])), (m - g, -dg)]
+
+    def inside(self, x0, margin=None):
+        return all(c <= 0.0 for c, _ in self.position_constraints(x0, margin))
+
+    def position_rows(self, xa, xs, flags):
+        """The interior rows of the FREE centres for the SQP subproblem (hard
+        linear rows c + g.d <= 0, sqp_inner.Evaluator): [(c, {'xa'|'xs': g})]."""
+        out = []
+        for key, x0, on in (('xa', xa, flags.get('B')), ('xs', xs, flags.get('C'))):
+            if on:
+                out += [(c, {key: g}) for c, g in self.position_constraints(x0)]
+        return out
 
     # ---------------------------------------------------------------- loop
     def hinf(self, arow, nvec, Kfb, b, c, lam=None, warm=None, nsw=9, wmin=0.0, wmax=4.0, tol_active=2e-3):

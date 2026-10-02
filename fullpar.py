@@ -36,6 +36,10 @@ POOL = None
 NPROC = 1
 CTX = {}
 STATS = dict(calls=0, tasks=0, work=0.0, wall=0.0)    # pmap calls through the pool (report())
+# every pmap call with >= 2 tasks, pooled or not: (number of tasks, task seconds,
+# longest task) -- what a pool of W workers would take (estimate(W), BFS.md 7)
+CALLS = []
+IN_TASK = False          # True while a task runs in THIS process (serial pmap; bfs/mumps_lu.py accounting)
 
 
 _MPI = None          # bfs/mpipool.MPIPool when the run is an MPI job (backward-facing step, BFS.md 3)
@@ -140,9 +144,20 @@ def _merge(site, d):
 def pmap(fn, args):
     """[fn(a) for a in args] in order; in the workers when the pool is up and
     there are at least two tasks (dynamic scheduling, one task at a time)."""
+    global IN_TASK
     args = list(args)
     if POOL is None or len(args) < 2:
-        return [fn(a) for a in args]
+        if len(args) < 2:
+            return [fn(a) for a in args]
+        out, dts = [], []
+        IN_TASK = True
+        try:
+            for a_ in args:
+                t0 = _time.perf_counter(); out.append(fn(a_)); dts.append(_time.perf_counter() - t0)
+        finally:
+            IN_TASK = False
+        CALLS.append((len(args), float(sum(dts)), float(max(dts))))
+        return out
     if _stamp() != _STAMP:
         start(NPROC, **dict(CTX))            # the workers' mesh object is stale: re-fork
     site = _site()
@@ -151,6 +166,7 @@ def pmap(fn, args):
     STATS['wall'] += _time.perf_counter() - t0
     STATS['calls'] += 1; STATS['tasks'] += len(args)
     out = []
+    CALLS.append((len(args), float(sum(r_[2] for r_ in res)), float(max(r_[2] for r_ in res))))
     for r, d, dt in res:
         STATS['work'] += dt
         if d is not None:
@@ -159,14 +175,24 @@ def pmap(fn, args):
     return out
 
 
+def estimate(W):
+    """Seconds the recorded pmap calls would take on W workers (dynamic
+    scheduling, no dispatch cost): per call max(work / W, longest task)."""
+    return float(sum(max(w / max(W, 1), m) for _, w, m in CALLS))
+
+
 def report():
     """One line for the log: the pool's work (the tasks' own times, i.e. what
     they would cost serially, less the dispatch) against its wall time."""
     if not STATS['calls']:
+        if CALLS:
+            return (f"full-model tasks run serially: {sum(n for n, _, _ in CALLS)} tasks in {len(CALLS)} calls, "
+                    f"{sum(w for _, w, _ in CALLS):.1f} s (on 23 / 95 workers ~{estimate(23):.1f} / {estimate(95):.1f} s)")
         return "full-model pool: not used"
     return (f"full-model pool ({NPROC} workers): {STATS['tasks']} tasks in {STATS['calls']} calls, "
             f"{STATS['work']:.1f} s of task time in {STATS['wall']:.1f} s wall "
-            f"(x{STATS['work'] / max(STATS['wall'], 1e-9):.2f})")
+            f"(x{STATS['work'] / max(STATS['wall'], 1e-9):.2f}; on 23 / 95 workers ~{estimate(23):.1f} / "
+            f"{estimate(95):.1f} s)")
 
 
 # ------------------------------------------------------------ common tasks

@@ -1575,6 +1575,11 @@ def main():
     ap.add_argument('--start', type=int, default=0)
     ap.add_argument('--ne', type=int, default=200)
     ap.add_argument('--wall', type=float, default=1500.)
+    ap.add_argument('--deadline', type=float, default=0.0,
+                    help='seconds: no new round once elapsed + 1.25 x the longest round + --deadline-final would pass '
+                         'it (the job time limit; 0 = off). A resume restarts the clock.')
+    ap.add_argument('--deadline-final', dest='deadline_final', type=float, default=1800.0,
+                    help='seconds reserved after the last round for the final certificate and save (--deadline)')
     ap.add_argument('--r', type=int, default=7)
     ap.add_argument('--alpha_warm', type=int, default=0,
                     help='warm-started single alpha shift; 0 = OFF (default). '
@@ -1619,6 +1624,9 @@ def main():
     ap.add_argument('--bfs-sampled', dest='bfs_sampled', type=int, default=33,
                     help='--plant bfs: gamma from a full-model grid of this many points + the reduced model\'s peaks, '
                          'climbed (no level-set certificate yet, BFS.md 5); 0 = the GL level-set certificate')
+    ap.add_argument('--bfs-margin', dest='bfs_margin', type=float, default=0.25,
+                    help='--plant bfs: actuator and sensor centres stay this far inside the domain (box sides, top, '
+                         'and the lower wall\'s tangent line), hard SQP rows (BFS.md 2)')
     ap.add_argument('--bfs-band', dest='bfs_band', type=float, default=8.0,
                     help='--plant bfs: the certified band is [0, this] (real plant: sigma(-w) = sigma(w)), widened '
                          'to cover the controller poles; no all-frequency tail bound yet (BFS.md 4)')
@@ -2210,7 +2218,8 @@ def main():
         return _wc.winding_count(D.A, D.M, bb_, cc_, aa_, nn_, KK_, line=_line, mc=D.mc,
                                  p_plant=_pp, hot=_hot, zeros_hint=_zh, hmin_frac=1e-8,
                                  ctrl_exact=(a.wind_ctrl == 'exact'))
-    tag = os.path.join(a.outdir, f"{a.case.replace('+','_')}_s{a.start}_ne{a.ne}"
+    tag = os.path.join(a.outdir, f"{a.case.replace('+','_')}_s{a.start}"
+                       + ('_bfs' if a.plant == 'bfs' else f"_ne{a.ne}")
                        + (f"_mimo{a.n_act}x{a.n_sens}_{a.ctrl_struct}" if MIMO else ''))
     t_start = time.time()
 
@@ -2237,7 +2246,7 @@ def main():
         # the backward-facing step (BFS.md): its M is the velocity mass,
         # singular, never factorised (no massops warm-up)
         from bfs.plant import BFSPlant
-        D = BFSPlant(a.ops, r=a.r)
+        D = BFSPlant(a.ops, r=a.r); D.pos_margin = float(a.bfs_margin)
         print(f"BFS plant: {a.ops}, n = {D.n}, Re = {D.Re:g}, ports: Gaussians of std {D.sigma_port}, "
               f"LU backend {a.lu_order}", flush=True)
     else:
@@ -2260,6 +2269,11 @@ def main():
     if fullpar._MPI is not None:
         a.nproc = fullpar.NPROC              # MPI job: the ranks are the pool (BFS.md 3)
         print(f"full-model pool: {fullpar.NPROC - 1} MPI worker ranks (bfs/mpipool.py)", flush=True)
+    if BFS and a.nproc > 1 and a.cert_nseg > 1:
+        # the line certificate in segments over the pool (each shift is a full
+        # LU here); the GL |Omega| pool below (parallel.py, forked) is not used
+        D.cert_nseg, D.cert_pool = int(a.cert_nseg), fullpar.POOL
+        print(f"BFS: line certificate in {D.cert_nseg} segments over the pool", flush=True)
     def _plant_warmup():
         # once per mesh, before the loop (STAGE6 6.29): the widest plant
         # enclosure (every narrower one is filtered from it) and the
@@ -2557,6 +2571,38 @@ def main():
               f"{'+' if _s > 0 else '-'}conj(R psi_a)"
               f"{', xs = -xa' if _cp else ''}; start projected onto the "
               f"subspace (branch chosen as nearest)", flush=True)
+    _stab_rec = None
+    if BFS:
+        # the plant's spectrum near the axis, once, before any certificate (the
+        # stabilisation phase's included): the band [0, --bfs-band] (+ pad)
+        a.wlo, a.whi = 0.0, float(a.bfs_band)
+        D.band_of = lambda: a.whi + a.wpad        # the stability certificate's band follows the run's
+        _t0 = time.time()
+        _ev = D.plant_spectrum(a.whi + a.wpad)
+        _ev = _ev[_ev.imag >= 0]
+        print(f"BFS plant spectrum near the axis (shift-invert, Im in [0, {a.whi + a.wpad:g}]): "
+              f"{len(_ev)} eigenvalues, rightmost {_ev[np.argmax(_ev.real)]:.4f} "
+              f"({'converged' if D.plant_ev_ok else 'NOT all shifts converged'}, {time.time() - _t0:.0f} s)", flush=True)
+        _bad = [k_ for k_, x_ in (('actuator', xa0), ('sensor', xs0)) if not D.inside(x_)]
+        if _bad:
+            raise SystemExit(f"BFS: the start's {' and '.join(_bad)} centre is not inside the domain "
+                             f"(margin {D.pos_margin:g}, --bfs-margin)")
+        if a.stabilise and src is None and not os.path.exists(tag + '_ckpt.npz'):
+            # HIFOO's phase at this scale: continuation in the loop gain from
+            # the open loop (bfs/hifoo_init.feasible_start, BFS.md 6)
+            from bfs.hifoo_init import feasible_start
+            _t0 = time.time()
+            _bb_, _cc_, *_ = D.bc(xa0, xs0)
+            arow0, nvec0, K0, _fi = feasible_start(D, arow0, nvec0, K0, _bb_, _cc_, a.eps, delta=a.stab_delta,
+                                                   pool=fullpar.POOL)
+            _stab_rec = dict(_fi, wall=round(time.time() - _t0, 1), stabilised=bool(_fi['tau'] > 0.0),
+                             method='loop-gain continuation')
+            from bfs import mumps_lu as _ml
+            print(f"  [ledger] feasible start {_stab_rec['wall']:.0f} s; {_ml.report()}; {fullpar.report()}",
+                  flush=True)
+            if _fi['tau'] <= 0.0:
+                print("FATAL: the open loop is not certified inside the margin (BFS.md 6)", flush=True)
+                return
     pk_args = (arow0, nvec0, K0, xa0, xs0, va0, vs0)
     if a.field_basis != 'none' and (flags.get('FB') or flags.get('FC')):
         # FREE FIELDS ON A TRUNCATED BASIS (STAGE5 6): va = Phi_a beta_a,
@@ -2624,8 +2670,7 @@ def main():
     else:
         pk = Packer(D, flags, *pk_args)
     z = pk.z0()
-    _stab_rec = None
-    if a.stabilise:
+    if a.stabilise and not BFS:
         # ---- STAGE 2: abscissa-descent phase (stabilise.py) before anything
         # else, when the start is not inside the margin plus the cushion.
         from stabilise import stabilise as _stab_fn, dense_abscissa_pair as _dap
@@ -2664,7 +2709,7 @@ def main():
                              evals=0, stabilised=True, wall=0.0, skipped=True)
 
     _par = None
-    if a.nproc and a.nproc > 1:
+    if a.nproc and a.nproc > 1 and not BFS:
         nseg = max(1, a.cert_nseg)
         D.cert_pool = fullpar.POOL if nseg > 1 else None
         D.cert_nseg = nseg
@@ -2786,13 +2831,6 @@ def main():
     wlo_run, whi_run = band_from_controller(arow0)
     if BFS:
         wlo_run = 0.0
-        D.band_of = lambda: a.whi + a.wpad        # the stability certificate's band follows the run's
-        _t0 = time.time()
-        _ev = D.plant_spectrum(a.whi + a.wpad)
-        _ev = _ev[_ev.imag >= 0]
-        print(f"BFS plant spectrum near the axis (shift-invert, Im in [0, {a.whi + a.wpad:g}]): "
-              f"{len(_ev)} eigenvalues, rightmost {_ev[np.argmax(_ev.real)]:.4f} "
-              f"({'converged' if D.plant_ev_ok else 'NOT all shifts converged'}, {time.time() - _t0:.0f} s)", flush=True)
     if (wlo_run, whi_run) != (a.wlo, a.whi):
         print(f"start design has poles beyond the band; widened to "
               f"[{wlo_run:.2f}, {whi_run:.2f}] for the first iterates",
@@ -3221,7 +3259,23 @@ def main():
             watch_cur = _topk_watch(_seen0, a.cont_k, a.eps)
             print(f"continuation anchor verified: alpha={_al0:+.4f}, watching "
                   f"{len(watch_cur)} near-line eigenvalue(s)", flush=True)
+    _t_round = []                                # round start times (--deadline)
     for it in range(a.outer):
+        if BFS:
+            # the run-time ledger (BFS.md 7): wall so far, the driver's own MUMPS
+            # work and the full-model tasks (with their 95-worker estimate)
+            from bfs import mumps_lu as _ml
+            print(f"  [ledger] round {it} starts at {time.time() - t_start:.0f} s; {_ml.report()}; "
+                  f"{fullpar.report()}", flush=True)
+        if a.deadline > 0:
+            # stop BEFORE a round that would not finish: the job's time limit
+            # then never cuts a round (or the final save) in half (BFS.md 7)
+            _t_round.append(time.time())
+            _dur = max(np.diff(_t_round)) if len(_t_round) > 1 else 0.0
+            if it > 0 and (_t_round[-1] - t_start) + 1.25 * _dur + a.deadline_final > a.deadline:
+                print(f"  DEADLINE STOP: {(_t_round[-1] - t_start) / 3600:.2f} h elapsed, the longest round took "
+                      f"{_dur / 3600:.2f} h, --deadline {a.deadline / 3600:.2f} h", flush=True)
+                break
         # ALWAYS restart the inner solve from the best CERTIFIED point.  The
         # inner problem only sees Omega, so its optimum can sit where an
         # unmodelled frequency is huge; accepting that point and continuing from
@@ -4340,7 +4394,14 @@ def main():
     # -band_recut with none right of -eps/2 is that certificate.
     band_check = {}
     _band_lam_final = []                  # the located set of the final band check
-    if a.ctrl_imcap == 'off':
+    if BFS:
+        # the final band check, the winding count and the all-frequency tail
+        # bound all rest on enclosures that use M^-1 (the plant's numerical
+        # range); the singular velocity mass has none (BFS.md 4)
+        print(f"BFS: end-of-run certificates not run (final band check, winding count, all-w tail: M^-1 "
+              f"enclosures); gamma is the {'sampled maximum' if certified_norm.sampled else 'level-set value'} "
+              f"on [0, {a.whi:g}], stability the line certificate on the band", flush=True)
+    if a.ctrl_imcap == 'off' and not BFS:
         try:
             _hwf = band_from_closedloop(arow, nvec, K, b, c, count=True)
             band_check = {k_: v_ for k_, v_ in _band_last['info'].items() if k_ in ('located', 'count', 'complete')}
@@ -4365,7 +4426,7 @@ def main():
     # Re = -eps/2 exactly, matrix-free, with the near-line eigenvalues the
     # sweep already harvested serving as resolution hints for the tracker.
     wind_n = None
-    if a.wind:
+    if a.wind and not BFS:                   # the count's tail needs the plant enclosure (M^-1, BFS.md 4)
         # 0 right of -eps at acceptance (the same design) implies 0 right of
         # -eps/2: the save-time count is then not repeated (STAGE6 6.29)
         _implied = _wind_best is not None and np.array_equal(_wind_best[0], zbest)
@@ -4468,7 +4529,7 @@ def main():
     # Lanczos -- the S-lemma heights of sparse_spectrum -- plus the loop's gain
     # bound), then the sparse level set proves nothing exceeds gamma on [-W, W].
     # Together: gamma over ALL w, at any n.
-    all_w = {}
+    all_w = dict(sampled=True, band=[0.0, float(a.whi)]) if BFS else {}
     if _allw_best is not None and np.array_equal(_allw_best[0], zbest) and gam <= _allw_best[1] * (1.0 + 1e-12):
         # the best design's own all-w certificate, at acceptance, at this level:
         # not repeated (STAGE6 6.29)
@@ -4633,8 +4694,8 @@ def main():
                 exchange_converged=bool(exch_converged),
                 exchange_fixed_point=bool(exch_fixed_point), exchange_progress_stop=bool(exch_progress_stop),
                 exchange_stalled=bool(exch_stalled),
-                ladder=[], xa=(np.atleast_1d(xa).astype(float).tolist() if MIMO else float(xa)),
-                xs=(np.atleast_1d(xs).astype(float).tolist() if MIMO else float(xs)),
+                ladder=[], xa=(np.atleast_1d(xa).astype(float).tolist() if MIMO or BFS else float(xa)),
+                xs=(np.atleast_1d(xs).astype(float).tolist() if MIMO or BFS else float(xs)),
                 norm_psi_a=([D.norm_M(pa[:, j]) for j in range(pa.shape[1])] if MIMO else D.norm_M(pa)),
                 norm_psi_s=([D.norm_M(ps[:, j]) for j in range(ps.shape[1])] if MIMO else D.norm_M(ps)),
                 wind_accept=dict(on=bool(_wind_accept), checks=int(n_wind_accept[0]), refused=int(n_wind_refused[0]),
@@ -4655,6 +4716,9 @@ def main():
         except OSError:
             pass
     print(fullpar.report(), flush=True)
+    if BFS:
+        from bfs import mumps_lu as _ml
+        print(_ml.report(), flush=True)
     fullpar.stop()
     print(json.dumps({k: summ[k] for k in
                       ('case', 'gamma', 'alpha', 'n_active', 'outer',

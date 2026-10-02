@@ -143,6 +143,19 @@ class Evaluator:
             self._E_ctrl = Ed
         return self._E_ctrl
 
+    def _pos_rows(self, z):
+        """Position constraints of the plant (2-D domains, BFS.md 2): hard
+        linear rows c + g.d <= 0 with g in z (through the packer); none on GL."""
+        fn = getattr(self.D, 'position_rows', None)
+        if fn is None:
+            return []
+        _, _, _, xa, xs, _, _ = self.pk.unpack(z)
+        rows = []
+        for c, gd in fn(xa, xs, self.flags):
+            g = self.pk.zero_grad(); g.update(gd)
+            rows.append((float(c), np.asarray(self.pk.grad(g), float)))
+        return rows
+
     def _field_rows(self, z):
         """SOBOLEV SHAPE CONSTRAINT on the free fields (2026-09-28, STAGE5 32):
         R(v) = (v^H K v) / (v^H M v) <= FIELD_KMAX2, K the FE stiffness matrix --
@@ -666,7 +679,9 @@ class Evaluator:
             except Exception:
                 lmi = None
         field_rows = self._field_rows(z) if FIELD_KMAX2 else []
+        pos_rows = self._pos_rows(z)
         return dict(s=s, Gs=Gs, smax=float(s.max()), blocks=blocks, tops=(dict(self.w_star) if DEBUG_LS else {}), field_rows=field_rows,
+                    pos_rows=pos_rows,
                     al=float(al), ga=ga, clr=bool(clr), al_rows=al_rows_qp, al_rows_all=al_rows,
                     al_ctrl=al_ctrl, al_ctrl_rest=al_ctrl_rest, ctrl_rows=ctrl_rows, lmi=lmi, hermite=hermite, pair=pair,
                     hermite_cl=hermite_cl, z=z.copy())
@@ -750,6 +765,8 @@ def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, di
         a = np.zeros(n); a[:NZ] = g_f; a[iel + kel] = -1.0; lin_A.append(a); lin_b.append(-c_f)
         a = np.zeros(n); a[iel + kel] = -1.0; lin_A.append(a); lin_b.append(0.0)
         kel += 1
+    for c_p, g_p in ev.get('pos_rows', []):               # position rows c + g.d <= 0 (hard: linear, start feasible)
+        a = np.zeros(n); a[:NZ] = g_p; lin_A.append(a); lin_b.append(-c_p)
     if not use_lmi:
         # the compensator rows use the GATE's line (allowance ctrl_max, i.e.
         # Re <= 0 by decision), not the frozen inner's -eps: the K+B design
@@ -994,6 +1011,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
     def viol(e_, t_):
         v = max(e_['smax'] - t_, 0.0) + max(e_['al'] + eps + mg, 0.0)
         v += sum(max(c_f, 0.0) for c_f, _ in e_.get('field_rows', []))
+        v += sum(max(c_p, 0.0) for c_p, _ in e_.get('pos_rows', []))
         if e_.get('pair') is not None:
             # on the manifold (retracted iterates): the pair's excursion is -kappa;
             # it counts only if the retraction failed.  The other poles by Re.
@@ -1028,7 +1046,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             # where the computed poles split by sqrt(eps)); the others by Re
             ok_c = (e_['pair']['exc'] <= 1e-8 and
                     (not np.isfinite(e_.get('al_ctrl_rest', -np.inf)) or e_['al_ctrl_rest'] <= lim + 1e-8))
-        ok_f = all(c_f <= 1e-9 for c_f, _ in e_.get('field_rows', []))
+        ok_f = all(c_f <= 1e-9 for c_f, _ in e_.get('field_rows', []) + e_.get('pos_rows', []))
         return e_['clr'] and e_['al'] + eps <= -mg and ok_c and ok_f
 
     def grad_L(e_, sub):
@@ -1044,6 +1062,8 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             g += sub['lin'][k] * g_j; k += 2          # row, then its slack>=0 row
         for c_f, g_f in e_.get('field_rows', []):
             g += sub['lin'][k] * g_f; k += 2
+        for c_p, g_p in e_.get('pos_rows', []):
+            g += sub['lin'][k] * g_p; k += 1
         if e_.get('lmi') is None:
             for al_k, g_k in e_['ctrl_rows']:
                 g += sub['lin'][k] * g_k; k += 2

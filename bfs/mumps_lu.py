@@ -19,19 +19,38 @@ Options (environment, read once):
     BFS_MUMPS_MEM        ICNTL(14): workspace increase in percent (default 50)
 """
 import os
+import time
 import itertools
 import numpy as np
 import scipy.sparse as sp
 
 _count = itertools.count()
 _PETSc = None
+# this process's MUMPS work, for the run-time estimate (BFS.md 7): factorisations
+# and single-RHS solves with their seconds, split by whether they ran inside a
+# full-model pool task (fullpar.IN_TASK) or in the driver itself
+STATS = {k: [0, 0.0] for k in ('factor_driver', 'factor_task', 'solve_driver', 'solve_task')}
+
+
+def _account(kind, dt):
+    import fullpar
+    e = STATS[kind + ('_task' if fullpar.IN_TASK else '_driver')]
+    e[0] += 1; e[1] += dt
+
+
+def report():
+    return "MUMPS (this process): " + ", ".join(f"{k} {v[0]} ({v[1]:.1f} s)" for k, v in STATS.items())
 
 
 def _petsc():
     global _PETSc
     if _PETSc is None:
         import petsc4py
-        petsc4py.init([])
+        # PETSc on COMM_SELF: PetscInitialize is collective over its world, and
+        # in the MPI task farm every rank initialises on its own, at its first
+        # factorisation (on COMM_WORLD a worker waited forever for the driver)
+        from mpi4py import MPI
+        petsc4py.init([], comm=MPI.COMM_SELF)
         from petsc4py import PETSc
         if not np.issubdtype(PETSc.ScalarType, np.complexfloating):
             raise RuntimeError("bfs/mumps_lu.py needs PETSc built with complex scalars")
@@ -41,6 +60,7 @@ def _petsc():
 
 class MumpsLU:
     def __init__(self, S):
+        t0 = time.perf_counter()
         PETSc = _petsc()
         S = sp.csr_matrix(S, dtype=complex)
         S.sum_duplicates(); S.sort_indices()
@@ -69,15 +89,20 @@ class MumpsLU:
         except Exception:
             self.memory_mb = float('nan')
         self._x, self._b = self._A.createVecs()
+        _account('factor', time.perf_counter() - t0)
 
     def _one(self, b, trans):
+        t0 = time.perf_counter()
         self._b.setArray(b if trans != 'H' else np.conj(b))
         if trans == 'N':
             self._ksp.solve(self._b, self._x)
-            return self._x.getArray().copy()
-        self._ksp.solveTranspose(self._b, self._x)      # A^T x = b ;  A^H x = b  <=>  A^T conj(x) = conj(b)
-        x = self._x.getArray().copy()
-        return x if trans == 'T' else np.conj(x)
+            x = self._x.getArray().copy()
+        else:
+            self._ksp.solveTranspose(self._b, self._x)      # A^T x = b ;  A^H x = b  <=>  A^T conj(x) = conj(b)
+            x = self._x.getArray().copy()
+            x = x if trans == 'T' else np.conj(x)
+        _account('solve', time.perf_counter() - t0)
+        return x
 
     def solve(self, b, trans='N'):
         b = np.asarray(b, complex)
