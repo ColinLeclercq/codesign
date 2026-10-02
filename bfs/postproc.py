@@ -231,7 +231,7 @@ def fig_controller(path, wk, kk, poles, W):
         _style(ax)
         ax.axvspan(wk[0], W, color='#f0efec', zorder=0)
         for p in poles:
-            if p.imag > 0:
+            if p.imag > 1e-9 * max(abs(p), 1.0) and wk[0] <= p.imag <= wk[-1]:
                 ax.axvline(p.imag, color=GRID, lw=1.0, ls=(0, (2, 2)))
     a1.loglog(wk, np.abs(kk), color=C_CLOSED, lw=2.0)
     a1.set_ylabel('|k(i$\\omega$)|', color=INK)

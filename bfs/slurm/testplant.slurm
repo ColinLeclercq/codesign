@@ -49,7 +49,8 @@ time $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/postproc.py --ops "$OPS" -
 python - "$OUT/run/K_B_C_s0_bfs.json" "$OUT/run/K_B_C_s0_bfs_post/post.json" <<'EOF'
 import json, sys
 r, p = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
-print("gamma per round:", [round(h['gamma_certified'], 4) for h in r['history']])
+print("best gamma after each round:", [round(h['gamma_best'], 4) for h in r['history']],
+      "(candidates certified:", [round(h['gamma_certified'], 4) for h in r['history']], ")")
 print(f"final gamma {r['gamma']:.6f}, open-loop peak {p['peak_open']['sigma'][0]:.6f} "
       f"(ratio {r['gamma'] / p['peak_open']['sigma'][0]:.4f}); wind_count {r['wind_count']}; xa {r['xa']} xs {r['xs']}")
 EOF

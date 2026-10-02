@@ -173,6 +173,7 @@ uses:
 - Arnoldi: k = 4 nearest (the pencil's eigenvalues come in pairs mirrored across the axis), `NEAR_NCV = 100`, first attempt 60 restarts (`STRICT_MAXITER`). ncv 100 needs 100-190 applications where 30 needed 450-1480, same nearest eigenvalue; a loose tolerance (1e-6) returned a wrong one, so the tolerance stays 1e-9.
 - Cost, test plant, serial: 334 s for one certificate (it was 1040 s with ncv 30). The full-size 2n pencil: LU 58 s and 3.9 GB in the sandbox, solve 0.6 s; the first generation of the sweep is split over the workers (`--cert-split 23`).
 - `--bfs-sampled N > 0` keeps the sampled maximum (option B) for comparison.
+- The certificate's starting value (2026-10-02): the inner problem's t is a reduced-model value; where the model overestimates the full sigma_1, the certificate proved nothing above t (1 + rtol) and returned t, an upper bound no frequency attains (cluster test plant: 1209.568 certified, 1208.919 at the witness, "WITNESS INVARIANT VIOLATED" in 2 of 3 rounds; the record's gamma was safe but 5e-4 loose). For the BFS the certificate now starts from an attained full value (`_true_lower_bound`: the hint and the reduced model's top peaks sampled over the pool, the best climbed by its slope; about 10 full evaluations), so the certified value is attained to rtol (checked: 1645.2109553 attained vs the earlier record's 1645.2109574).
 
 **The free-radius bound without M^-1** (`SparsePencil.free_radius`, `sparse_spectrum.free_radius`)
 - E = R^T J R with R never formed: rho((A - sE)^-1 E) <= ||R P^-1 R^T||, whose square is lambda_max(P^-H W P^-1 W), W = R^T R = blockdiag(M_cl, M_cl) semi-definite: Arnoldi, no inverse. For an SPD M it equals the earlier lambda_max(X^H W X, W): identical to 1e-15 on GL, so one code path.
@@ -399,9 +400,18 @@ smoke test, 96 ranks at once on one node):
 - Forcing at the peak: concentrated on the step's corner and shear layer, under the actuator; response: the shear-layer wavepacket from x = 5 to the outlet at x = 30 (not decayed there: the truncated domain).
 - 425 s for the curves, 7 s for the vectors (MPI, 2 ranks).
 
+*Cluster, test plant, zero start, 3 rounds (job 16879784, 24 ranks, 2026-10-02)*
+- Plant data (range + poles at -0.05 and -0.025) 14 min; the run 17 min; the figures 70 s; 33 min in all.
+- Start: gamma 1464.37 (= the open-loop peak), alpha -0.0560, count 0 exactly (no march).
+- Round 0: the SQP step (to 1140.0) was refused by the continuation gate (split depth exhausted: the first closing of the loop moves the spectrum too far to track); the tau governor capped the next steps. Rounds 1 and 2 accepted: 1367.68, 1209.57. Final **1209.57 = 0.826 x the open-loop peak**, alpha -0.0836, two active peaks (a flattened top near w = 0.73 to 0.91), winding count 0 right of -0.025 (3580 points, 94 s over 23 workers).
+- Positions: actuator (0.6, 1.0) -> (1.19, 1.12), onto the shear layer past the arc; sensor window 2.0 -> 2.12.
+- Controller: one compensator pole at -0.05, on the constraint alpha(A_c) <= -eps; |k| rises towards w = 0 (163 vs 52 open loop at w = 0, below gamma).
+- Not converged: -11.6 % in the last round.
+- Found: the certified value was the reduced t, not attained (fixed above); the Bode plot's axis ran to 1e-15 for a real pole with Im ~ 1e-16 (fixed); the job's verdict printed candidates, not the accepted values (fixed).
+
 ## 9. Open items
 
-- **Starts below the open loop:** the zero-controller start exists (section 6); its rounds are to be run on the cluster (`testplant.slurm`, then `KIND=zero codesign.slurm`).
+- **Starts below the open loop:** the zero-controller start works (test plant, cluster: 0.826 x the open-loop peak in 3 rounds, section 8); the first round's step is refused by the continuation gate (one round lost).
 
 - **The disks of the gamma certificate** are certificates by exhibition: each comes from eigenvalues Arnoldi returned converged (residual 1e-9) nearest the shift. A set that does not converge is retried, then the interval bisected; nothing is assumed. The norm-based (eigenvalue-free) radius is rigorous but 1e-7 to 1e-10 here, so it cannot replace them (section 4).
 - **Plant certificate on the full mesh:** about 2 h on 48 ranks projected from the test plant (41 + 36 min serial); not yet run.

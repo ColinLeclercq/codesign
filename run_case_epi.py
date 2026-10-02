@@ -1256,6 +1256,33 @@ def _pin_lus(D, freqs):
             D._lu_pin[key] = lu
 
 
+def _true_lower_bound(sig, sigd, sig_many, ro_, b, c, D, arow, nvec, K, wlo, whi, w_hint):
+    """(w, sigma_1(w)) with the FULL model, as high as cheaply found: the
+    candidates are the caller's hint and the reduced model's three highest
+    local maxima (fine sweep, free), sampled at once (the pool), the best
+    climbed by its slope.  (None, None) without candidates."""
+    cw = []
+    if w_hint is not None and np.isfinite(w_hint) and wlo <= w_hint <= whi:
+        cw.append(float(w_hint))
+    if ro_ is not None and ro_.dim > 0:
+        rc0 = ro_.make_cl(b, c, D.r, D.mc)
+        wf0 = np.linspace(wlo, whi, 1201)
+        gf0 = _sigmas(rc0, wf0, arow, nvec, K)
+        i0 = np.arange(1, len(gf0) - 1)
+        loc0 = i0[(gf0[i0] >= gf0[i0 - 1]) & (gf0[i0] >= gf0[i0 + 1])]
+        cw += [float(wf0[j]) for j in loc0[np.argsort(-gf0[loc0])][:3]] + [float(wf0[int(np.argmax(gf0))])]
+    if not cw:
+        return None, None
+    cw = np.array(sorted(set(round(x, 9) for x in cw)))
+    vals = np.array(sig_many(cw) if sig_many else [sig(x) for x in cw])
+    j = int(np.argmax(vals))
+    span = 0.05 * (whi - wlo)
+    s0, d0 = sigd(float(cw[j]))
+    wc, gc = csp._climb_slope(sigd, float(cw[j]), s0, d0, max(wlo, cw[j] - span), min(whi, cw[j] + span),
+                              xtol=1e-7 * (whi - wlo))
+    return (float(wc), float(gc)) if gc >= vals[j] else (float(cw[j]), float(vals[j]))
+
+
 def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
     """Certified max_omega sigma_1 and a witness frequency, for the outer loop."""
     arow, nvec, K, xa, xs, va, vs = pk.unpack(z)
@@ -1352,11 +1379,25 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
             gam_lb = 0.99 * float(np.max(_sigmas(rc0, np.linspace(wlo, whi, 241), arow, nvec, K)))
         else:
             gam_lb = float(D.hinf(arow, nvec, K, b, c)[0])
+    w_lb = None
+    if g is None and getattr(certified_norm, 'true_lb', False):
+        # BFS (2026-10-02): the caller's gam_lb is the inner problem's t, a
+        # REDUCED-model value.  Where the model overestimates the full sigma_1,
+        # the certificate proves nothing above t (1 + rtol) and returns t itself:
+        # an upper bound that no frequency attains (test plant, cluster: 1209.568
+        # certified, 1208.919 at the witness; the invariant failed in 2 of 3
+        # rounds).  A TRUE lower bound instead, attained by the full model; the
+        # certificate then answers within rtol of an attained value.
+        w_lb, g_lb = _true_lower_bound(sig, sigd, sig_many, ro_, b, c, D, arow, nvec, K, wlo, whi, w_hint)
+        if w_lb is not None:
+            gam_lb = g_lb
     if g is None:
         g, w, ncall, ok = csp.hinf_certified_sparse(
             D.A, D.M, b, c, Ac, Bc, nvec, K, sig, gam_lb=max(gam_lb, 1e-8),
             wlo=wlo, whi=whi, rtol=float(getattr(certified_norm, 'rtol', 1e-4)), slope_of_w=sigd,
             sigma_many=sig_many)
+        if not np.isfinite(w) and w_lb is not None and g == gam_lb:
+            w = w_lb                       # certified at the first question: the lower bound's own frequency
     # ALL FREQUENCIES (STAGE6 6.21, --cert-all-w): the band is a heuristic; the
     # tail bound W (numerical range, sparse_spectrum.closed_loop_tail) proves
     # sigma_1 < g beyond W, and one more level-set question on [-W, W] at g
@@ -2885,6 +2926,7 @@ def main():
     certified_norm.rtol = float(a.cert_rtol)
     certified_norm.all_w = (a.cert_all_w == 'on') and not BFS
     certified_norm.sampled = int(a.bfs_sampled) if BFS else 0
+    certified_norm.true_lb = bool(BFS)            # the certificate starts from an attained full-model value
     g0, w0, ok0, peaks0 = certified_norm(D, pk, z, a.wlo, a.whi, gam_lb=0.0)
     if _ctrl_borrowed:
         # The parent guarantee -- "a child started from a parent cannot finish
