@@ -104,7 +104,7 @@ def _topk_watch(eigs, k, eps, reach=3.0):
 
 def continuation_gate(D, pk, z0, z1, watch0, eps, depth=4,
                       motion_frac=0.5, motion_floor=0.05, kwatch=8,
-                      verbose=True, pool=None):
+                      verbose=True, pool=None, reach=None):
     """Certify the design segment [z0, z1] free of stability-line crossings.
 
     Returns (ok, watch1, nquery, nsplit).  `watch1` is the watch list at z1
@@ -113,6 +113,11 @@ def continuation_gate(D, pk, z0, z1, watch0, eps, depth=4,
     vector is real and every packed quantity is linear in it, so the straight
     segment is a continuous path through design space, which is all
     continuation needs.
+
+    reach (a dict, optional): filled with the end of the CERTIFIED PREFIX of
+    the segment -- the subsegments are certified left to right, so the last
+    one passed ends at the furthest point reached from z0 without a crossing:
+    reach['z'], its watch list reach['watch'] (BFS.md 5, --gate-prefix).
     """
     z0 = np.asarray(z0, float)
     z1 = np.asarray(z1, float)
@@ -142,6 +147,8 @@ def continuation_gate(D, pk, z0, z1, watch0, eps, depth=4,
                       f"to {worst:.6g}", flush=True)
             return False, wb
         if not split:
+            if reach is not None:
+                reach.update(z=np.array(zb, float), watch=list(wb))
             return True, wb
         if d <= 0:
             if verbose:
@@ -2188,6 +2195,9 @@ def main():
                          'role the warm trust radius was quietly playing is '
                          'now carried explicitly by the continuation gate '
                          'and the tau governor.')
+    ap.add_argument('--gate-prefix', dest='gate_prefix', type=int, default=0,
+                    help='when the continuation gate refuses a step, try the end of its certified prefix as the '
+                         'candidate (line + gamma certificates) instead of losing the round (BFS.md 5)')
     ap.add_argument('--rect_cert', type=int, default=1,
                     help='1 = the stability certificate gates every accepted '
                          'iterate (0 falls back to alpha alone -- not advised)')
@@ -2361,6 +2371,7 @@ def main():
         arow0 = tuple(np.asarray(ini[k], complex) for k in ('d', 'e', 'f'))
         nvec0 = np.asarray(ini['nvec'], complex); K0 = complex(ini['K'])
         xa0, xs0 = np.asarray(ini['xa'], float).ravel(), np.atleast_1d(np.asarray(ini['xs'], float))
+        _pos_start = dict(xa_start=xa0.copy(), xs_start=xs0.copy())   # the --init positions, for the record (a resume keeps them)
         va0 = vs0 = None
     else:
         ini = np.load(a.init or f"init_ne{a.ne}.npz")
@@ -3051,6 +3062,7 @@ def main():
             _luc = None
     n_inconcl = [0]      # rejections because nothing could be PROVEN
     n_located = [0]      # rejections because an eigenvalue was FOUND
+    n_prefix = [0]       # refused steps replaced by their certified prefix (--gate-prefix)
     n_cont_fallback = [0]  # reduced continuation gate: full-model fallbacks (tracks + midpoint certificates)
     n_clpair = [0]       # rounds with two closed-loop eigenvalues coalescing on the line (detector, STAGE5 30)
     n_witness_bad = [0]  # rounds whose certificate witness does not attain the certified value (must stay 0)
@@ -3845,6 +3857,7 @@ def main():
         # tracked queries themselves run on the |Omega| worker pool.
         watch_cand = None
         _nsp_seen = 0
+        _reach = {}
         if feasible and a.cont and _anchor_ok and g < gbest * (1 - 1e-12) and not _gate_reduced:
             if a.cont_track == 'reduced' and _ro is not None and _ro.dim > 0:
                 # algebra note item 11 (STAGE5 33): eigenvalues tracked on the
@@ -3855,10 +3868,11 @@ def main():
                     motion_floor=a.cont_floor, kwatch=a.cont_k, res_tol=a.sqp_row_res_tol)
                 n_cont_fallback[0] += int(_nfb)
             else:
+                _reach = {}
                 _okc, watch_cand, _nq, _nsp = continuation_gate(
                     D, pk, zwatch, zc, watch_cur, a.eps,
                     depth=a.cont_depth, motion_frac=a.cont_motion,
-                    motion_floor=a.cont_floor, kwatch=a.cont_k, pool=fullpar.POOL)
+                    motion_floor=a.cont_floor, kwatch=a.cont_k, pool=fullpar.POOL, reach=_reach)
             _nsp_seen = _nsp
             _ndz_used = float(np.linalg.norm(zc - zwatch))
             if not _okc and a.cont_accept_winding:
@@ -3886,6 +3900,53 @@ def main():
                             _okc = True; watch_cand = _topk_watch(list(_seen_c or []), a.cont_k, a.eps)
                 except Exception as _e:
                     print(f"    winding check failed: {type(_e).__name__}", flush=True)
+            if not _okc and a.gate_prefix and not _prov and _reach.get('z') is not None \
+                    and float(np.linalg.norm(_reach['z'] - zwatch)) > 0.0:
+                # THE CERTIFIED PREFIX (--gate-prefix; BFS.md 5, 2026-10-02).  The
+                # gate certifies the segment's pieces left to right; when it gives
+                # up (a crossing ahead, or the motion still too large at full
+                # depth) the path up to its last certified piece is already proved
+                # free of crossings.  Instead of losing the round (cluster test
+                # plant, zero start: the first closing of the loop, 1464 -> 1140
+                # refused), that point is the candidate: its own line certificate
+                # (and the rectangle gate) and gamma certificate, accepted if it
+                # improves.  The step cap is then the certified length.
+                _zp = np.asarray(_reach['z'], float)
+                _th = float(np.linalg.norm(_zp - zwatch) / max(np.linalg.norm(zc - zwatch), 1e-300))
+                _ap, _np_, _Kp, _xap, _xsp, _vap, _vsp = pk.unpack(_zp)
+                _bp, _cp, *_ = D.bc(_xap, _xsp, _vap, _vsp)
+                _seen_p = []
+                _alp, _lamp, _, _, _, _clrp = D.alpha_certified(_ap, _np_, _Kp, _bp, _cp, eps=a.eps,
+                                                                 eigs_seen=_seen_p)
+                _okp = bool(_clrp) and _alp + a.eps <= 0.0
+                _why_p = f"alpha {_alp:+.4f}" + ('' if _clrp else ', line not clear')
+                if _okp and a.rect_cert:
+                    _okr_p, _why_r, _ = csp.stability_gate(
+                        D.A, D.M, _bp, _cp, ctl.A_of(*_ap), ctl.Bc_of(_ap, D.r, D.mc), _np_, _Kp, eps=a.eps,
+                        shrink=a.cert_shrink, wlo=a.wlo, whi=a.whi, ctrl_max=a.ctrl_max)
+                    _okp = bool(_okr_p)
+                    _why_p += f"; {_why_r}"
+                _gp = np.nan
+                if _okp:
+                    _gp, _wp, _okgp, _pkp = certified_norm(D, pk, _zp, a.wlo, a.whi, gam_lb=best['g'],
+                                                           w_hint=best.get('w'))
+                    _okp = bool(_okgp) and bool(np.isfinite(_gp)) and _gp < gbest * (1 - 1e-12)
+                print(f"    certified prefix: {_th:.3f} of the step, {_why_p}, gamma {_gp:.6f} "
+                      f"(best {gbest:.6f}): {'ACCEPTED' if _okp else 'not accepted'}", flush=True)
+                if _okp:
+                    zc, g, w, ok, peaks = _zp, float(_gp), float(_wp), bool(_okgp), _pkp
+                    aa, nn, KK, xa_, xs_, va_, vs_ = _ap, _np_, _Kp, _xap, _xsp, _vap, _vsp
+                    bb, cc = _bp, _cp
+                    al_c, _lam_c, _clr_c, _seen_c = float(_alp), _lamp, _clrp, _seen_p
+                    _wind_done = None
+                    watch_cand = _topk_watch(list(_reach.get('watch') or []) + _seen_p, a.cont_k, a.eps)
+                    _okc = True
+                    _ndz_used = float(np.linalg.norm(_zp - zwatch))
+                    n_prefix[0] += 1
+                    if a.tau:
+                        _tau_rho = min(_tau_rho or np.inf, _ndz_used)
+                        _tau_streak = 0
+                        print(f"    tau governor: cap -> {_tau_rho:.3g} (the certified prefix)", flush=True)
             if _okc and _wind_accept and _wind_done is None:
                 # STAGE6 (2026-09-29): the continuation gate watches the near-line
                 # eigenvalues of the certified BAND; a high loop gain can bring an
@@ -4717,7 +4778,7 @@ def main():
              **_atoms_record_keys(D, _apa, _aps),
              va=(va if va is not None else np.zeros(0)),
              vs=(vs if vs is not None else np.zeros(0)),
-             psi_a=pa, psi_s=ps, gamma=gam, alpha=al,
+             psi_a=pa, psi_s=ps, gamma=gam, alpha=al, **(_pos_start if BFS else {}),
              **(dict(Bc=np.asarray(arow[3]), loop_orders=np.array(flags['loop_orders']), m=int(flags['m']),
                      p=int(flags['p']), struct=flags['struct']) if MIMO else {}),
              alpha_dense=(al_d if al_d is not None else np.nan),
@@ -4771,7 +4832,7 @@ def main():
                 wlo=float(a.wlo), whi=float(a.whi),
                 ctrl_wmax=float(wmax),
                 gate_inconclusive=int(n_inconcl[0]),
-                gate_located=int(n_located[0]), witness_invariant_violations=int(n_witness_bad[0]), closed_loop_pair_rounds=int(n_clpair[0]), cont_track=a.cont_track, cont_fallbacks=int(n_cont_fallback[0]),
+                gate_located=int(n_located[0]), gate_prefix_accepts=int(n_prefix[0]), witness_invariant_violations=int(n_witness_bad[0]), closed_loop_pair_rounds=int(n_clpair[0]), cont_track=a.cont_track, cont_fallbacks=int(n_cont_fallback[0]),
                 cert_disks=dict(untrusted=int(csp.N_DISK_UNTRUSTED), retried=int(getattr(csp, 'N_DISK_RETRIED', 0)), oversized=int(getattr(csp, 'N_DISK_OVERSIZED', 0)),
                                 bisected=int(getattr(csp, 'N_DISK_BISECTED', 0)), uncovered=int(getattr(csp, 'N_DISK_UNCOVERED', 0)), climb_failed=int(csp.N_CLIMB_FAILED)),
                 exchange_converged=bool(exch_converged),

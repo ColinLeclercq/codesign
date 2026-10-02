@@ -224,6 +224,11 @@ ones.
 **Interior margin**
 - `--bfs-margin` (section 2).
 
+**A refused step keeps its certified prefix** (`--gate-prefix 1`, 2026-10-02; GL default 0, unchanged)
+- The continuation gate certifies the segment from the last accepted design to the candidate piece by piece, left to right (halving up to `--cont-depth`). When it gives up -- a crossing ahead, or the eigenvalue motion still too large at full depth -- the path up to its last certified piece is already proved free of crossings (`continuation_gate(..., reach=)`).
+- That point becomes the candidate: its own line certificate (and the rectangle gate) and its gamma certificate; accepted if it improves on the best, with the step cap set to the certified length. The round is no longer lost (cluster test plant, zero start: round 0's step 1464 -> 1140 was refused whole, at depth 4).
+- Cost when it fires: one line certificate and one gamma certificate (5 to 10 min on the full mesh), against a whole round (35 to 50 min).
+
 **Stopping before the time limit**
 - `--deadline S` (general; default 0 = off): no new round once elapsed time + 1.25 x the longest round + `--deadline-final` (default 1800 s) would pass S.
 - A job time limit then never cuts a round or the final save in half.
@@ -241,7 +246,7 @@ ones.
 - The log (slurm `logs/`), with a `[ledger]` line per round.
 - `K_B_C_s0_bfs_post/` (`bfs/postproc.py`, run by `codesign.slurm` after every saved record, or by hand):
   - `sigma.png`: sigma_1, sigma_2, sigma_3 on [0, W], W = the final band edge (at least 10), without control (open loop) and with it, and gamma as a horizontal line;
-  - `modes_w<w>.png`: at the open-loop peak, the closed-loop peak and `--omegas` (default 0.3, 1.5), the optimal forcing (right singular vector of sigma_1) and response (left), without and with control, Re u (`--comp v` for v), with the actuator (half-amplitude circle and centre) and the sensor window drawn on every panel; the forcing is zoomed on the step;
+  - `modes_w<w>.png`: at the open-loop peak, the closed-loop peak and `--omegas` (default 0.3, 1.5), the optimal forcing (right singular vector of sigma_1) and response (left), without and with control, Re u (`--comp v` for v), with the actuator (half-amplitude circle and centre) and the sensor window drawn on every panel, and in grey their START positions with an arrow for the actuator's move (the record carries `xa_start`, `xs_start` since 2026-10-02; for older records `--start INIT.npz`); the forcing is zoomed on the step;
   - `controller.png`: the controller's Bode plot (|k(i w)|, phase; the band shaded; its poles listed);
   - `post.npz`: every number and field behind them (singular values, the forcing f and response q of sigma_1 as dof vectors with their coordinates, k(i w)); `post.json`: peaks and timings. `--replot` redraws the figures from `post.npz` alone.
 - How the vectors come without M^-1: sigma_k^2 are the eigenvalues of T^H M T M acting on the forcing f (the driver's M T^H M T with its factors cycled, so the eigenvector is the field itself, not its load M f); one LU per frequency serves both loops (Woodbury for the closed loop); k = 3, ARPACK.
@@ -371,7 +376,8 @@ smoke test, 96 ranks at once on one node):
   - the deadline;
   - the pooled-sweep harvest;
   - the mpipool environment test;
-  - the record's `all_w` label and the checkpoint kept after a deadline stop (2026-10-02).
+  - the record's `all_w` label and the checkpoint kept after a deadline stop (2026-10-02);
+  - the certificate's attained lower bound (BFS only), the certified prefix (`--gate-prefix`, default 0) and the start positions in the BFS record (2026-10-02).
 - Operators and gains: section 1.
 - MPI task farm, 3 ranks: identical to serial.
 - Test plant, MUMPS, serial (1 core), from `bfs/data/init_test.npz` (a stable hand-made start; file removed with the Gaussian ports):
@@ -403,7 +409,7 @@ smoke test, 96 ranks at once on one node):
 *Cluster, test plant, zero start, 3 rounds (job 16879784, 24 ranks, 2026-10-02)*
 - Plant data (range + poles at -0.05 and -0.025) 14 min; the run 17 min; the figures 70 s; 33 min in all.
 - Start: gamma 1464.37 (= the open-loop peak), alpha -0.0560, count 0 exactly (no march).
-- Round 0: the SQP step (to 1140.0) was refused by the continuation gate (split depth exhausted: the first closing of the loop moves the spectrum too far to track); the tau governor capped the next steps. Rounds 1 and 2 accepted: 1367.68, 1209.57. Final **1209.57 = 0.826 x the open-loop peak**, alpha -0.0836, two active peaks (a flattened top near w = 0.73 to 0.91), winding count 0 right of -0.025 (3580 points, 94 s over 23 workers).
+- Round 0: the SQP step (to 1140.0) was refused by the continuation gate (split depth exhausted: the first closing of the loop moves the spectrum too far to track); the tau governor capped the next steps. Since fixed: the certified prefix of the step is tried (section 5). Rounds 1 and 2 accepted: 1367.68, 1209.57. Final **1209.57 = 0.826 x the open-loop peak**, alpha -0.0836, two active peaks (a flattened top near w = 0.73 to 0.91), winding count 0 right of -0.025 (3580 points, 94 s over 23 workers).
 - Positions: actuator (0.6, 1.0) -> (1.19, 1.12), onto the shear layer past the arc; sensor window 2.0 -> 2.12.
 - Controller: one compensator pole at -0.05, on the constraint alpha(A_c) <= -eps; |k| rises towards w = 0 (163 vs 52 open loop at w = 0, below gamma).
 - Not converged: -11.6 % in the last round.
@@ -411,7 +417,7 @@ smoke test, 96 ranks at once on one node):
 
 ## 9. Open items
 
-- **Starts below the open loop:** the zero-controller start works (test plant, cluster: 0.826 x the open-loop peak in 3 rounds, section 8); the first round's step is refused by the continuation gate (one round lost).
+- **Starts below the open loop:** the zero-controller start works (test plant, cluster: 0.826 x the open-loop peak in 3 rounds, section 8). The certified prefix (section 5) is to be seen on the cluster rerun.
 
 - **The disks of the gamma certificate** are certificates by exhibition: each comes from eigenvalues Arnoldi returned converged (residual 1e-9) nearest the shift. A set that does not converge is retried, then the interval bisected; nothing is assumed. The norm-based (eigenvalue-free) radius is rigorous but 1e-7 to 1e-10 here, so it cannot replace them (section 4).
 - **Plant certificate on the full mesh:** about 2 h on 48 ranks projected from the test plant (41 + 36 min serial); not yet run.

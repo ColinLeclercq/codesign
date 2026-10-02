@@ -51,13 +51,23 @@ TOL = 1e-8
 
 
 # ------------------------------------------------------------------ numerics
-def _design(rec):
+def _design(rec, start=None):
+    """The record's design; the START positions from the record (xa_start,
+    xs_start, written since 2026-10-02) or else from the --init file `start`
+    (None: not drawn)."""
     z = np.load(rec, allow_pickle=True)
     re = lambda key: np.real(np.asarray(z[key])).astype(float)       # a real controller, stored complex
     arow = (re('d'), re('e'), re('f'))
+    if 'xa_start' in z.files:
+        xa0, xs0 = np.asarray(z['xa_start'], float).ravel(), np.asarray(z['xs_start'], float).ravel()
+    elif start:
+        s0 = np.load(start, allow_pickle=True)
+        xa0, xs0 = np.asarray(s0['xa'], float).ravel(), np.atleast_1d(np.asarray(s0['xs'], float)).ravel()
+    else:
+        xa0 = xs0 = None
     return dict(arow=arow, nvec=re('nvec'), K=complex(z['K']),
                 xa=np.asarray(z['xa'], float).ravel(), xs=np.asarray(z['xs'], float).ravel(),
-                gamma=float(z['gamma']),
+                xa0=xa0, xs0=xs0, gamma=float(z['gamma']),
                 active=np.asarray(z['active_freqs'], float) if 'active_freqs' in z.files else np.zeros(0))
 
 
@@ -129,6 +139,7 @@ def _pick(ws, s_open, s_closed, user):
 
 # ------------------------------------------------------------------ figures
 INK, INK2, GRID = '#0b0b0b', '#52514e', '#d9d8d4'
+START = '#8a8984'                              # the start positions (recessive grey)
 C_OPEN, C_CLOSED = '#eb6834', '#2a78d6'       # categorical slots 2 and 1 (dataviz reference palette)
 
 
@@ -207,6 +218,16 @@ def fig_modes(path, D, w, rec, des, comp='u'):
         m = float(np.abs(val[sel]).max()) or 1.0
         pc = ax.tripcolor(tri, val / m, cmap='RdBu_r', vmin=-1, vmax=1, shading='gouraud', rasterized=True)
         ax.plot(xx, D.wall(xx), color=INK2, lw=0.8)
+        if des.get('xa0') is not None:
+            # the start: grey, the actuator's move as an arrow; the sensor's start
+            # window as a thin bar just above the final one
+            xa0, xs0 = des['xa0'], float(des['xs0'][0])
+            ax.plot(xa0[0] + 0.5 * np.cos(th), xa0[1] + 0.5 * np.sin(th), color=START, lw=0.9, ls=(0, (1.5, 1.5)))
+            ax.plot(*xa0, marker='x', color=START, ms=5, mew=1.0)
+            if np.linalg.norm(des['xa'] - xa0) > 1e-3:
+                ax.annotate('', xy=tuple(des['xa']), xytext=tuple(xa0),
+                            arrowprops=dict(arrowstyle='->', color=INK, lw=0.9, shrinkA=2, shrinkB=2))
+            ax.plot([xs0, xs0 + D.sensor_len], [0.16, 0.16], color=START, lw=2.0, solid_capstyle='butt')
         ax.plot(des['xa'][0] + 0.5 * np.cos(th), des['xa'][1] + 0.5 * np.sin(th), color=INK, lw=1.0, ls=(0, (3, 2)))
         ax.plot(*des['xa'], marker='+', color=INK, ms=7, mew=1.2)
         ax.plot([xs, xs + D.sensor_len], [0.03, 0.03], color=INK, lw=4, solid_capstyle='butt')
@@ -217,8 +238,11 @@ def fig_modes(path, D, w, rec, des, comp='u'):
         ax.tick_params(colors=INK2, labelsize=8)
     fig.colorbar(pc, ax=[p[0] for p in panels], shrink=0.5, pad=0.01,
                  label=f'Re {comp}, each panel scaled to max |.| = 1')
+    moved = ('; grey: their START positions (dotted circle, x, thin bar), arrow: the actuator\'s move'
+             if des.get('xa0') is not None else '')
     fig.suptitle(f'$\\omega$ = {w:.4g}: singular vectors of $\\sigma_1$; actuator (dashed: half-amplitude circle, '
-                 f'+: centre), sensor window (bar on the floor)', color=INK, fontsize=10, x=0.01, y=0.95, ha='left')
+                 f'+: centre), sensor window (bar on the floor){moved}', color=INK, fontsize=9.5, x=0.01, y=0.95,
+                 ha='left', wrap=True)
     fig.savefig(path, dpi=150, bbox_inches='tight')
     plt.close(fig)
 
@@ -257,12 +281,14 @@ def main():
     ap.add_argument('--whi', type=float, default=10.0, help='lower bound of the plotted range (the band edge if larger)')
     ap.add_argument('--k', type=int, default=3)
     ap.add_argument('--comp', default='u', choices=('u', 'v'), help='velocity component shown in the mode figures')
+    ap.add_argument('--start', default=None,
+                    help='the --init file of the run, for its start positions when the record lacks them (pre-2026-10-02)')
     ap.add_argument('--replot', action='store_true', help='only redraw the figures from OUT/post.npz (serial)')
     a = ap.parse_args()
     out = a.out or a.rec[:-4] + '_post'
     if a.replot:
         from bfs.plant import BFSPlant
-        des = _design(a.rec)
+        des = _design(a.rec, a.start)
         plot(out, BFSPlant(a.ops, r=len(des['arow'][0])), des, a.comp)
         return
     from bfs import mpipool
@@ -272,7 +298,7 @@ def main():
     sparse_lu.ORDER = 'mumps'
     import fullpar
     from bfs.plant import BFSPlant
-    des = _design(a.rec)
+    des = _design(a.rec, a.start)
     js = a.rec[:-4] + '.json'
     band = json.load(open(js)).get('band_final', [0.0, a.whi]) if os.path.exists(js) else [0.0, a.whi]
     W = max(float(a.whi), float(band[1]))
