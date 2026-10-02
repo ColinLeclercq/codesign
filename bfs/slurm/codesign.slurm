@@ -34,9 +34,10 @@
 # certified poles, once per mesh).
 #
 # Time: the driver stops starting rounds when one more would not fit before
-# DEADLINE (14 h 15 min after its start; with the driver's 30 min reserve the
-# last round ends by 13 h 45, leaving 75 min for the final certificate, the
-# winding count, the save and the figures), so the job finishes inside its 15 h with a record
+# DEADLINE (from the job's end time, whatever --time is: 45 min before it; with
+# the driver's own 30 min reserve the last round ends at least 75 min before the
+# end, for the final certificate, the winding count, the save and the figures),
+# so the job finishes inside its limit with a record
 # (OUT/KIND_XXX/K_B_C_s0_bfs.json/.npz).  Re-submitting the same command
 # resumes every unfinished start from its checkpoint (accepted designs, the
 # working set and the band are stored); a finished start is not redone.
@@ -75,7 +76,10 @@ fi
 # same set into its own directory and takes its own entry
 mkdir -p "$RUN"
 python bfs/hifoo_init.py --ops bfs/data/ops_fx.npz --n "$NSTART" --seed "$SEED" --kind "$KIND" --out "$RUN/catalogue" > "$RUN.catalogue.json"
-export OPS=bfs/data/ops_fx.npz OUTER=${OUTER:-40} DEADLINE=${DEADLINE:-51300} PY=python
+# the deadline from the job's own end time (any --time): 45 min kept after the
+# driver's last round for the figures, on top of its own 30 min for the final
+# certificate and count (bfs/slurm_remaining.py)
+export OPS=bfs/data/ops_fx.npz OUTER=${OUTER:-40} DEADLINE=${DEADLINE:-$(python bfs/slurm_remaining.py --reserve 2700)} PY=python
 export LAUNCH="$LAUNCHER -n ${SLURM_NTASKS:-24}"
 bash bfs/run_bfs.sh "$RUN" "$RUN/catalogue/$NAME.npz" "${CONT[@]}"
 # the figures of the saved record, finished or stopped at the deadline (then they show the progress)

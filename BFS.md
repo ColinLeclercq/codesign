@@ -323,10 +323,10 @@ ones.
 - `bfs/slurm/codesign.slurm`:
   - an array job, one start per task (HIFOO's controller draw at the paper's B2 and C1);
   - 24 ranks per start (the driver and 23 workers) and 240 GB: two starts per 96-core node (the gamma certificate's 2n pencil factor is 3.9 GB in every worker);
-  - 15 h limit, `--deadline` at 14 h 15: with the driver's 30 min reserve the last round ends by 13 h 45, leaving 75 min for the final certificate, the count, the save and the figures;
+  - 15 h limit; `--deadline` from the job's own end time (`bfs/slurm_remaining.py`, scontrol's EndTime, so any `--time` works): 45 min before it, and with the driver's 30 min reserve the last round ends at least 75 min before the end, for the final certificate, the count, the save and the figures;
   - then `bfs/postproc.py` on the saved record (also after a deadline stop: the figures then show the progress); a finished start re-submitted only draws missing figures;
   - resubmitting resumes unfinished starts (a deadline stop or a killed job: from the checkpoint written at every accepted round); `CONTINUE=1` gives finished starts OUTER more rounds from their records (`--continue-record`, the finished summary kept as `K_B_C_s0_bfs_partN.json`); it refuses to start without the plant certificate.
-- `testplant.slurm` with `RESUME=1 OUT=<its directory>` does the same for a test-plant run (otherwise the directory is started over).
+- `testplant.slurm` with `RESUME=1 OUT=<its directory>` does the same for a test-plant run (otherwise the directory is started over). Its deadline also comes from the job's end (5 min kept for the figures, `--deadline-final 600`): `OUTER=300 sbatch --time=15:00:00 bfs/slurm/testplant.slurm` runs as many rounds as fit, or until progress stops. Before 2026-10-02 it had no deadline: a run that did not stop on progress would have been killed at the 1 h 30 limit (with its checkpoint saved).
 - The launcher is the conda env's `mpiexec` (`LAUNCHER=` to change).
 
 **Run time** (measured 2026-10-02; projected to the cluster)
@@ -430,6 +430,14 @@ smoke test, 96 ranks at once on one node):
 - Rounds 172, 154, 195, 255, ~200 s; they grow with |Omega| (21 -> 72) and the inner calls (24 -> 107).
 - Restart, tested in the sandbox on this start (2026-10-02, MPI 2 ranks): (A) `--deadline` stopped it after round 0 (1296.6185, `deadline_stop`, the checkpoint kept); (B) the same command again resumed from the checkpoint -- gamma 1296.618509 restored, |Omega| 25, the inner budget, the SQP trust radius and 2 peak members restored, the anchor verified -- and its round reached 1145.98; the finished run removed the checkpoint; (C) `--continue-record 1` on a copy with the checkpoint deleted (a finished run) made the record the checkpoint, kept the summary as `_part1.json` and resumed the same way. Found on the way: the BFS record's alpha_dense is nan, so the guard that keeps a better previous record called a stable record "FAILS re-verification"; it now uses the record's certified alpha and winding count.
 - Reduced vs full at the certificate's witness: 3.3e-7, 8.5e-4, 3.5e-2, 2.2e-2, 1.9e-5. The large ones are where the design moved far (positions) and the witness sat between the working-set frequencies ("NOT a peak member"); certified / predicted t was then 1.004 and 1.017, the step still accepted, and the witness becomes an anchor. The certified gamma never depends on the reduced model.
+
+*Cluster, zero start, OUTER = 50 (job 16887217, version j; 67 min in all)*
+- Stopped by the progress rule after 21 rounds (0.042 % over the last 3 < 0.15 %), at **769.573 = 0.526 x the open-loop peak**; alpha -0.0877, winding count 0 (2780 points, 95 s).
+- Best after each round: 1296.6, 1147.2, 1057.4, 990.0, 960.4, 940.9, 940.9 (round 6 refused: a homotopy midpoint at alpha -0.0298, a real approach to the margin; no certified prefix), 913.0, 870.9, 847.0, 842.6, 831.1, 831.1, 831.1 (rounds 12-13: the SQP returned the same design; the working set then grew by 21 and the descent resumed), 824.9, 783.0, 775.1, 769.9, 769.7, 769.6, 769.6.
+- Devices: actuator (0.6, 1.0) -> (2.18, 0.91), past the step over the floor; sensor window 2.0 -> 3.41 (the paper's C2 is [3.6, 4.2]).
+- Rounds 129 to 294 s, mean 184 s; |Omega| 17 -> 213. Start-up 107 s, end 197 s (the last round, the final count), figures 48 s.
+- Reduced vs full at the witness: below 1e-3 from round 8 on except two rounds (1.6e-2, 8.7e-4 ...); the rounds that returned the same design had 1e-13.
+- The progress rule (3 rounds below 0.15 %) stopped it after a stall like that of rounds 12-13; continuing it (`RESUME=1`) shows whether more descent is there.
 
 ## 9. Open items
 

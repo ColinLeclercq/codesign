@@ -10,6 +10,9 @@
 #
 #   sbatch bfs/slurm/testplant.slurm                       (zero controller, 3 rounds)
 #   KIND=hifoo OUTER=5 sbatch bfs/slurm/testplant.slurm    (HIFOO start, 5 rounds)
+#   OUTER=300 sbatch --time=15:00:00 bfs/slurm/testplant.slurm
+#        (as many rounds as fit: the driver stops before the job's end, or when
+#         progress stops)
 #   RESUME=1 OUT=testplant_bfs/zero_s0_r5 OUTER=10 sbatch bfs/slurm/testplant.slurm
 #        (10 more rounds for that run: from its checkpoint if it was stopped, from
 #         its record if it finished; without RESUME the directory is started over)
@@ -52,8 +55,11 @@ else
     rm -rf "$OUT"; mkdir -p "$OUT"
     python bfs/hifoo_init.py --ops "$OPS" --n 1 --seed "$SEED" --kind "$KIND" --out "$OUT/starts" > "$OUT/starts.json"
 fi
+# the deadline from the job's own end time (any --time): no round starts that
+# would not end, 5 min kept for the figures (bfs/slurm_remaining.py)
+export DEADLINE=${DEADLINE:-$(python bfs/slurm_remaining.py --reserve 300)}
 export OPS OUTER PY=python LAUNCH="$LAUNCHER -n ${SLURM_NTASKS:-24}"
-time bash bfs/run_bfs.sh "$OUT/run" "$OUT/starts/${KIND}_000.npz" "${CONT[@]}"
+time bash bfs/run_bfs.sh "$OUT/run" "$OUT/starts/${KIND}_000.npz" --deadline-final 600 "${CONT[@]}"   # the test plant's end: ~3 min
 time $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/postproc.py --ops "$OPS" --rec "$OUT/run/K_B_C_s0_bfs.npz"
 python - "$OUT/run/K_B_C_s0_bfs.json" "$OUT/run/K_B_C_s0_bfs_post/post.json" <<'EOF'
 import json, sys

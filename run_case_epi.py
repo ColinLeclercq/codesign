@@ -3923,8 +3923,8 @@ def main():
                     print(f"    winding check failed: {type(_e).__name__}", flush=True)
             if not _okc and a.gate_prefix and not _prov and (_reach.get('z') is None
                                                               or float(np.linalg.norm(_reach['z'] - zwatch)) == 0.0):
-                print(f"    certified prefix: none (the first 1/{2 ** a.cont_depth} of the step already moves the "
-                      f"watched eigenvalues beyond the allowance)", flush=True)
+                print(f"    certified prefix: none (no piece of the step certified: its first 1/{2 ** a.cont_depth}, or the "
+                      f"first midpoint, already fails)", flush=True)
             if not _okc and a.gate_prefix and not _prov and _reach.get('z') is not None \
                     and float(np.linalg.norm(_reach['z'] - zwatch)) > 0.0:
                 # THE CERTIFIED PREFIX (--gate-prefix; BFS.md 5, 2026-10-02).  The
