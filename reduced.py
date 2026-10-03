@@ -590,11 +590,14 @@ _POOL = [None]
 
 
 def _row_pool(cl):
-    """The pool for cl's oracle and basis version, forked if needed; None when
-    cl was built on an older basis than the oracle's current one (a worker would
-    rebuild it on the wrong basis) -- the caller then stays serial."""
+    """The pool for cl's oracle and basis version, forked if needed (the MPI
+    ranks with ROW_MPI); None when cl was built on an older basis than the
+    oracle's current one (a worker would rebuild it on the wrong basis) -- the
+    caller then stays serial."""
     if cl._mk is None or cl._mk[2] != getattr(cl.ro, '_proj_ver', 0):
         return None
+    if ROW_MPI:
+        return _mpi_row_pool(cl)
     p = _POOL[0]
     if p is not None and p.ro_id == id(cl.ro) and p.ver == cl._mk[2] and p.alive():
         return p
@@ -625,6 +628,179 @@ def _row_worker(ro, conn):
             conn.send((True, out, cl.ncalls - nc0))
         except Exception as e:           # reported to the caller, which raises
             conn.send((False, repr(e), 0))
+
+
+ROW_MPI = False           # reduced-model rows on the MPI ranks (--row-workers mpi; BFS.md 5)
+MPI_MIN_ROWS = 8          # an MPI round trip costs ~0.1 ms: smaller batches stay in this process
+ROWSTATS = dict(calls=0, rows=0, own=0, wall=0.0, install=0, install_s=0.0, track=0, pairs=0, track_s=0.0)
+_PROJ_KEYS = ('At', 'Mt', 'GV', 'GV_h', 'GW_h', 'qzAA', 'qzBB', 'qzQ', 'qzZ')   # what gain_batch and the tracking read
+_TOKENS = iter(range(1, 1 << 62))
+
+
+class _MPIRowPool:
+    """gain_batch and the near-line tracking on the MPI ranks (2026-10-03,
+    user: use the idle workers).  The full-model pool's ranks (bfs/mpipool.py)
+    wait while the driver works on the reduced model: the rows (the SQP's
+    |Omega| rows, the peak follower, the fine sweeps; growing with |Omega|) and
+    the tracking of ~190 near-line eigenpairs per evaluation were ~20 s of a
+    test-plant round (BFS.md 8).  The rows' split is _RowPool's (w-blocks of 0.064, a block always to the
+    same rank, which keeps warm subspaces for its frequencies; the driver does
+    its own share meanwhile), but the ranks hold no basis: the projection
+    (kd x kd: At, Mt, the Gram roots, the QZ form) is installed on every rank
+    once per basis version, and a call sends the design's REDUCED ports
+    (W^H b, V^H c) and the compensator."""
+    BLOCK = _RowPool.BLOCK
+
+    def __init__(self, ro, pool):
+        import time
+        t0 = time.perf_counter()
+        self.proj, self.ver, self.pool = ro._proj, ro._proj_ver, pool     # proj: identity of the installed basis
+        P = {k: ro._proj[k] for k in _PROJ_KEYS}
+        pool.collect(pool.each(_row_install, {w: (self.ver, P) for w in range(1, pool.size)}))
+        ROWSTATS['install'] += 1; ROWSTATS['install_s'] += time.perf_counter() - t0
+
+    def close(self):
+        pass                                     # the ranks drop the projection at the next install
+
+    def gain_batch(self, cl, om, arow, nvec, K, wv, maxit, k):
+        import time
+        t0 = time.perf_counter()
+        ns = self.pool.size
+        slot = (np.round(om * 1000.0).astype(np.int64) // self.BLOCK) % ns
+        r, mc, _ = cl._mk
+        if getattr(cl, '_tok', None) is None:
+            cl._tok = next(_TOKENS)
+        args = {}
+        for w in range(1, ns):
+            idx = np.where(slot == w)[0]
+            if idx.size:
+                args[w] = (self.ver, cl._tok, cl.rcl.b, cl.rcl.c, r, mc, om[idx], arow, nvec, K, wv[idx], maxit, k)
+        ranks = self.pool.each(_row_task, args)
+        out = [None] * len(om)
+        own = np.where(slot == 0)[0]
+        try:
+            for i, o in zip(own, cl.gain_batch(om[own], arow, nvec, K, wv[own], maxit=maxit, k=k, par=False)):
+                out[i] = o
+        finally:
+            res = self.pool.collect(ranks)       # always: no result may be left for a later map
+        for w, (o_w, nc) in res.items():
+            cl.ncalls += nc
+            for i, o in zip(np.where(slot == w)[0], o_w):
+                out[i] = o
+        ROWSTATS['calls'] += 1; ROWSTATS['rows'] += len(om); ROWSTATS['own'] += own.size
+        ROWSTATS['wall'] += time.perf_counter() - t0
+        return out
+
+    def track_eigs(self, cl, Acl, Mcl, tracked):
+        """cl._track_eigs with the tracked near-line pairs shared by the ranks
+        (pair j to rank j mod size, the driver included): each pair's
+        Rayleigh-quotient iteration is independent, so the result is the
+        serial one; the merge check is made here on all of them."""
+        import time
+        t0 = time.perf_counter()
+        ns = self.pool.size
+        share = {w: [j for j in range(len(tracked)) if j % ns == w] for w in range(ns)}
+        args = {w: (self.ver, Acl, Mcl, cl._cpl, [tracked[j] for j in idx]) for w, idx in share.items() if w and idx}
+        ranks = self.pool.each(_track_task, args)
+        try:
+            own = cl._track_each(Acl, Mcl, [tracked[j] for j in share[0]])
+        finally:
+            res = self.pool.collect(ranks)
+        ROWSTATS['track'] += 1; ROWSTATS['pairs'] += len(tracked); ROWSTATS['track_s'] += time.perf_counter() - t0
+        if own is None or any(r is None for r in res.values()):
+            return None
+        out = [None] * len(tracked)
+        for w, o_w in [(0, own)] + list(res.items()):
+            for j, o in zip(share[w], o_w):
+                out[j] = o
+        return _track_merge(out)
+
+
+def _track_merge(out):
+    """The tracked pairs as (lam, VL, VR) in tracking order; None when two
+    tracks merged (the caller then re-derives them by the full eig)."""
+    L_, R_, V_ = [], [], []
+    for lam, x, y in out:
+        if any(abs(lam - q) < 1e-8 * max(1.0, abs(lam)) for q in L_):
+            return None
+        L_.append(lam); R_.append(x); V_.append(y)
+    return np.array(L_), np.array(V_).T, np.array(R_).T
+
+
+def _mpi_row_pool(cl):
+    """The MPI row pool for cl's basis, installed if needed; None without an
+    MPI pool (the GL runs, a worker's own process) or without the QZ form."""
+    import fullpar
+    pool = fullpar.POOL if (fullpar.POOL is not None and fullpar.POOL is fullpar._MPI) else None
+    if pool is None or pool.size < 2 or 'qzAA' not in cl.P:
+        return None
+    p = _POOL[0]
+    if isinstance(p, _MPIRowPool) and p.proj is cl.ro._proj and p.pool is pool:
+        return p
+    if p is not None:
+        p.close()
+    _POOL[0] = _MPIRowPool(cl.ro, pool)
+    return _POOL[0]
+
+
+def rows_report():
+    s = ROWSTATS
+    if not s['calls'] and not s['track']:
+        return "reduced rows: not pooled"
+    return (f"reduced rows on the MPI ranks: {s['rows']} rows ({s['own']} here) in {s['calls']} calls, "
+            f"{s['wall']:.1f} s; near-line tracking {s['pairs']} pairs in {s['track']} calls, {s['track_s']:.1f} s; "
+            f"projection installed {s['install']}x ({s['install_s']:.1f} s)")
+
+
+class _ProjectedOracle:
+    """What an MPI rank holds of the driver's ReducedOracle for the rows: the
+    projection (kd x kd) and its own warm-start cache -- never the basis V, W
+    (n x kd), which stays with the driver."""
+    def __init__(self):
+        self._proj, self._proj_ver, self.n, self.M, self.A = None, None, 0, None, None
+        self.V = self.W = np.zeros((0, 0), complex)
+
+    def install(self, ver, proj):
+        P = dict(proj)
+        P['qzQH'] = np.ascontiguousarray(P['qzQ'].conj().T); P['qzZH'] = np.ascontiguousarray(P['qzZ'].conj().T)
+        self._proj, self._proj_ver = P, ver
+        self.V = self.W = np.zeros((0, P['At'].shape[0]), complex)
+
+    def make_cl(self, bt, ct, r, mc):
+        """ReducedOracle.make_cl from the reduced ports (W^H b, V^H c)."""
+        P = self._proj
+        if np.ndim(bt) == 2 or np.ndim(ct) == 2:
+            from closedloop_mimo import ClosedLoopResolventMIMO
+            rcl = ClosedLoopResolventMIMO(sp.csc_matrix(P['Mt']), sp.csc_matrix(P['At']), bt, ct, r, mc=mc)
+        else:
+            rcl = ClosedLoop(sp.csc_matrix(P['Mt']), sp.csc_matrix(P['At']), bt, ct, r, mc=mc)
+        out = _ReducedCL(self, rcl, bt, ct)
+        out._mk = (r, mc, self._proj_ver)
+        return out
+
+
+_WROWS = {}               # on an MPI rank: the installed projection, the current design's reduced loop
+
+
+def _row_install(t):
+    ver, P = t
+    _WROWS.setdefault('ro', _ProjectedOracle()).install(ver, P)
+    _WROWS.pop('cl', None)
+    return True
+
+
+def _row_task(t):
+    ver, tok, bt, ct, r, mc, om, arow, nvec, K, wv, maxit, k = t
+    ro = _WROWS.get('ro')
+    if ro is None or ro._proj_ver != ver:
+        raise RuntimeError(f"row task for basis version {ver}, this rank holds {None if ro is None else ro._proj_ver}")
+    held = _WROWS.get('cl')
+    if held is None or held[0] != tok:
+        held = _WROWS['cl'] = (tok, ro.make_cl(bt, ct, r, mc))
+    cl = held[1]
+    nc0 = cl.ncalls
+    out = cl.gain_batch(om, arow, nvec, K, wv, maxit=maxit, k=k, par=False)
+    return out, cl.ncalls - nc0
 
 
 LANCZOS_MIN_DIM = 40      # below this a dense SVD is cheaper than Lanczos
@@ -883,7 +1059,7 @@ class _ReducedCL:
         om = np.asarray(omegas, float); m = len(om); wv = np.asarray(want_vectors, bool)
         if m == 0:
             return []
-        if par and ROW_WORKERS > 0 and m >= PAR_MIN_ROWS:
+        if par and ((ROW_WORKERS > 0 and m >= PAR_MIN_ROWS) or (ROW_MPI and m >= MPI_MIN_ROWS)):
             pool = _row_pool(self)
             if pool is not None:
                 return pool.gain_batch(self, om, arow, nvec, K, wv, maxit, k)
@@ -1204,7 +1380,9 @@ class _ReducedCL:
         _track = TRACK_EIGS and not getattr(self, 'mimo', False)
         if (_track and tracked and ro._nl_count % TRACK_FULL_EVERY != 0 and nd > TRACK_MIN_DIM
                 and getattr(ro, '_nl_track_dim', None) == nd):
-            res_ = self._track_eigs(Acl, Mcl, tracked)
+            pool = _row_pool(self) if ROW_MPI else None
+            res_ = (pool.track_eigs(self, Acl, Mcl, tracked) if isinstance(pool, _MPIRowPool)
+                    else self._track_eigs(Acl, Mcl, tracked))
             if res_ is not None:
                 lam, VL, VR = res_
                 keep = lam.real >= -eps - reach
@@ -1307,7 +1485,15 @@ class _ReducedCL:
         """Two-sided Rayleigh-quotient iteration for each tracked near-line
         eigenpair, O(k^2) per step (no factorisation): right and left vectors
         belong to the SAME eigenvalue by construction (no matching)."""
-        L_, R_, V_ = [], [], []
+        out = self._track_each(Acl, Mcl, tracked, steps, tol)
+        if out is None:
+            return None
+        return _track_merge(out)
+
+    def _track_each(self, Acl, Mcl, tracked, steps=6, tol=1e-9):
+        """The iteration for each tracked pair: [(lam, x, y)], None as soon as
+        one does not converge (the caller then makes the full eig)."""
+        out = []
         for lam0, x, y in tracked:
             lam = complex(lam0); x = np.asarray(x, complex); y = np.asarray(y, complex)
             ok = False; res_prev = None
@@ -1328,10 +1514,8 @@ class _ReducedCL:
                 res_prev = res
             if not ok:
                 return None                                  # fall back to the full eig
-            if any(abs(lam - q) < 1e-8 * max(1.0, abs(lam)) for q in L_):
-                return None                                  # two tracks merged: re-derive
-            L_.append(lam); R_.append(x); V_.append(y)
-        return np.array(L_), np.array(V_).T, np.array(R_).T
+            out.append((lam, x, y))
+        return out
 
     def abscissa(self, arow, nvec, K, cl_full, res_tol=1e-6, mc=1.0):
         """Rightmost eigenvalue of the REDUCED closed-loop pencil, with the
@@ -1406,3 +1590,23 @@ def _eigvec_task(t):
     import fullpar
     b, c, arow, nvec, K, lam = t
     return fullpar.CTX['D'].cl(b, c).eigvecs_at(lam, arow, nvec, K)
+
+
+class _PencilRank:
+    """On an MPI rank: what the tracking of near-line eigenpairs needs of a
+    _ReducedCL -- the installed projection (QZ form) and the design's exact
+    controller coupling (Uc, Vc); _MPIRowPool.track_eigs."""
+    _pencil_solve = _ReducedCL._pencil_solve
+    _pencil_solve0 = _ReducedCL._pencil_solve0
+    _track_each = _ReducedCL._track_each
+
+    def __init__(self, P, cpl):
+        self.P, self._cpl = P, cpl
+
+
+def _track_task(t):
+    ver, Acl, Mcl, cpl, share = t
+    ro = _WROWS.get('ro')
+    if ro is None or ro._proj_ver != ver:
+        raise RuntimeError(f"tracking task for basis version {ver}, this rank holds {None if ro is None else ro._proj_ver}")
+    return _PencilRank(ro._proj, cpl)._track_each(Acl, Mcl, share)

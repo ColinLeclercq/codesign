@@ -1573,7 +1573,10 @@ def _mimo_setup(a, D, flags, tag):
     if os.path.exists(ck):
         try:
             gck = float(json.load(open(tag + '_ckpt.json'))['gamma'])
-            if g0 is None or gck < g0:
+            # a start without a certified gamma (bfs/hifoo_init.py writes inf; older
+            # starts nan) never beats the run's own checkpoint: with nan the comparison
+            # was False and a MIMO resume restarted from the start (2026-10-03)
+            if g0 is None or not np.isfinite(g0) or gck < g0:
                 print(f"CHECKPOINT found (gamma={gck:.6f}) -- resuming from {ck}", flush=True)
                 src, g0 = ck, gck
         except Exception:
@@ -1705,9 +1708,10 @@ def main():
                          "(default, bit-identical); new = only W's new columns (V = W before the step): O(n kd k_new) "
                          "instead of O(n kd^2) per anchor, the serial part of the enrichment at the cavity; same span, "
                          "rounding-level different basis (STAGE6 6.30)")
-    ap.add_argument('--row-workers', dest='row_workers', type=int, default=0,
+    ap.add_argument('--row-workers', dest='row_workers', default='0',
                     help='reduced-model rows (gain_batch) evaluated in this many FORKED processes besides this one, '
-                         'frequencies split by w-blocks (reduced._RowPool; STAGE6 6.26). 0 = serial')
+                         'frequencies split by w-blocks (reduced._RowPool; STAGE6 6.26). 0 = serial; '
+                         'mpi = on the ranks of the MPI pool, the driver included (reduced._MPIRowPool; BFS.md 5)')
     ap.add_argument('--oracle', choices=['full', 'reduced'], default='full',
                     help='STAGE 5: sigma rows of the inner solve on the full oracle '
                          '(frozen) or on the projected one (reduced.py).')
@@ -3154,9 +3158,13 @@ def main():
     if a.oracle == 'reduced':
         from reduced import ReducedOracle
         import reduced as _red_mod
-        _red_mod.ROW_WORKERS = max(0, int(a.row_workers))
+        _red_mod.ROW_MPI = a.row_workers == 'mpi'
+        _red_mod.ROW_WORKERS = 0 if _red_mod.ROW_MPI else max(0, int(a.row_workers))
         if _red_mod.ROW_WORKERS:
             print(f"rows: gain_batch in {_red_mod.ROW_WORKERS} forked worker(s) + this process", flush=True)
+        if _red_mod.ROW_MPI:
+            print(f"rows: gain_batch on the MPI ranks ({fullpar.NPROC if fullpar.active() else 1}, this one included)",
+                  flush=True)
         _ro = ReducedOracle(D)
         certified_norm.oracle = _ro          # fine reduced sweep for the peaks list
         certified_norm.pin = True            # hold the anchor LUs to the next enrichment (STAGE6 6.29)
@@ -3383,7 +3391,8 @@ def main():
             # work and the full-model tasks (with their 95-worker estimate)
             from bfs import mumps_lu as _ml
             print(f"  [ledger] round {it} starts at {time.time() - t_start:.0f} s; {_ml.report()}; "
-                  f"{fullpar.report()}", flush=True)
+                  f"{fullpar.report()}" + (f"; {_red_mod.rows_report()}" if _ro is not None and _red_mod.ROW_MPI else ''),
+                  flush=True)
         if a.deadline > 0:
             # stop BEFORE a round that would not finish: the job's time limit
             # then never cuts a round (or the final save) in half (BFS.md 7)
@@ -4932,6 +4941,8 @@ def main():
     if BFS:
         from bfs import mumps_lu as _ml
         print(_ml.report(), flush=True)
+        if _ro is not None and _red_mod.ROW_MPI:
+            print(_red_mod.rows_report(), flush=True)
     if BFS and a.post:
         # the figures in this job and on this pool (bfs/postproc.run_post): no
         # second MPI launch -- the cluster's controller refused one (srun socket

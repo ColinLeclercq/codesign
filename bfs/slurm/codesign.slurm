@@ -15,17 +15,23 @@
 #                     (finished starts continue from their records for OUTER
 #                      more rounds; unfinished ones resume from their checkpoints
 #                      in any case)
-#   KIND=zero sbatch --array=0-1 bfs/slurm/codesign.slurm
-#                     (the zero controller: the same draws with the loop open,
-#                      gamma starting at the open-loop peak; user 2026-10-02)
+#   KIND=hifoo sbatch --array=0-1 bfs/slurm/codesign.slurm
+#                     (HIFOO's draws scaled to stability instead of the zero
+#                      controller, the default since 2026-10-03: the zero start
+#                      begins at the open-loop peak, the HIFOO ones above it)
+#   M=2 P=2 STRUCT=central   sbatch --array=0-1 bfs/slurm/codesign.slurm
+#   M=2 P=2 STRUCT=decentral sbatch --array=0-1 bfs/slurm/codesign.slurm
+#                     (MIMO, BFS.md 5: two actuators, two sensors, order 10 in
+#                      all; directories <KIND>_m2p2_<STRUCT>_o10_XXX)
 #
-# SISO co-design on the backward-facing step (BFS.md 5): one HIFOO start per
+# SISO or MIMO co-design on the backward-facing step (BFS.md 5): one start per
 # array task (bfs/hifoo_init.py, SEED, start = the array index: HIFOO's
-# controller draw at the devices of Barbagallo et al. 2012, B2 and C1), each on
+# compensator draw at the devices of Barbagallo et al. 2012, B2 and C1; MIMO
+# adds the actuator at (1.6, 0.9) and C2), each on
 # 24 cores -- rank 0 the driver, 23 MUMPS workers (bfs/mpipool.py) -- and 240
 # GB: TWO starts per 96-core, 512-GB node.  The gamma certificate factors the
 # 2n even pencil (58 s, 3.9 GB in the sandbox at n = 191,720) in every worker
-# at once.  Order-5 real controller; actuator: Gaussian body force on the
+# at once.  Real controller of order 5 (MIMO: 10 in all); actuator: Gaussian body force on the
 # vertical momentum, free centre; sensor: floor shear-stress window, free start
 # (BFS.md 2).  gamma CERTIFIED on [0, 10] every round; at the end, the
 # all-frequency winding count.
@@ -51,7 +57,7 @@ LAUNCHER=${LAUNCHER:-mpiexec}
 SEED=${SEED:-0}; NSTART=${NSTART:-64}
 OUT=${OUT:-results_bfs}
 IDX=${SLURM_ARRAY_TASK_ID:-0}
-KIND=${KIND:-hifoo}                      # hifoo | zero (the same draw, loop open: gamma starts at the open-loop peak)
+KIND=${KIND:-zero}                       # zero (HIFOO's compensator draw, loop open: gamma starts at the open-loop peak) | hifoo
 export M=${M:-1} P=${P:-1} STRUCT=${STRUCT:-central}   # MIMO: M actuators, P sensors, central | decentral
 MIMO=$([ "$M" = 1 ] && [ "$P" = 1 ] && echo 0 || echo 1)
 export R=${R:-$([ "$MIMO" = 1 ] && echo 10 || echo 5)}   # controller order (MIMO: the total, default 10)

@@ -148,6 +148,14 @@ pivots that moved the computed eigenvalues).
 - `mpipool.active()` reads the launcher's environment (OMPI_COMM_WORLD_SIZE, PMI_SIZE, SLURM_STEP_NUM_TASKS) before importing mpi4py. A GL run therefore never initialises MPI: a singleton MPI_Init outside an allocation aborts on the cluster (`check_env.py` notes).
 - Under MPI the driver uses `--nproc 1`. The GL |Omega| pool (`parallel.py`, forked) is never created for the BFS (`a.nproc > 1 and not BFS`).
 
+**The reduced model on the same ranks** (`--row-workers mpi` in `run_bfs.sh`, 2026-10-03; user: use the idle workers)
+- Between full-model calls the workers wait while the driver works on the reduced model. Two parts of that work are split over the ranks (`reduced._MPIRowPool`), the driver keeping its own share:
+  - **the rows** (`gain_batch`: the SQP's |Omega| rows and sigma_2 blocks, the peak follower, the 1201-point fine sweeps): frequencies in w-blocks of 0.064, a block always to the same rank, so each rank keeps warm subspaces for its frequencies (the fork pool `--row-workers N` of GL, on MPI ranks);
+  - **the tracking of the near-line closed-loop eigenpairs** (SISO; one Rayleigh-quotient iteration per tracked eigenvalue, 20 to 40 of them here): pair j to rank j mod size; the merge check is made by the driver on all of them.
+- The ranks hold no basis (n x kd): the projection (kd x kd: A~, M~, the Gram roots, the QZ form) is installed on every rank once per basis version (`each`/`collect` in `bfs/mpipool.py`), and a call carries the design's reduced ports and the compensator.
+- Results: tracking bitwise equal to serial; rows equal from cold caches, 1e-12 apart with warm ones (the subspace iteration's tolerance; the fork pool behaves the same). SISO and MIMO central, 3 ranks (section 8).
+- Without an MPI pool (serial runs, GL) nothing changes.
+
 **The line certificate in segments over the pool** (`--cert_nseg`, default 16 in `run_bfs.sh`)
 - Each shift is a full LU here, so the sweep's segments run on the workers (`certify_sparse._seg_worker`).
 - The workers now return the eigenvalues their sweeps saw. The continuation gate's watch list, and the argmax used for the eigenvector, are therefore harvested in pooled mode too. Before, they were serial-only; GL with `--cert_nseg > 1` benefits as well.
@@ -220,6 +228,7 @@ ones.
 - Built from the ports' second-order jets in their positions (`BFSPlant.port_jet`: 6 actuator vectors, 3 sensor vectors).
 - Rebuilt at every round at the round's design, as the atoms' tangent basis is (`_jet_basis`).
 - Without it the reduced pencil missed the true near-line pairs, and the full certificate ran every evaluation.
+- Union Galerkin step on W's new columns only (`--oracle-union new`, 2026-10-03; GL default `full`): same span, basis equal to rounding (STAGE6 6.30); the basis updates are serial O(n kd^2) work in the driver, 10 s of the round measured below.
 
 **MIMO: two actuators, two sensors** (user 2026-10-02; `M=2 P=2 STRUCT=central|decentral` in `testplant.slurm` / `codesign.slurm`)
 - Ports of the same kinds: m vertical Gaussian forces, p wall-shear windows; `BFSPlant.bc` returns B = M Psi_a (n x m), C (n x p) when the positions come as (m, 2) / (p, 1).
@@ -268,7 +277,7 @@ ones.
 - Positions (`--positions`): `paper` (default, user 2026-10-02) puts every start at the paper's B2 (0.6, 1.0) and C1 window start 2.0; `random` draws the actuator centre uniformly inside the domain and the sensor window start uniformly on the floor.
 - The catalogue is deterministic in (seed, n); the slurm array takes entry `SLURM_ARRAY_TASK_ID`.
 
-**The zero controller** (`--kind zero`, user 2026-10-02; `KIND=zero` in the slurm scripts)
+**The zero controller** (`--kind zero`, user 2026-10-02; the default `KIND` of both slurm scripts)
 - The same draws with the loop open: nvec = 0, K = 0, only A_c kept (shifted stable by `feasible_start`). gamma starts at the open-loop peak exactly (test plant 1463.9), the floor a useful controller must go below; the HIFOO draws start above it (1655.3; after one round 1645.2).
 - At k = 0 the gradient in the gains is generically nonzero (dsigma = Re(dk (u^H T b)(c^H T v)), dk = dK + dnvec (sI - A_c)^-1 B_c, any complex value at the peak); those in A_c and the positions vanish (they act only through the loop) and grow with the gains.
 - `feasible_start` returns the certified anchor directly (nothing to continue: 38 s on the test plant); the all-frequency count of an open loop is the plant's plus the compensator's, exactly (`BFSPlant.winding`, no march).
@@ -330,12 +339,12 @@ ones.
 - `bfs/slurm/plant_cert.slurm` (once per mesh, 48 ranks, under 8 h): the full mesh's certified range and poles, cached next to `ops_fx.npz`.
 - `bfs/slurm/testplant.slurm` (24 ranks, 1 h 30 limit): one start on the test plant on the production path, `KIND` (default zero) and `OUTER` (default 3) rounds, then the figures and a one-line verdict (gamma per round against the open-loop peak). Makes the test plant's operators and plant data first if missing. Expected 35 to 45 min (serial sandbox timings: start-up 1422 s with the HIFOO continuation, round 0 587 s of which 334 s is the gamma certificate, which splits over the workers).
 - `bfs/slurm/codesign.slurm`:
-  - an array job, one start per task (HIFOO's controller draw at the paper's B2 and C1);
+  - an array job, one start per task: by default (since 2026-10-03) the zero controller, HIFOO's compensator draw with the loop open (`KIND=hifoo` for the scaled draws), at the paper's B2 and C1; MIMO with `M=2 P=2 STRUCT=central|decentral` (directories `<KIND>_m2p2_<STRUCT>_o10_XXX`, so SISO and MIMO runs never share one);
   - 24 ranks per start (the driver and 23 workers) and 240 GB: two starts per 96-core node (the gamma certificate's 2n pencil factor is 3.9 GB in every worker);
   - 15 h limit; `--deadline` from the job's own end time (`bfs/slurm_remaining.py`, scontrol's EndTime, so any `--time` works): 45 min before it, and with the driver's 30 min reserve the last round ends at least 75 min before the end, for the final certificate, the count, the save and the figures;
-  - then `bfs/postproc.py` on the saved record (also after a deadline stop: the figures then show the progress); a finished start re-submitted only draws missing figures;
+  - then the figures (`bfs/postproc.py`), made by the driver on its own pool (`--post 1`), also after a deadline stop (they then show the progress); a separate, time-bounded launch only if they are missing; a finished start re-submitted only draws missing figures;
   - resubmitting resumes unfinished starts (a deadline stop or a killed job: from the checkpoint written at every accepted round); `CONTINUE=1` gives finished starts OUTER more rounds from their records (`--continue-record`, the finished summary kept as `K_B_C_s0_bfs_partN.json`); it refuses to start without the plant certificate.
-- The controller order is `R` (default 5) in `run_bfs.sh`, `codesign.slurm` and `testplant.slurm` (the starts are drawn at that order; directories carry `_o<R>` when it is not 5). Per round the order costs little: the controller enters the full model as a rank-2 correction whatever r, and only the SQP's variables grow (22 -> 42 at r = 10); the number of rounds to converge is what may grow. Order 10 not yet run.
+- The controller order is `R` (default 5) in `run_bfs.sh`, `codesign.slurm` and `testplant.slurm` (the starts are drawn at that order; directories carry `_o<R>` when it is not 5). Per round the order costs little: the controller enters the full model as a rank-2 correction whatever r, and only the SQP's variables grow (22 -> 42 at r = 10); the number of rounds to converge is what may grow. Order 10 on the test plant: section 8 (job 16894514).
 - `testplant.slurm` with `RESUME=1 OUT=<its directory>` does the same for a test-plant run (otherwise the directory is started over). Its deadline also comes from the job's end (5 min kept for the figures, `--deadline-final 600`): `OUTER=300 sbatch --time=15:00:00 bfs/slurm/testplant.slurm` runs as many rounds as fit, or until progress stops. Before 2026-10-02 it had no deadline: a run that did not stop on progress would have been killed at the 1 h 30 limit (with its checkpoint saved).
 - The launcher is the conda env's `mpiexec` (`LAUNCHER=` to change).
 - Every slurm script first runs `bfs/version_check.py`: `bfs/MANIFEST` holds the sha256 of the 63 code files the runs execute (top level and `bfs/`, *.py, *.sh, *.slurm), written with each package; a checkout mixing versions stops before computing, with the files named (`ALLOW_MODIFIED=1` runs anyway). Added 2026-10-02 after a cluster copy ran the version-j `testplant.slurm` with the first package's `hifoo_init.py` (no `--kind`).
@@ -455,6 +464,18 @@ smoke test, 96 ranks at once on one node):
 - The record was saved; the figures' separate `mpiexec` launch then failed in SLURM (`srun: Unable to confirm allocation ... Socket timed out`) and hung, holding the job. Since fixed: the driver makes the figures itself on its pool (`--post 1`, `postproc.run_post`), a second launch happens only if they are missing and is bounded (`timeout 3600`); `bfs/slurm/postproc.slurm` makes them for any record.
 - Time per round, from the ledger: pool 49 %, driver MUMPS 21 %, the driver's own Python (reduced model, SQP over |Omega|) 30 %. The pool's calls hold ~9 tasks on average (7 to 11), so 23 workers are busy 25 to 37 % of the time; the ledger's 95-worker estimate is no faster. More ranks would not shorten a round; about 12 would barely lengthen it (to be measured), which would let 4 starts share a node instead of 2.
 
+*The driver's own work, profiled; the reduced model on the ranks (2026-10-03, sandbox, MPI 2 ranks, zero start, cProfile on rank 0)*
+- Round 0: 707 s wall = pool 603 s + driver MUMPS 34 s + the driver's Python ~70 s. The Python is many serial pieces, none dominant:
+  - near-line eigenpairs of the reduced pencil (`near_line_pairs`, 24 SQP evaluations): 18.4 s -- the tracking iterations 8.2 s (about 190 tracked eigenvalues per call: reach 1 to the left of the line holds many weakly damped modes here), dense eigs 8.4 s, Ritz residuals 4.0 s;
+  - rows (`gain_batch` and single-frequency gains): ~10 s at |Omega| = 21, growing with |Omega| (8.8 s of it the start's 1201-point peak re-derivation, once per run);
+  - the basis updates 9.8 s and the projection 7.0 s (enrichment), the continuation gate 7 s;
+  - start-up only: the inertia certificates (`mfree`) ~30 s.
+- So the 30 % cannot all go to the workers. The rows and the tracking now do (section 3: `--row-workers mpi`), and the union step projects only the new columns (`--oracle-union new`, section 5). Expected on 24 ranks: ~20 s of the round's Python down to ~2 s, plus ~40 % of the basis updates; the cluster's `[ledger]` lines report the pooled rows and pairs.
+- Checks (`rowpool_test`, 3 ranks, SISO and MIMO central): rows bitwise equal to serial from cold caches, 1e-12 with warm ones (gradients' sigma' 2e-13); tracking bitwise equal. The tracking split (`_track_each` + `_track_merge`) is bitwise the committed `_track_eigs` (6 pencils with the SISO coupling structure, a merged pair among them). GL frozen path 10.23128516441147.
+- SISO on the production script (`run_bfs.sh`, all of the above, 2 ranks): start 1464.37, round 0 -> **1296.618347** (1296.618396 before: the union step's rounding), winding count 0 (3534 points), figures by the driver; ledger: 5126 rows (2571 by the driver) in 33 calls, 4067 tracked pairs in 21 calls, projection installed 5 times.
+- **MIMO resume was broken, fixed:** `_mimo_setup` compared the checkpoint's gamma with the start's, and a start with gamma nan (older MIMO starts) made the comparison False, so `RESUME` / `CONTINUE` restarted MIMO runs from their start -- and skipped the feasible start, since a checkpoint existed (alpha -0.0025, infeasible). A non-finite start gamma now never beats the checkpoint (SISO was not affected).
+- MIMO central on the production script after the fix (`--continue-record` of the sandbox's 1-round record 1017.97, 2 ranks): resumed from it (alpha -0.0895, anchor verified), round -> **904.48** (|Omega| 41, model t 916.92), the end-of-run winding count with the controller (a march, not the open loop's exact count): 0 right of -0.025 (3568 points, tail from |w| = 240), the MIMO figures by the driver; 6439 rows (3277 by the driver) in 111 calls. A first attempt alongside the SISO run was killed by the sandbox's 8 GB memory limit (240 GB per start on the cluster).
+
 ## 9. Open items
 
 - **Starts below the open loop:** the zero-controller start works (test plant, cluster: 0.826 x the open-loop peak in 3 rounds, section 8). The certified prefix (section 5) is to be seen on the cluster rerun.
@@ -463,5 +484,5 @@ smoke test, 96 ranks at once on one node):
 - **Plant certificate on the full mesh:** about 2 h on 48 ranks projected from the test plant (41 + 36 min serial); not yet run.
 - **Winding count cost:** about 0.6 s per frequency point on the test plant (3400 to 3600 points), dense near the 282 hot plant poles; on the full mesh the n LU is 14 times dearer. Over 23 workers (92 segments) the test plant's 2013 s of task time is 90 s of wall, so 20 to 40 min on the full mesh, twice per start (feasible start, end of run); to be measured on the cluster.
 - **The paper's own domain** ([-20, 100] x [0, 20], n = 400,775) is larger than the archive's ([-1.5, 30] x [0, 3.5]); gains differ by orders of magnitude (fig. 2a ~2e3 vs 2.2e6 here). The devices and the floor positions are the paper's; the domain stays the user's.
-- **The driver's own work** (30 % of a round on the test plant, growing with |Omega|) is serial while the workers idle 65 % of the time: farming the reduced model's per-frequency evaluations to the pool is the next speed-up.
+- **The driver's own work** (30 % of a round on the test plant): the rows and the near-line tracking are on the ranks (section 8). What remains serial: the dense eigs of the reduced pencil (MIMO every evaluation, SISO every 10th), the basis updates and projection, the gate, the driver's MUMPS solves. To be measured on the cluster (`[ledger]`).
 - **The KS weight:** kept for later (user).

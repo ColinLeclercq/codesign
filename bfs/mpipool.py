@@ -19,6 +19,9 @@ module-level settings (UPPERCASE globals of the modules below) go to every
 worker, so a task computes exactly what it would in the driver's process.
 
     MPIPool.map(fn, args)    in order, dynamic scheduling (one task at a time)
+    MPIPool.each(fn, {rank: arg}) / collect(ranks)
+                             one task to each named rank, gathered later (the
+                             driver computes its own share in between)
 
 Workers never return from serve(); rank 0 sends a stop message at exit.
 """
@@ -120,6 +123,30 @@ class MPIPool:
             out[i] = res
             if nxt < len(args):
                 self.comm.send((nxt, fn, args[nxt]), dest=st.Get_source(), tag=_TAG_TASK); nxt += 1; busy += 1
+        return out
+
+    def each(self, fn, args):
+        """fn(args[w]) on worker rank w for every w of the dict args, WITHOUT
+        waiting: the driver works meanwhile, then collect() gathers (the
+        reduced model's rows, reduced._MPIRowPool: a frequency always goes to
+        the same rank, which keeps its warm starts)."""
+        for w, a in args.items():
+            self.comm.send((w, fn, a), dest=w, tag=_TAG_TASK)
+        return list(args)
+
+    def collect(self, ranks):
+        """The results of each(ranks), {rank: result}; every one is received
+        before an error is raised, so no stale result reaches a later map."""
+        from mpi4py import MPI
+        out, err, st = {}, None, MPI.Status()
+        for _ in ranks:
+            i, ok, res = self.comm.recv(source=MPI.ANY_SOURCE, tag=_TAG_RES, status=st)
+            if ok:
+                out[i] = res
+            elif err is None:
+                err = f"MPI worker {st.Get_source()} failed: {res}"
+        if err is not None:
+            raise RuntimeError(err)
         return out
 
     def close(self):
