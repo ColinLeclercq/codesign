@@ -161,6 +161,7 @@ factorisations per round, ~70 with reduced-model certification every 4th round.
 | refused step -> its certified prefix (`--gate-prefix 1` in run_bfs.sh) | **done**, mock-tested; to see on the cluster | BFS.md 5 |
 | restart: resume from the checkpoint (stopped/killed), `CONTINUE=1` / `RESUME=1` (`--continue-record`) for finished runs | **done**, tested in the sandbox | BFS.md 7, 8 |
 | MIMO 2 x 2 (two Gaussian forces, two shear windows), central / decentral (`M=2 P=2 STRUCT=...`) | **done**: gradients FD-checked, 1 round each in the sandbox (1018 / 1110 from 1464) | BFS.md 5 |
+| SQP penalties relative to gamma (`--sqp-pen-rel 0.1`): the order-10 SISO and decentral stalls (752.96, 808.39) were the absolute GL penalty letting compensator poles cross their line | **fixed**, the SISO record descends again in the sandbox; multi-start arrays in `testplant.slurm` | BFS.md 5, 8 |
 | reduced model on the MPI ranks (rows, near-line tracking: `--row-workers mpi`), union step on new columns only; MIMO resume fixed; zero start the codesign default | **done**: bitwise / 1e-12 against serial, SISO production path in the sandbox; cluster speed-up to read in `[ledger]` | BFS.md 3, 8 |
 
 ## Next

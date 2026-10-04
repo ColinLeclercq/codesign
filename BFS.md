@@ -242,6 +242,11 @@ ones.
 **Interior margin**
 - `--bfs-margin` (section 2).
 
+**SQP penalties relative to gamma** (`--sqp-pen-rel 0.1` in `run_bfs.sh`, 2026-10-04; GL: absolute, unchanged)
+- The SQP's merit is max(t, smax) + nu x (stability violations), and its QP pays 100 (1e3 for the Hermite and LMI slacks) per unit of elastic slack. An exact penalty needs nu above the stability rows' multipliers, and these scale with sigma: nu = 100 is ~10 x sigma at GL, 0.13 x sigma here.
+- So the SQP bought sigma with stability: on the order-10 SISO run (section 8) a step took sigma 752.96 -> 740.74 by moving a compensator pole from -0.0508 to -0.0258, 0.024 across its line, for a penalty of 2.4. From that inadmissible point every step back cost more sigma than the penalty returned: all rejected, the start returned, the same in every round until the progress rule stopped the run.
+- Now nu and the slack costs are multiplied by max(1, 0.1 gamma_best): 100 at gamma = 10 (the GL value), 7500 at gamma = 750.
+
 **A refused step keeps its certified prefix** (`--gate-prefix 1`, 2026-10-02; GL default 0, unchanged)
 - The continuation gate certifies the segment from the last accepted design to the candidate piece by piece, left to right (halving up to `--cont-depth`). When it gives up -- a crossing ahead, or the eigenvalue motion still too large at full depth -- the path up to its last certified piece is already proved free of crossings (`continuation_gate(..., reach=)`).
 - That point becomes the candidate: its own line certificate (and the rectangle gate) and its gamma certificate; accepted if it improves on the best, with the step cap set to the certified length. The round is no longer lost (cluster test plant, zero start: round 0's step 1464 -> 1140 was refused whole, at depth 4).
@@ -337,7 +342,7 @@ ones.
   5. one start end to end on the test plant, 24 ranks: feasible start and its count, one round with gamma certified on [0, 10], the all-frequency count at the end.
   6. its figures (`postproc.py`, 24 ranks).
 - `bfs/slurm/plant_cert.slurm` (once per mesh, 48 ranks, under 8 h): the full mesh's certified range and poles, cached next to `ops_fx.npz`.
-- `bfs/slurm/testplant.slurm` (24 ranks, 1 h 30 limit): one start on the test plant on the production path, `KIND` (default zero) and `OUTER` (default 3) rounds, then the figures and a one-line verdict (gamma per round against the open-loop peak). Makes the test plant's operators and plant data first if missing. Expected 35 to 45 min (serial sandbox timings: start-up 1422 s with the HIFOO continuation, round 0 587 s of which 334 s is the gamma certificate, which splits over the workers).
+- `bfs/slurm/testplant.slurm` (24 ranks, 1 h 30 limit): one start on the test plant on the production path (several with `--array`: task i takes entry i of a catalogue of `NSTART` draws, default 64, deterministic in `SEED`, into `testplant_bfs/<KIND><suffix>_s<SEED>_r<OUTER>_i<iii>`; without `--array` the names are unchanged), `KIND` (default zero) and `OUTER` (default 3) rounds, then the figures and a one-line verdict (gamma per round against the open-loop peak). Makes the test plant's operators and plant data first if missing. Expected 35 to 45 min (serial sandbox timings: start-up 1422 s with the HIFOO continuation, round 0 587 s of which 334 s is the gamma certificate, which splits over the workers).
 - `bfs/slurm/codesign.slurm`:
   - an array job, one start per task: by default (since 2026-10-03) the zero controller, HIFOO's compensator draw with the loop open (`KIND=hifoo` for the scaled draws), at the paper's B2 and C1; MIMO with `M=2 P=2 STRUCT=central|decentral` (directories `<KIND>_m2p2_<STRUCT>_o10_XXX`, so SISO and MIMO runs never share one);
   - 24 ranks per start (the driver and 23 workers) and 240 GB: two starts per 96-core node (the gamma certificate's 2n pencil factor is 3.9 GB in every worker);
@@ -391,6 +396,7 @@ smoke test, 96 ranks at once on one node):
 - **In the 15 h job:** about **15 to 20 rounds**. GL K+B+C needed 20 to 40 rounds to converge; a second job (resume from the checkpoint) may be needed.
 - Re-projected from the cluster test plant (2026-10-02, zero start, 5 rounds of 154 to 255 s: pool 58 to 95 s, driver MUMPS 45 to 57 s, the rest 50 to 100 s; full-mesh factor x 11, solve x 14): 25 to 50 min a round, start-up ~25 min, end ~30 min, so **17 to 30 rounds** in 15 h. OUTER = 40 with the deadline: no need to choose.
 - **Throughput:** 2 starts per node; 8 starts on 4 nodes.
+- **Several starts on one node** (second cluster, 2026-10-04): the scheduler shares nodes -- the three test-plant jobs of 2026-10-04 (24 tasks, 60 GB each) ran at once on one node (n1200). Packing is the scheduler's: each job asks for its tasks and memory, and jobs that fit share a node. Test plant: 37-38 GB used by a 24-rank start (1.5 GB a rank), so on a 96-core / 512 GB node 4 starts at 24 ranks, on a 48-core / 192 GB node 2, on a 44-core node 1 (or 2 at `--ntasks=22`). Fewer ranks per start (`sbatch --ntasks=12 --mem=30G ...`, nothing else to change) doubles the starts per node; the `[ledger]` now projects the pool's work on 11 workers too, to see what that costs a round. Full mesh: 240 GB per start, Sapphire Rapids nodes only (2 per node).
 
 ## 8. Validation log
 
@@ -475,6 +481,13 @@ smoke test, 96 ranks at once on one node):
 - SISO on the production script (`run_bfs.sh`, all of the above, 2 ranks): start 1464.37, round 0 -> **1296.618347** (1296.618396 before: the union step's rounding), winding count 0 (3534 points), figures by the driver; ledger: 5126 rows (2571 by the driver) in 33 calls, 4067 tracked pairs in 21 calls, projection installed 5 times.
 - **MIMO resume was broken, fixed:** `_mimo_setup` compared the checkpoint's gamma with the start's, and a start with gamma nan (older MIMO starts) made the comparison False, so `RESUME` / `CONTINUE` restarted MIMO runs from their start -- and skipped the feasible start, since a checkpoint existed (alpha -0.0025, infeasible). A non-finite start gamma now never beats the checkpoint (SISO was not affected).
 - MIMO central on the production script after the fix (`--continue-record` of the sandbox's 1-round record 1017.97, 2 ranks): resumed from it (alpha -0.0895, anchor verified), round -> **904.48** (|Omega| 41, model t 916.92), the end-of-run winding count with the controller (a march, not the open loop's exact count): 0 right of -0.025 (3568 points, tail from |w| = 240), the MIMO figures by the driver; 6439 rows (3277 by the driver) in 111 calls. A first attempt alongside the SISO run was killed by the sandbox's 8 GB memory limit (240 GB per start on the cluster).
+
+*Second cluster, test plant, order 10, zero starts (2026-10-04, jobs 760989 / 761011 / 761012, version 20261004a)*
+- SISO: 1464.18 -> **752.96** in 9 rounds, then 3 rounds returning the same design and the progress stop (order 5 on the first cluster: 769.57). MIMO decentral (2 loops of 5): 1463.87 -> **808.39** in 4 rounds, then the same stall. MIMO central (order 10): still running, 221.38 after 28 rounds (0.15 of the open-loop peak).
+- The stalls are not stationarity: every stalled round ended on the SQP's iteration budget (code 4), its stationarity 6 to 117, the reduced model still finding descent; the design handed back was the start.
+- Cause, reproduced in the sandbox from the SISO record with `--sqp-verbose` and the line-search trace: the SQP's first step took sigma 752.96 -> 740.74 with a compensator pole moving from -0.0508 to -0.0258 (its line is -0.05); the merit's penalty at nu = 100 was 2.4 against a gain of 12, so the step was accepted; from that inadmissible iterate every step back cost more sigma than the penalty returned (all rejected), so no admissible candidate but the start -- in every round. The order-10 SISO design has three compensator poles at the line (-0.0528, -0.0508 +- 1.78i), the decentral two (-0.055 +- 0.001i, -0.0515). The penalty was GL's absolute 100, ~10 x sigma there, 0.13 x sigma here: the stall is a scaling error, not the start.
+- Fix: `--sqp-pen-rel 0.1` (section 5). Same record, same sandbox: rounds now accepted, the SQP riding the compensator line (alc -0.0500 +- 1e-4): 752.96 -> 735.49 -> 716.84 -> 683.82 (candidate) in the first rounds.
+- Every earlier BFS run had the absolute penalty (order 5's 769.57 included).
 
 ## 9. Open items
 

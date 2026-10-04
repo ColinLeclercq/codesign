@@ -1708,6 +1708,11 @@ def main():
                          "(default, bit-identical); new = only W's new columns (V = W before the step): O(n kd k_new) "
                          "instead of O(n kd^2) per anchor, the serial part of the enrichment at the cavity; same span, "
                          "rounding-level different basis (STAGE6 6.30)")
+    ap.add_argument('--sqp-pen-rel', dest='sqp_pen_rel', type=float, default=0.0,
+                    help='SQP merit penalty and elastic slack costs relative to the objective: x max(1, X gamma_best) '
+                         '(0 = the absolute 100 / 1e3 of GL; run_bfs.sh: 0.1, i.e. 100 at gamma = 10; BFS.md 5)')
+    ap.add_argument('--sqp-verbose', dest='verbose', action='store_true',
+                    help='print every SQP iteration: t, smax, stationarity, step, radius, accepted (diagnostics)')
     ap.add_argument('--row-workers', dest='row_workers', default='0',
                     help='reduced-model rows (gain_batch) evaluated in this many FORKED processes besides this one, '
                          'frequencies split by w-blocks (reduced._RowPool; STAGE6 6.26). 0 = serial; '
@@ -3556,7 +3561,8 @@ def main():
                 refine_tol=(a.sqp_refine if a.sqp_refine > 0 else None),
                 refine_grid=np.linspace(a.wlo, a.whi, 1201), refine_max=a.sqp_refine_max,
                 alpha_ref=(float(_al_accepted) if _al_accepted is not None else None),
-                pred_rel=(1e-7 if (a.sqp_stat == 'pred' or (a.sqp_stat == 'auto' and MIMO)) else None))
+                pred_rel=(1e-7 if (a.sqp_stat == 'pred' or (a.sqp_stat == 'auto' and MIMO)) else None),
+                pen_scale=(max(1.0, a.sqp_pen_rel * float(gbest)) if a.sqp_pen_rel > 0 else 1.0))
             _sqp_trust_prev = inner_stats.get('trust_final')
             # STALL RECOVERY (2026-09-25): a solve that ended on a collapsed radius
             # (code 6) or with failed subproblems hands its quasi-Newton matrix and

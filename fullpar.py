@@ -187,11 +187,11 @@ def report():
     if not STATS['calls']:
         if CALLS:
             return (f"full-model tasks run serially: {sum(n for n, _, _ in CALLS)} tasks in {len(CALLS)} calls, "
-                    f"{sum(w for _, w, _ in CALLS):.1f} s (on 23 / 95 workers ~{estimate(23):.1f} / {estimate(95):.1f} s)")
+                    f"{sum(w for _, w, _ in CALLS):.1f} s (on 11 / 23 / 95 workers ~{estimate(11):.1f} / {estimate(23):.1f} / {estimate(95):.1f} s)")
         return "full-model pool: not used"
     return (f"full-model pool ({NPROC} workers): {STATS['tasks']} tasks in {STATS['calls']} calls, "
             f"{STATS['work']:.1f} s of task time in {STATS['wall']:.1f} s wall "
-            f"(x{STATS['work'] / max(STATS['wall'], 1e-9):.2f}; on 23 / 95 workers ~{estimate(23):.1f} / "
+            f"(x{STATS['work'] / max(STATS['wall'], 1e-9):.2f}; on 11 / 23 / 95 workers ~{estimate(11):.1f} / {estimate(23):.1f} / "
             f"{estimate(95):.1f} s)")
 
 

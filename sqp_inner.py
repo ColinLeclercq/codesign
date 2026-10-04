@@ -724,11 +724,12 @@ class Evaluator:
 
 
 # ----------------------------------------------------------------- subproblem
-def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, disp=None):
+def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, disp=None, pen=1.0):
     """min dt + 0.5 d'Hd (+ nu_s s)  s.t. linearised rows, block SOCs, abscissa
     rows, box, and -- when ev['lmi'] is set -- the linearised compensator
     Lyapunov LMI with an elastic slack s.  Variables x = [d (NZ), dt, q (r^2
-    Hermitian coordinates of dP), s].  Returns (dict, status)."""
+    Hermitian coordinates of dP), s].  pen scales the elastic slacks' costs
+    with the objective (solve_epigraph_sqp's pen_scale).  Returns (dict, status)."""
     NZ = len(ev['z'])
     lmi = ev.get('lmi'); use_lmi = lmi is not None
     nq = lmi['r'] ** 2 if use_lmi else 0
@@ -900,10 +901,10 @@ def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, di
     P = sp.csc_matrix(Pd)
     q = np.zeros(n); q[NZ] = 1.0
     if use_lmi:
-        q[is_] = 1e3                                          # elastic slack, expensive
-    q[iel:iel + n_el] = 1e2                                   # row slacks, at the merit's nu
+        q[is_] = 1e3 * pen                                    # elastic slack, expensive
+    q[iel:iel + n_el] = 1e2 * pen                             # row slacks, at the merit's nu
     for kh in range(len(herm_list)):
-        q[ih + kh] = 1e3                                      # block-Hermite slacks, expensive
+        q[ih + kh] = 1e3 * pen                                # block-Hermite slacks, expensive
     st = clarabel.DefaultSettings(); st.verbose = False
     st.max_iter = 200; st.tol_gap_abs = 1e-10; st.tol_gap_rel = 1e-10; st.tol_feas = 1e-10
     # ONE thread (2026-09-30): Clarabel's default (max_threads = 0: all cores)
@@ -942,7 +943,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                        refine_tol=None, refine_grid=None, refine_max=3,
                        alpha_ref=None, alpha_ref_tol=1e-3, stat_rel=1e-4, pred_rel=1e-7, ctrl_block=False,
                        follow=None, follow_radius=0.1, row_screen=0.0, validate_full=True,
-                       cl_block=False, max_disp=None):
+                       cl_block=False, max_disp=None, pen_scale=1.0):
     if clarabel is None:
         raise RuntimeError("clarabel is not installed (pip install clarabel)")
     W = np.asarray(sorted(Omega), float)
@@ -1000,7 +1001,14 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
     t0_start = float(e['smax'])                       # the start's value on the SQP's own model
     H = np.eye(NZ) if H0 is None else np.asarray(H0, float).copy()
     Delta = trust0 if trust0 else 1e-3 * max(float(np.linalg.norm(z)), 1.0)   # row gradients ~1e3-1e4: the linear model holds for steps ~1e-4 |z|
-    nu = 100.0                                            # merit penalty
+    # merit penalty, and the QP's elastic slack costs: 100 (1e3 for the
+    # Hermite and LMI slacks) times pen_scale.  The exact-penalty threshold is
+    # the stability rows' multipliers, which scale with the objective: 100 at
+    # GL (sigma ~ 10, pen_scale 1); the backward-facing step (sigma ~ 1e3)
+    # passes pen_scale = sigma / 10 (BFS.md 5, 2026-10-04: at nu = 100 a step
+    # bought 12 of sigma with a compensator pole 0.025 across its line, and the
+    # solve was trapped there for the rest of the run)
+    nu = 100.0 * pen_scale
     best = {'g': np.inf, 'z': None, 'al': None, 't': np.inf, 'clr': None}
     lim = max(-eps, ctrl_max)
     hist = []; code = 4; t_start = time.time(); added = []; exit_info = None
@@ -1114,14 +1122,14 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         best.update(g=e['smax'], z=z.copy(), al=e['al'], t=t, clr=e['clr'], w=_argw(e))
     for it in range(int(maxit)):
         _disp = (z - z_start, float(max_disp)) if max_disp is not None else None
-        sub, status = subproblem(e, t, H, Delta, eps, ctrl_max, kink_block, mg_row=mg, disp=_disp)
+        sub, status = subproblem(e, t, H, Delta, eps, ctrl_max, kink_block, mg_row=mg, disp=_disp, pen=pen_scale)
         if sub is None:
             # 2026-09-25: at the ne=100 K+B+C fixed point the subproblem failed
             # (code 12) three rounds running, while the same subproblem with a
             # fresh Hessian solves: reset the quasi-Newton matrix and retry once
             sub_status_log.append(str(status))
             H = np.eye(NZ) * max(float(np.mean(np.abs(np.diag(H)))), 1e-8)
-            sub, status = subproblem(e, t, H, Delta, eps, ctrl_max, kink_block, mg_row=mg, disp=_disp)
+            sub, status = subproblem(e, t, H, Delta, eps, ctrl_max, kink_block, mg_row=mg, disp=_disp, pen=pen_scale)
             if sub is None:
                 sub_status_log.append(str(status) + ' (after reset)')
                 code = 12; hist.append(dict(it=it, status=status)); break
@@ -1175,8 +1183,8 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                          step=float(np.linalg.norm(alpha * d)), alpha=alpha,
                          Delta=Delta, accepted=accepted, nblk=len(e['blocks'])))
         if verbose:
-            print(f"    sqp {it:3d}: t={t:.6f} smax={e['smax']:.6f} al={e['al']:+.4f} "
-                  f"stat={stat:.2e} step={np.linalg.norm(alpha*d):.2e} a={alpha:g} "
+            print(f"    sqp {it:3d}: t={t:.6f} smax={e['smax']:.6f} al={e['al']:+.4f} alc={e['al_ctrl']:+.5f} "
+                  f"{'adm' if admissible(e) else 'NOT adm'} stat={stat:.2e} step={np.linalg.norm(alpha*d):.2e} a={alpha:g} "
                   f"D={Delta:.2e} {'ok' if accepted else 'REJ'}", flush=True)
         if not accepted:
             Delta *= 0.5
@@ -1185,7 +1193,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             continue
         # damped BFGS on the Lagrangian
         subn, _ = subproblem(en, tn, H, Delta, eps, ctrl_max, kink_block,
-                             disp=((zn - z_start, float(max_disp)) if max_disp is not None else None))
+                             disp=((zn - z_start, float(max_disp)) if max_disp is not None else None), pen=pen_scale)
         gLn = grad_L(en, subn) if subn is not None else gL
         sv = zn - z; yv = gLn - gL
         sHs = float(sv @ H @ sv); sy = float(sv @ yv)
@@ -1301,6 +1309,10 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             b_c, c_c, *_ = D.bc(xa_c, xs_c, va_c, vs_c)
             al_true, _, _, _, _, clr_true = D.alpha_certified(arow_c, nvec_c, K_c, b_c, c_c, eps=eps)
             n_cert += 1
+            if verbose:
+                print(f"    sqp candidate smax {smax_c:.6f} (reduced alpha {al_c:+.5f}): full alpha {al_true:+.5f}, "
+                      f"line {'clear' if clr_true else 'NOT clear'} -> "
+                      f"{'returned' if (clr_true and al_true + eps <= -mg) else 'refused'}", flush=True)
             if clr_true and al_true + eps <= -mg:
                 chosen = (smax_c, z_c, al_true, t_c); break
         if chosen is None:
