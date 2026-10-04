@@ -6,6 +6,10 @@ made.  The slurm scripts run this first: a file from another version (a
 partial copy, an old file left behind) stops the job before it computes
 anything, with the files named.
 
+Site settings are not code and are left out (2026-10-04, a change of cluster
+stopped every job): env.sh (modules, conda) is not listed, and the #SBATCH
+lines of the slurm scripts (partition, account, memory, time) are not hashed.
+
     python bfs/version_check.py            check (exit 1 on a mismatch;
                                            ALLOW_MODIFIED=1: warn only)
     python bfs/version_check.py --write L  (packaging) rewrite the manifest,
@@ -18,18 +22,22 @@ ROOT = os.path.dirname(HERE)
 MAN = os.path.join(HERE, 'MANIFEST')
 
 
+SITE = ('env.sh',)              # site settings, not code: never listed
+
+
 def _sha(path):
-    h = hashlib.sha256()
+    """sha256 of the file; for a slurm script, without its #SBATCH lines."""
     with open(path, 'rb') as f:
-        for chunk in iter(lambda: f.read(1 << 20), b''):
-            h.update(chunk)
-    return h.hexdigest()
+        data = f.read()
+    if path.endswith('.slurm'):
+        data = b''.join(l for l in data.splitlines(keepends=True) if not l.lstrip().startswith(b'#SBATCH'))
+    return hashlib.sha256(data).hexdigest()
 
 
 def _files():
     out = subprocess.run(['git', 'ls-files', '*.py', '*.sh', '*.slurm'], cwd=ROOT, capture_output=True,
                          text=True, check=True).stdout.split()
-    return sorted(p for p in out if not p.startswith(('tools/', 'attic/')))
+    return sorted(p for p in out if not p.startswith(('tools/', 'attic/')) and p not in SITE)
 
 
 def write(label):
@@ -62,7 +70,8 @@ def check():
     print(f"version_check: this checkout is NOT the code version {label}: {len(bad)} of {n} files differ")
     for b in bad:
         print("   " + b)
-    print("   (extract the whole package again, or fetch the bundle; ALLOW_MODIFIED=1 to run anyway)")
+    print("   (a file you edited on purpose: ALLOW_MODIFIED=1 sbatch ... runs anyway; see what differs with")
+    print("    tar xzf <package>.tar.gz -O codesign_bfs/<file> | diff - <file>; otherwise extract the package again)")
     return 0 if os.environ.get('ALLOW_MODIFIED') == '1' else 1
 
 
