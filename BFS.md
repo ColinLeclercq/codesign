@@ -269,6 +269,7 @@ ones.
 - `K_B_C_s0_bfs_ckpt.npz`: the checkpoint (resume); removed when the run finishes, kept after a deadline stop.
 - The log (slurm `logs/`), with a `[ledger]` line per round.
 - `K_B_C_s0_bfs_post/` (`bfs/postproc.py`, run by `codesign.slurm` after every saved record, or by hand):
+  - `sigma_loglog.png` (2026-10-04): the same curves on log-log axes, the grid with 16 log-spaced points on [1e-3, 0.02], the value at omega = 0 in the title;
   - `sigma.png`: sigma_1, sigma_2, sigma_3 on [0, W], W = the final band edge (at least 10), without control (open loop) and with it, and gamma as a horizontal line;
   - `modes_w<w>.png`: at the open-loop peak, the closed-loop peak and `--omegas` (default 0.3, 1.5), the optimal forcing (right singular vector of sigma_1) and response (left), without and with control, Re u (`--comp v` for v), with the actuator (half-amplitude circle and centre) and the sensor window (a black bar standing on the wall, as in the paper's figure 1; the panel's bottom is the wall) drawn on every panel, and in grey their START positions (dotted circle, and an equal bar under the black one) with an arrow for the actuator's move (the record carries `xa_start`, `xs_start` since 2026-10-02; for older records `--start INIT.npz`); the forcing is zoomed on the step;
   - `controller.png`: the controller's Bode plot (|k(i w)|, phase; the band shaded; its poles listed);
@@ -490,6 +491,12 @@ smoke test, 96 ranks at once on one node):
   - SISO order 10: 752.96 -> 735.49 -> 716.84 accepted; round 2 certified 685.08, refused by the continuation gate (a homotopy midpoint had a compensator pole at -0.026: the straight path between two admissible designs left the set), so the tau governor capped the next step -- the gate doing its job;
   - MIMO decentral: 808.39 -> 773.43 in the first round (10 SQP iterations, all but one admissible).
 - Every earlier BFS run had the absolute penalty (order 5's 769.57 included).
+
+*Second cluster, MIMO central, order 10, zero start (job 761011, version 20261003a, finished 2026-10-05)*
+- 1464.18 -> **191.11** (0.131 of the open-loop peak) in 44 rounds, 12.5 h; stopped by the progress rule. Winding count 0, alpha -0.0723. Actuators (2.92, 0.10) and (4.87, 0.44), sensor windows at 4.50 and 6.94.
+- sigma_1 with control is FLAT at gamma from omega = 0 to 2.4 (log-log figure): a plateau, not isolated peaks -- the max over a continuum of active frequencies; the 8 local maxima on the grid (0, 0.10, 0.42, 0.79, 1.13, 1.31, 1.79, 2.35) are ripples on it. At omega = 0, sigma_1 is 191.1 against 51.8 open loop. |Omega| = 474, all on [0, 2.87].
+- 13 of 44 rounds accepted nothing: the reduced model under-predicted a peak at the SQP's design (by 2 to 17 %: e.g. round 29, 206.8 predicted at w = 2.59, 249.5 certified) or the continuation gate refused the step. The last four rounds moved gamma by 1e-6: the compensator has four poles ON its line (a double real pole at -0.05 and -0.05 +- 3.13i), the run had the absolute SQP penalty (section 5), and its SQP ended on codes 12 / 6 / 4.
+- Time: rounds grew from ~5 min to 20-30 min (pool 61 % of the run, driver MUMPS 8 %, driver Python 31 % of which the pooled rows 11 %); the pool's work per round grew tenfold (to be split by phase: the ledger has only totals).
 
 ## 9. Open items
 

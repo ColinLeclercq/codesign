@@ -135,7 +135,10 @@ def controller_tf(D, des, ws):
 
 
 def freq_grid(W, extra=()):
+    """0.02 on [0, 3], 0.1 beyond, 16 log-spaced points on [1e-3, 0.02]
+    (the log-log figure's low frequencies), and `extra`."""
     g = np.concatenate([np.arange(0.0, min(3.0, W), 0.02), np.arange(3.0, W, 0.1), [W],
+                        np.logspace(-3.0, np.log10(0.02), 16, endpoint=False),
                         [x for x in extra if 0.0 <= x <= W]])
     return np.unique(np.round(g, 9))
 
@@ -168,11 +171,18 @@ def _style(ax):
     ax.set_axisbelow(True)
 
 
-def fig_sigma(path, ws, so, sc, gamma, W, wvec):
+def fig_sigma(path, ws, so, sc, gamma, W, wvec, logw=False):
+    """sigma_1..3 without and with control, gamma's line; logw: log-log
+    (omega > 0; the value at omega = 0 in the title)."""
     import matplotlib; matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=(9, 5))
     _style(ax)
+    if logw:
+        at0 = ws <= 0.0
+        s0 = (so[at0, 0][0], sc[at0, 0][0]) if np.any(at0) else None
+        ws, so, sc = ws[~at0], so[~at0], sc[~at0]
+        ax.set_xscale('log')
     for x in wvec:
         ax.axvline(x, color=GRID, lw=1.0, zorder=0)
     dashes = ['-', (0, (5, 2)), (0, (1, 1.5))]
@@ -188,11 +198,13 @@ def fig_sigma(path, ws, so, sc, gamma, W, wvec):
     ax.annotate(f'without control: peak {so[io, 0]:.5g} at $\\omega$ = {ws[io]:.3g}', xy=(ws[io], so[io, 0]),
                 xytext=(40, -14), textcoords='offset points', color=INK2, fontsize=8,
                 arrowprops=dict(arrowstyle='-', color=INK2, lw=0.6))
-    ax.set_xlim(0, W)
+    ax.set_xlim(float(ws[0]) if logw else 0.0, W)
     ax.set_xlabel('$\\omega$', color=INK)
     ax.set_ylabel('singular value (noise $\\to$ state, energy norms)', color=INK)
     ax.set_title('Singular values without and with control (grey verticals: frequencies of the mode figures;\n'
-                 'where only blue shows, the two curves coincide)',
+                 'where only blue shows, the two curves coincide)'
+                 + (f'; at $\\omega$ = 0: $\\sigma_1$ = {s0[0]:.5g} without, {s0[1]:.5g} with control'
+                    if logw and s0 is not None else ''),
                  color=INK, fontsize=10, loc='left')
     ax.legend(ncol=3, fontsize=8, frameon=False, loc='lower left')
     fig.tight_layout()
@@ -389,6 +401,8 @@ def plot(out, D, des, comp='u'):
     z = np.load(os.path.join(out, 'post.npz'))
     ws, W, wvec = z['omega'], float(z['band'][1]), [float(w) for w in z['vec_omega']]
     fig_sigma(os.path.join(out, 'sigma.png'), ws, z['sigma_open'], z['sigma_closed'], float(z['gamma']), W, wvec)
+    fig_sigma(os.path.join(out, 'sigma_loglog.png'), ws, z['sigma_open'], z['sigma_closed'], float(z['gamma']), W, wvec,
+              logw=True)
     for i, w in enumerate(wvec):
         rec = {key: z[key][i] for key in ('f_open', 'q_open', 'f_closed', 'q_closed', 'sigma1_vec_open',
                                            'sigma1_vec_closed')}
