@@ -37,7 +37,8 @@ NPROC = 1
 CTX = {}
 STATS = dict(calls=0, tasks=0, work=0.0, wall=0.0)    # pmap calls through the pool (report())
 # every pmap call with >= 2 tasks, pooled or not: (number of tasks, task seconds,
-# longest task) -- what a pool of W workers would take (estimate(W), BFS.md 7)
+# longest task, task function) -- what a pool of W workers would take
+# (estimate(W), BFS.md 7), and by task kind (by_task)
 CALLS = []
 IN_TASK = False          # True while a task runs in THIS process (serial pmap; bfs/mumps_lu.py accounting)
 
@@ -156,7 +157,7 @@ def pmap(fn, args):
                 t0 = _time.perf_counter(); out.append(fn(a_)); dts.append(_time.perf_counter() - t0)
         finally:
             IN_TASK = False
-        CALLS.append((len(args), float(sum(dts)), float(max(dts))))
+        CALLS.append((len(args), float(sum(dts)), float(max(dts)), getattr(fn, '__name__', '?')))
         return out
     if _stamp() != _STAMP:
         start(NPROC, **dict(CTX))            # the workers' mesh object is stale: re-fork
@@ -166,7 +167,7 @@ def pmap(fn, args):
     STATS['wall'] += _time.perf_counter() - t0
     STATS['calls'] += 1; STATS['tasks'] += len(args)
     out = []
-    CALLS.append((len(args), float(sum(r_[2] for r_ in res)), float(max(r_[2] for r_ in res))))
+    CALLS.append((len(args), float(sum(r_[2] for r_ in res)), float(max(r_[2] for r_ in res)), getattr(fn, '__name__', '?')))
     for r, d, dt in res:
         STATS['work'] += dt
         if d is not None:
@@ -178,7 +179,19 @@ def pmap(fn, args):
 def estimate(W):
     """Seconds the recorded pmap calls would take on W workers (dynamic
     scheduling, no dispatch cost): per call max(work / W, longest task)."""
-    return float(sum(max(w / max(W, 1), m) for _, w, m in CALLS))
+    return float(sum(max(w / max(W, 1), m) for _, w, m, _ in CALLS))
+
+
+def by_task(W=95):
+    """One line for the log: per task function, calls, tasks, task time and
+    the time on W workers (max(work / W, longest task) per call: at large W
+    this is the critical path, which more workers do not shorten)."""
+    agg = {}
+    for n, w, m, f in CALLS:
+        a = agg.setdefault(f, [0, 0, 0.0, 0.0])
+        a[0] += 1; a[1] += n; a[2] += w; a[3] += max(w / max(W, 1), m)
+    rows = sorted(agg.items(), key=lambda kv: -kv[1][3])
+    return "; ".join(f"{f} {c} calls / {n} tasks, {w:.0f} s, ~{e:.0f} s on {W}" for f, (c, n, w, e) in rows)
 
 
 def report():
@@ -186,8 +199,8 @@ def report():
     they would cost serially, less the dispatch) against its wall time."""
     if not STATS['calls']:
         if CALLS:
-            return (f"full-model tasks run serially: {sum(n for n, _, _ in CALLS)} tasks in {len(CALLS)} calls, "
-                    f"{sum(w for _, w, _ in CALLS):.1f} s (on 11 / 23 / 95 workers ~{estimate(11):.1f} / {estimate(23):.1f} / {estimate(95):.1f} s)")
+            return (f"full-model tasks run serially: {sum(c[0] for c in CALLS)} tasks in {len(CALLS)} calls, "
+                    f"{sum(c[1] for c in CALLS):.1f} s (on 11 / 23 / 95 workers ~{estimate(11):.1f} / {estimate(23):.1f} / {estimate(95):.1f} s)")
         return "full-model pool: not used"
     return (f"full-model pool ({NPROC} workers): {STATS['tasks']} tasks in {STATS['calls']} calls, "
             f"{STATS['work']:.1f} s of task time in {STATS['wall']:.1f} s wall "

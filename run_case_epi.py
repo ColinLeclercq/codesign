@@ -3398,6 +3398,7 @@ def main():
             print(f"  [ledger] round {it} starts at {time.time() - t_start:.0f} s; {_ml.report()}; "
                   f"{fullpar.report()}" + (f"; {_red_mod.rows_report()}" if _ro is not None and _red_mod.ROW_MPI else ''),
                   flush=True)
+            print(f"  [ledger] pool by task (cumulative): {fullpar.by_task(95)}", flush=True)
         if a.deadline > 0:
             # stop BEFORE a round that would not finish: the job's time limit
             # then never cuts a round (or the final save) in half (BFS.md 7)
@@ -4945,6 +4946,7 @@ def main():
             pass
     print(fullpar.report(), flush=True)
     if BFS:
+        print(f"full-model pool by task: {fullpar.by_task(95)}", flush=True)
         from bfs import mumps_lu as _ml
         print(_ml.report(), flush=True)
         if _ro is not None and _red_mod.ROW_MPI:

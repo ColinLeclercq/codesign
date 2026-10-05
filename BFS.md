@@ -362,7 +362,7 @@ ones.
 
 **Run time** (measured 2026-10-02; projected to the cluster)
 
-*Ledger.* Each BFS round prints a `[ledger]` line:
+*Ledger.* Each BFS round prints a `[ledger]` line (and, since 2026-10-05, a second one with the pool's work by task function: calls, tasks, task time, and the time on 95 workers -- at that size the sum of each call's longest task, i.e. the critical path that more workers do not shorten):
 - wall time;
 - the driver's own MUMPS factorisations and solves (`bfs/mumps_lu.STATS`);
 - the pool's task time, with what it would take on 23 and on 95 workers (`fullpar.CALLS` / `estimate(W)`: per call, `max(work / W, longest task)`).
