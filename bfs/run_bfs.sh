@@ -29,9 +29,16 @@
 # follower, the fine sweeps) are shared by the same ranks while they would
 # otherwise wait, and so are the near-line eigenpairs' tracking iterations
 # (reduced._MPIRowPool; serial when there is no MPI pool).
-# --sqp-pen-rel 0.1: the SQP's merit penalty and elastic slack costs scale with
-# gamma (100 at gamma = 10, the GL value; 7500 at gamma = 750): at the absolute
-# 100 the SQP traded the compensator's stability margin for sigma (BFS.md 8).
+# --sqp-pen adaptive: the SQP's merit penalty and elastic slack costs are an
+# exact penalty -- steered up while a step gives up a linearised stability
+# constraint, and kept above the stability multipliers; the fixed 100 of GL let
+# the SQP trade the compensator's margin for sigma ~ 750 (BFS.md 5, 8).
+# --sqp-row-res-tol 1e-5 (GL nominal: 1e-3): the reduced closed-loop pencil of
+# this strongly non-normal flow has SPURIOUS Ritz values right of the line
+# (+0.03 to +0.11 at the central 2x2 result, certified alpha -0.0723) with full
+# residuals 4e-4 to 2e-3, which the 1e-3 filter let through as stability rows;
+# the true near-line eigenvalues, whose eigenvectors the basis holds, have
+# 1e-10 to 1e-15 (BFS.md 8).
 # --oracle-union new: the union Galerkin step projects W's new columns only
 # (same span, the basis equal to rounding; STAGE6 6.30) -- the serial part of
 # the enrichment.
@@ -52,7 +59,7 @@ exec ${LAUNCH} ${PY:-python} -u run_case_epi.py --plant bfs --ops "${OPS:-bfs/da
     --outer "${OUTER:-40}" --deadline "${DEADLINE:-0}" --wall "${WALL:-54000}" "${STAB[@]}" \
     --inner-budget iters --inner-maxit 10 --inner-maxit-adapt --select-cons on --ctrl-imcap off \
     --cont-anchor defer --sigma2 on --oracle reduced --oracle-inputs on --ctrl-line eps --cert-sweep 0 \
-    --gate-prefix 1 --post 1 --row-workers mpi --oracle-union new --sqp-pen-rel 0.1 --cert-disk strict --cert-near-k 4 --cert-climb slope --wind-ctrl exact --cert-rtol 1e-6 --alpha-argmax on \
+    --gate-prefix 1 --post 1 --row-workers mpi --oracle-union new --sqp-pen adaptive --cert-disk strict --cert-near-k 4 --cert-climb slope --wind-ctrl exact --cert-rtol 1e-6 --alpha-argmax on \
     --enroll-rel 0.05 --peak-follow on --row-screen 0.05 --converge --inner sqp --sqp-carry --sqp-trust 0.01 \
-    --sqp-ctrl block --sqp-row-res-tol 1e-3 --sqp-refine 1e-4 --sqp-clblock on --sigma2-active-gap 0.15 \
+    --sqp-ctrl block --sqp-row-res-tol 1e-5 --sqp-refine 1e-4 --sqp-clblock on --sigma2-active-gap 0.15 \
     --follow-scan 0 --stop-progress 3:0.0015 --wind-accept off --dense_check 0 --outdir "$out" "${MIMOF[@]}" "$@"

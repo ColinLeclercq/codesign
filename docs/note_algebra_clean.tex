@@ -1161,6 +1161,18 @@ $\le\sigma_1$ at every frequency, since restricting the input can only lower the
 Gradients come from the master formula \eqref{eq:master} with the solved vectors replaced
 by their subspace representatives $V\tilde v$, $W\tilde u$ --- no full solve.
 
+\revQ{\emph{No $M^{1/2}$ is ever formed} (added October 5, 2026).  $M^{1/2}$ above is the
+notation of the full-field channel ($B=C\hp=M^{1/2}$ on GL); on the backward-facing step the
+channel is the weak-form one of \S\ref{sec:bfs}, $\sigma_1^2=\lambda_{\max}(Q\,T\hp Q\,T)$.
+What the implementation stores per anchor is the closed-loop \emph{state response} $x_j$ and
+\emph{adjoint response} $z_j$ of the leading singular pair (the vectors the Lanczos iteration
+on $Q\,T\hp Q\,T$ produces, $x_j=T\,Q\,v_j$ up to scaling, $z_j$ its adjoint counterpart), plus
+the Woodbury columns $R\,b$, $R\hp c$ and the images of the port bases.  The reduced singular
+values are those of $G_V^{1/2}\tilde T\,G_W^{1/2}$ with $G_V=V\hp QV$, $G_W=W\hp QW$: the square
+roots are of these $\tilde n\times\tilde n$ Gram matrices of the basis (a dense
+$\tilde n\times\tilde n$ \code{sqrtm}), never of $Q$ or $M$, and no mass matrix is inverted
+or factored.}
+
 \subsection{What was measured on GL}
 \label{sec:proj-numbers}
 All tests dense, GL with $n=799$ (or $n=399$ where noted), performance channel

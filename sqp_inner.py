@@ -42,6 +42,8 @@ PAIR_BALL = True        # on S: 2-norm trust region shrunk to the accepted step 
                         # evaluations at the stalled ne=200 point; box, no shrink: 7.8236 in 113)
 PAIR_EXIT_TOL = 1e-2    # release S at an S-stationary point when the pair is inside and |mu_b| > this (duals of the rows sum to 1;
                         # 6.7e-4 released at ne=200 and 200 evaluations in the pole regime gained nothing)
+PEN_STEER = 6           # adaptive penalty: at most this many x10 steering increases per QP
+PEN_SLACK_TOL = 1e-8    # an elastic slack above this gives up a linearised stability constraint (the compensator line's own tolerance)
 DEBUG_LS = False        # print every line-search trial's merit components (diagnostics)
 BATCH_ROWS = True       # batched reduced-model rows (reduced.gain_batch, 2026-09-25)
 FOLLOW_GTOL = 1e-7      # |dsigma/dw| <= gtol sigma at a followed top: the value error is g1^2/(2|g2|) ~ 1e-15, the
@@ -729,7 +731,7 @@ def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, di
     rows, box, and -- when ev['lmi'] is set -- the linearised compensator
     Lyapunov LMI with an elastic slack s.  Variables x = [d (NZ), dt, q (r^2
     Hermitian coordinates of dP), s].  pen scales the elastic slacks' costs
-    with the objective (solve_epigraph_sqp's pen_scale).  Returns (dict, status)."""
+    with the merit's penalty: pen = nu / 100 (solve_epigraph_sqp).  Returns (dict, status)."""
     NZ = len(ev['z'])
     lmi = ev.get('lmi'); use_lmi = lmi is not None
     nq = lmi['r'] ** 2 if use_lmi else 0
@@ -756,13 +758,16 @@ def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, di
         a = np.zeros(n); a[:NZ] = ev['Gs'][i]; a[NZ] = -1.0
         lin_A.append(a); lin_b.append(t - ev['s'][i])
     kel = 0
+    stab_rows = []                                        # rows whose duals are the stability multipliers (adaptive penalty)
     for al_j, g_j in ev['al_rows']:                       # one row per near-line eigenvalue
         # the ADMISSIBILITY line (alpha + eps <= -mg), not the constraint line:
         # rows at +0 left every iterate exactly on the line and inadmissible
+        stab_rows.append(len(lin_A))
         a = np.zeros(n); a[:NZ] = g_j; a[iel + kel] = -1.0; lin_A.append(a); lin_b.append(-(al_j + eps + mg_row))
         a = np.zeros(n); a[iel + kel] = -1.0; lin_A.append(a); lin_b.append(0.0)      # slack >= 0
         kel += 1
     for c_f, g_f in ev.get('field_rows', []):             # field shape rows c + g.d <= 0 (elastic)
+        stab_rows.append(len(lin_A))
         a = np.zeros(n); a[:NZ] = g_f; a[iel + kel] = -1.0; lin_A.append(a); lin_b.append(-c_f)
         a = np.zeros(n); a[iel + kel] = -1.0; lin_A.append(a); lin_b.append(0.0)
         kel += 1
@@ -774,6 +779,7 @@ def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, di
         # sits between the two and a stricter row is infeasible at the start
         lim_c = max(-eps, ctrl_max)
         for al_k, g_k in ev['ctrl_rows']:
+            stab_rows.append(len(lin_A))
             a = np.zeros(n); a[:NZ] = g_k; a[iel + kel] = -1.0; lin_A.append(a)
             lin_b.append(-(al_k - lim_c))
             a = np.zeros(n); a[iel + kel] = -1.0; lin_A.append(a); lin_b.append(0.0)
@@ -919,6 +925,12 @@ def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, di
     n_soc = 4 * len(blk_idx)
     out = dict(d=x[:NZ], dt=float(x[NZ]), lin=zdual[:n_lin], soc=zdual[n_lin:n_lin + n_soc],
                blk=blk_idx, n_lin=n_lin)
+    # for the adaptive penalty (solve_epigraph_sqp, pen_adapt): the largest
+    # elastic slack the step uses (the linearised stability constraints it
+    # gives up), and the largest stability multiplier
+    _sl = list(x[iel:iel + n_el]) + [x[ih + kh] for kh in range(len(herm_list))] + ([x[is_]] if use_lmi else [])
+    out['slack_max'] = float(max(_sl)) if _sl else 0.0
+    out['stab_dual'] = float(max((abs(zdual[i_]) for i_ in stab_rows), default=0.0))
     if use_h:
         hd = zdual[len(zdual) - n_pair - n_h: len(zdual) - n_pair]; off = 0; duals = []
         for nh_ in n_h_list:
@@ -943,7 +955,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                        refine_tol=None, refine_grid=None, refine_max=3,
                        alpha_ref=None, alpha_ref_tol=1e-3, stat_rel=1e-4, pred_rel=1e-7, ctrl_block=False,
                        follow=None, follow_radius=0.1, row_screen=0.0, validate_full=True,
-                       cl_block=False, max_disp=None, pen_scale=1.0):
+                       cl_block=False, max_disp=None, pen_adapt=False):
     if clarabel is None:
         raise RuntimeError("clarabel is not installed (pip install clarabel)")
     W = np.asarray(sorted(Omega), float)
@@ -978,6 +990,17 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         # every step cut to alpha ~ 1e-4)
         try:
             _pd0 = ev_fn.pair_data(z_)
+            _l2 = np.asarray(_pd0['lam'], complex)
+            if (flags.get('real_ctrl') and abs(_l2[0] - _l2[1]) > PAIR_ENTER_SEP
+                    and abs(_l2[0] - np.conj(_l2[1])) <= 1e-8 * max(1.0, abs(_l2[0]))):
+                # a REAL compensator's complex-conjugate pair on the line, far
+                # apart, is one smooth constraint (its two real parts are equal by
+                # symmetry), not a double pole: never the face S (2026-10-05, BFS:
+                # entering it with the pair 3.6 apart projected z by 0.49 and the
+                # iterate went unstable).  A CLOSE conjugate pair is a double real
+                # pole split by rounding (a defective pole's eigenvalues come out
+                # as -0.05 +- i 1e-8 and worse): that one is the face S's case.
+                return None
             if (-PAIR_ENTER_U <= _pd0['exc'] <= 1e-8 and
                     (_pd0['sep'] <= PAIR_ENTER_SEP or _pd0['low'] >= -PAIR_ON_LINE)):
                 _zp, _res = ev_fn.retract(z_)
@@ -1001,20 +1024,93 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
     t0_start = float(e['smax'])                       # the start's value on the SQP's own model
     H = np.eye(NZ) if H0 is None else np.asarray(H0, float).copy()
     Delta = trust0 if trust0 else 1e-3 * max(float(np.linalg.norm(z)), 1.0)   # row gradients ~1e3-1e4: the linear model holds for steps ~1e-4 |z|
-    # merit penalty, and the QP's elastic slack costs: 100 (1e3 for the
-    # Hermite and LMI slacks) times pen_scale.  The exact-penalty threshold is
-    # the stability rows' multipliers, which scale with the objective: 100 at
-    # GL (sigma ~ 10, pen_scale 1); the backward-facing step (sigma ~ 1e3)
-    # passes pen_scale = sigma / 10 (BFS.md 5, 2026-10-04: at nu = 100 a step
-    # bought 12 of sigma with a compensator pole 0.025 across its line, and the
-    # solve was trapped there for the rest of the run)
-    nu = 100.0 * pen_scale
+    # merit penalty nu, and the QP's elastic slack costs (nu for the rows, 10 nu
+    # for the Hermite and LMI slacks).  Fixed at 100 (GL), or ADAPTIVE
+    # (pen_adapt, BFS.md 5, 2026-10-05): an exact penalty needs nu above the
+    # stability rows' multipliers, which scale with sigma -- at the fixed 100 a
+    # step bought 12 of sigma ~ 750 with a compensator pole 0.025 across its
+    # line, and the solve was trapped on that inadmissible iterate.  The rules
+    # (Byrd, Nocedal & Waltz 2008, steering; Powell's update):
+    #   steering: while the QP step gives up a linearised stability constraint
+    #     (an elastic slack > 0) that a larger nu keeps, nu x 10 and solve again;
+    #   update:   when it keeps them all, nu >= 1.5 x the largest stability
+    #     multiplier; nu never decreases within a solve.
+    nu = 100.0
     best = {'g': np.inf, 'z': None, 'al': None, 't': np.inf, 'clr': None}
     lim = max(-eps, ctrl_max)
     hist = []; code = 4; t_start = time.time(); added = []; exit_info = None
     sub_status_log = []                                  # subproblem failures (status strings)
     if refine_grid is None:
         refine_grid = np.linspace(float(W[0]), float(W[-1]), 1201)
+
+    def _sub(e_, t_, H_, D_, disp_):
+        """The QP at (e_, t_) with the current nu; with pen_adapt, nu steered and
+        updated (see above)."""
+        nonlocal nu
+        sub_, st_ = subproblem(e_, t_, H_, D_, eps, ctrl_max, kink_block, mg_row=mg, disp=disp_, pen=nu / 100.0)
+        if not pen_adapt or sub_ is None:
+            return sub_, st_
+        for _ in range(PEN_STEER):
+            if sub_['slack_max'] <= PEN_SLACK_TOL:
+                break
+            s2, st2 = subproblem(e_, t_, H_, D_, eps, ctrl_max, kink_block, mg_row=mg, disp=disp_, pen=10.0 * nu / 100.0)
+            if s2 is None:
+                break
+            if s2['slack_max'] > 0.9 * sub_['slack_max']:
+                break                                   # the linearisation is infeasible here: more weight does not help
+            if verbose:
+                print(f"      penalty steered: nu {nu:.3g} -> {10 * nu:.3g} (slack {sub_['slack_max']:.2e} -> "
+                      f"{s2['slack_max']:.2e})", flush=True)
+            nu *= 10.0; sub_, st_ = s2, st2
+        if sub_['slack_max'] <= PEN_SLACK_TOL:
+            nu = max(nu, 1.5 * sub_['stab_dual'])
+        return sub_, st_
+
+    _Ec = [None]; n_soc = [0]
+    def _ctrl_restore(zn_, en_):
+        """SECOND-ORDER CORRECTION on the compensator (pen_adapt; 2026-10-05): a
+        step along the linearised boundary Re lambda(A_c) = lim leaves it at
+        second order (the line is curved in z), and with an exact penalty the
+        merit then refuses ever smaller steps (Maratos).  The poles at or over
+        the line are put back on it by the least-norm Newton correction in the
+        compensator's coordinates -- A_c is affine in z, the 10 x 10 eigenproblem
+        is exact and cheap.  Skipped (None) where two of them nearly coincide
+        (their gradients blow up: the double-pole face S handles that case)."""
+        Am = ev_fn.ctl.A_of(*pk.unpack(zn_)[0])
+        if _Ec[0] is None:
+            A00 = ev_fn.ctl.A_of(*pk.unpack(np.zeros(NZ))[0])
+            _Ec[0] = [ev_fn.ctl.A_of(*pk.unpack(np.eye(NZ)[j])[0]) - A00 for j in range(NZ)]
+        from scipy.linalg import eig as _deig
+        lam_, VL_, VR_ = _deig(Am, left=True, right=True)
+        act = [i for i in range(len(lam_)) if lam_[i].real > lim - 1e-6 and lam_[i].imag >= -1e-12]
+        # a nearly double pole (two within 1e-3; a double REAL pole is computed as a
+        # close conjugate pair, so its partner may have Im < 0) is the face S's:
+        # on the face it is left to the retraction, off it nothing is corrected
+        close = [i for i in act if any(abs(lam_[i] - lam_[j]) < 1e-3 for j in range(len(lam_)) if j != i)]
+        if close and not ev_fn.pair_mode:
+            return None
+        act = [i for i in act if i not in close]
+        if not act or len(act) > 4:
+            return None
+        G = np.zeros((len(act), NZ)); r_ = np.zeros(len(act))
+        for k, i in enumerate(act):
+            u, v = VL_[:, i], VR_[:, i]; den = np.vdot(u, v)
+            if abs(den) < 1e-8:
+                return None
+            G[k] = [np.real(np.vdot(u, Ej @ v) / den) if np.any(Ej) else 0.0 for Ej in _Ec[0]]
+            r_[k] = (lim - 1e-7) - lam_[i].real
+        try:
+            dz = G.T @ np.linalg.solve(G @ G.T, r_)
+        except np.linalg.LinAlgError:
+            return None
+        if not np.all(np.isfinite(dz)) or np.linalg.norm(dz) > 0.5 * max(np.linalg.norm(zn_ - z), 1e-12):
+            return None                                  # not a small correction: leave the trial as it is
+        zc_ = zn_ + dz
+        if ev_fn.pair_mode:
+            zc_, _ = ev_fn.retract(zc_)                  # the pair back on its face
+        ec_ = ev_fn(zc_)
+        key_ = 'al_ctrl_rest' if ev_fn.pair_mode else 'al_ctrl'
+        return (zc_, ec_) if ec_[key_] <= lim + 1e-8 else None
 
     def viol(e_, t_):
         v = max(e_['smax'] - t_, 0.0) + max(e_['al'] + eps + mg, 0.0)
@@ -1122,14 +1218,14 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         best.update(g=e['smax'], z=z.copy(), al=e['al'], t=t, clr=e['clr'], w=_argw(e))
     for it in range(int(maxit)):
         _disp = (z - z_start, float(max_disp)) if max_disp is not None else None
-        sub, status = subproblem(e, t, H, Delta, eps, ctrl_max, kink_block, mg_row=mg, disp=_disp, pen=pen_scale)
+        sub, status = _sub(e, t, H, Delta, _disp)
         if sub is None:
             # 2026-09-25: at the ne=100 K+B+C fixed point the subproblem failed
             # (code 12) three rounds running, while the same subproblem with a
             # fresh Hessian solves: reset the quasi-Newton matrix and retry once
             sub_status_log.append(str(status))
             H = np.eye(NZ) * max(float(np.mean(np.abs(np.diag(H)))), 1e-8)
-            sub, status = subproblem(e, t, H, Delta, eps, ctrl_max, kink_block, mg_row=mg, disp=_disp, pen=pen_scale)
+            sub, status = _sub(e, t, H, Delta, _disp)
             if sub is None:
                 sub_status_log.append(str(status) + ' (after reset)')
                 code = 12; hist.append(dict(it=it, status=status)); break
@@ -1155,6 +1251,12 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             if ev_fn.pair_mode:
                 zn, _rres = ev_fn.retract(zn)             # back onto the manifold (second order in the step)
             en = ev_fn(zn)
+            _kc = 'al_ctrl_rest' if ev_fn.pair_mode else 'al_ctrl'
+            if (pen_adapt and np.isfinite(en.get(_kc, -np.inf)) and en[_kc] > lim + 1e-8
+                    and e.get(_kc, -np.inf) <= lim + 1e-8):
+                _rc = _ctrl_restore(zn, en)
+                if _rc is not None:
+                    zn, en = _rc; n_soc[0] += 1
             if DEBUG_LS:
                 # the row attaining the trial's max: actual value vs its linear model
                 _i = int(np.argmax(en['s']))
@@ -1184,8 +1286,9 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                          Delta=Delta, accepted=accepted, nblk=len(e['blocks'])))
         if verbose:
             print(f"    sqp {it:3d}: t={t:.6f} smax={e['smax']:.6f} al={e['al']:+.4f} alc={e['al_ctrl']:+.5f} "
+                  + (f"rest={e['al_ctrl_rest']:+.7f} exc={e['pair']['exc']:+.1e} " if e.get('pair') is not None else '') +
                   f"{'adm' if admissible(e) else 'NOT adm'} stat={stat:.2e} step={np.linalg.norm(alpha*d):.2e} a={alpha:g} "
-                  f"D={Delta:.2e} {'ok' if accepted else 'REJ'}", flush=True)
+                  f"D={Delta:.2e} nu={nu:.3g} {'ok' if accepted else 'REJ'}", flush=True)
         if not accepted:
             Delta *= 0.5
             if Delta < 1e-10:
@@ -1193,7 +1296,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             continue
         # damped BFGS on the Lagrangian
         subn, _ = subproblem(en, tn, H, Delta, eps, ctrl_max, kink_block,
-                             disp=((zn - z_start, float(max_disp)) if max_disp is not None else None), pen=pen_scale)
+                             disp=((zn - z_start, float(max_disp)) if max_disp is not None else None), pen=nu / 100.0)
         gLn = grad_L(en, subn) if subn is not None else gL
         sv = zn - z; yv = gLn - gL
         sHs = float(sv @ H @ sv); sy = float(sv @ yv)
@@ -1328,7 +1431,10 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         best.update(g=np.inf, z=None, al=None, t=np.inf, clr=None)
     def _tops_at(zb):
         ev_fn.w_star = {}; ev_fn(zb); return dict(ev_fn.w_star)
+    if verbose and pen_adapt:
+        print(f"    sqp: penalty nu = {nu:.3g} at the end; {n_soc[0]} compensator correction(s)", flush=True)
     stats = dict(iters=len(hist), fn_evals=ev_fn.ncalls, termination_code=code, exit_info=exit_info, certified_checks=code_cert,
+                 nu_final=float(nu), ctrl_corrections=int(n_soc[0]),
                  stat_value=(hist[-1].get('stat') if hist else None),
                  wall=time.time() - t_start, inner='sqp', kink_block=kink_block,
                  ctrl_lmi=bool(ctrl_lmi), alpha_rows=ev_fn.n_alpha_rows, alpha_fallback=ev_fn.n_fallback,
