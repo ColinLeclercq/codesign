@@ -23,6 +23,11 @@
 #   M=2 P=2 STRUCT=decentral sbatch --array=0-1 bfs/slurm/codesign.slurm
 #                     (MIMO, BFS.md 5: two actuators, two sensors, order 10 in
 #                      all; directories <KIND>_m2p2_<STRUCT>_o10_XXX)
+#   ORACLE=lattice LATTICE_CAP=16 ... sbatch ...
+#        (the inner loop on the FULL model, lattice.py, BFS.md 5: every rank keeps
+#         up to LATTICE_CAP plant factors -- 133 MB each on the test plant, ~1.05 GB
+#         on the full mesh -- so give the job ranks x cap x that in memory; the
+#         directories get _lat, e.g. zero_m2p2_central_o10_lat_s0_r300)
 #
 # SISO or MIMO co-design on the backward-facing step (BFS.md 5): one start per
 # array task (bfs/hifoo_init.py, SEED, start = the array index: HIFOO's
@@ -64,6 +69,8 @@ export R=${R:-$([ "$MIMO" = 1 ] && echo 10 || echo 5)}   # controller order (MIM
 SUF=""
 if [ "$MIMO" = 1 ]; then SUF="_m${M}p${P}_${STRUCT}"; fi
 if [ "$R" != 5 ]; then SUF="${SUF}_o$R"; fi
+if [ "${ORACLE:-reduced}" = lattice ]; then SUF="${SUF}_lat"; fi
+export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-16}
 TAG=K_B_C_s0_bfs                                       # the driver's record name
 if [ "$MIMO" = 1 ]; then TAG=K_B_C_s0_bfs_mimo${M}x${P}_${STRUCT}; fi
 NAME=$(printf "%s_%03d" "$KIND" "$IDX")

@@ -652,7 +652,13 @@ class LatticeOracle:
         uncovered = float(sum(b_ - a_ for a_, b_ in gaps))
         clear = witness is None and uncovered <= 0.0
         if witness is None:
-            self.line_prev[key] = self._cover(done, wlo, whi)
+            # next call's first wave: a cover of the line, plus every centre whose
+            # nearest eigenvalue lies within ROW_REACH of it -- an eigenvalue near
+            # the line need not be the nearest to any centre of a cover (the
+            # plant's -0.1148 was not, at the zero start), and its row must not
+            # disappear from one evaluation to the next
+            keep = {th for th, c in done.items() if any(l_.real >= -eps - ROW_REACH for l_ in c['lams'])}
+            self.line_prev[key] = sorted(set(self._cover(done, wlo, whi)) | keep)
         seen, rows = [], []
         for th in sorted(done):
             c = done[th]

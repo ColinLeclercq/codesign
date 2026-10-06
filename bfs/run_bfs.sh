@@ -16,6 +16,11 @@
 #   CERT_NSEG line-certificate segments over the MPI pool (default 16; serial runs: 1)
 #   CERT_SPLIT first generation of the gamma certificate's disk sweep (default 23 = the workers)
 #   STABILISE 1 = HIFOO's abscissa-descent phase when the start is infeasible (default 1)
+#   ORACLE    the inner loop's model: reduced (default; the projected model) or lattice (2026-10-06:
+#             the FULL model on the MPI ranks, its factors cached on a lattice of frequencies and
+#             line shifts, lattice.py, BFS.md 5)
+#   LATTICE_CAP  with ORACLE=lattice: plant factorisations kept per rank (default 16; 133 MB each on
+#             the test plant, ~1.05 GB on the full mesh -- size the ranks per node accordingly)
 #
 # The flags are the nominal SISO set of the GL production (STAGE6, the K+B+C
 # runs: SQP inner solve, reduced oracle, slope-climb certificate, progress
@@ -50,6 +55,12 @@ mkdir -p "$out"
 cd "$(dirname "$0")/.."
 STAB=()
 [ "${STABILISE:-1}" = "1" ] && STAB=(--stabilise)
+ORC=(--oracle reduced --oracle-inputs on --row-workers mpi --oracle-union new)
+if [ "${ORACLE:-reduced}" = "lattice" ]; then
+    ORC=(--oracle lattice --lattice-cap "${LATTICE_CAP:-16}")
+elif [ "${ORACLE:-reduced}" != "reduced" ]; then
+    echo "run_bfs.sh: ORACLE must be reduced or lattice (got ${ORACLE})"; exit 2
+fi
 MIMOF=()
 if [ "${M:-1}" != 1 ] || [ "${P:-1}" != 1 ]; then
     MIMOF=(--n-act "$M" --n-sens "$P" --ctrl-struct "${STRUCT:-central}" --mimo-start "$init")
@@ -58,8 +69,8 @@ exec ${LAUNCH} ${PY:-python} -u run_case_epi.py --plant bfs --ops "${OPS:-bfs/da
     --init "$init" --cold --case K+B+C --r "${R:-5}" --eps 0.05 --start 0 --nproc 1 --cert_nseg "${CERT_NSEG:-16}" --cert-split "${CERT_SPLIT:-23}" --wlo 0 --whi 10 \
     --outer "${OUTER:-40}" --deadline "${DEADLINE:-0}" --wall "${WALL:-54000}" "${STAB[@]}" \
     --inner-budget iters --inner-maxit 10 --inner-maxit-adapt --select-cons on --ctrl-imcap off \
-    --cont-anchor defer --sigma2 on --oracle reduced --oracle-inputs on --ctrl-line eps --cert-sweep 0 \
-    --gate-prefix 1 --post 1 --row-workers mpi --oracle-union new --sqp-pen adaptive --cert-disk strict --cert-near-k 4 --cert-climb slope --wind-ctrl exact --cert-rtol 1e-6 --alpha-argmax on \
+    --cont-anchor defer --sigma2 on "${ORC[@]}" --ctrl-line eps --cert-sweep 0 \
+    --gate-prefix 1 --post 1 --sqp-pen adaptive --cert-disk strict --cert-near-k 4 --cert-climb slope --wind-ctrl exact --cert-rtol 1e-6 --alpha-argmax on \
     --enroll-rel 0.05 --peak-follow on --row-screen 0.05 --converge --inner sqp --sqp-carry --sqp-trust 0.01 \
     --sqp-ctrl block --sqp-row-res-tol 1e-5 --sqp-refine 1e-4 --sqp-clblock on --sigma2-active-gap 0.15 \
     --follow-scan 0 --stop-progress 3:0.0015 --wind-accept off --dense_check 0 --outdir "$out" "${MIMOF[@]}" "$@"

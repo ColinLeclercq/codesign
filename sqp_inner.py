@@ -1120,7 +1120,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             nu = max(nu, 1.5 * sub_['stab_dual'])
         return sub_, st_
 
-    _Ec = [None]; n_soc = [0]
+    _Ec = [None]; n_soc = [0]; n_ctrl_cut = [0]
     def _ctrl_restore(zn_, en_):
         """SECOND-ORDER CORRECTION on the compensator (pen_adapt; 2026-10-05): a
         step along the linearised boundary Re lambda(A_c) = lim leaves it at
@@ -1165,6 +1165,16 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         ec_ = ev_fn(zc_)
         key_ = 'al_ctrl_rest' if ev_fn.pair_mode else 'al_ctrl'
         return (zc_, ec_) if ec_[key_] <= lim + 1e-8 else None
+
+    def _alc_cheap(zn_):
+        """The compensator's abscissa at zn_ as the evaluation reports it
+        (al_ctrl; on the pair's face al_ctrl_rest, the pair excluded): an r x r
+        eigenproblem, no plant work."""
+        lam_ = np.linalg.eigvals(ev_fn.ctl.A_of(*pk.unpack(zn_)[0]))
+        if ev_fn.pair_mode:
+            pl_ = ev_fn.pair_data(zn_)['lam']
+            lam_ = np.array([l_ for l_ in lam_ if not any(abs(l_.real - q.real) < 1e-6 for q in pl_)])
+        return float(np.max(lam_.real)) if lam_.size else -np.inf
 
     def viol(e_, t_):
         v = max(e_['smax'] - t_, 0.0) + max(e_['al'] + eps + mg, 0.0)
@@ -1267,6 +1277,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         if admissible(e_):
             cands.append((e_['smax'], e_['z'].copy(), e_['al'], t_))
             cands.sort(key=lambda c: c[0]); del cands[6:]
+    path = [z.copy()]                                     # the accepted iterates in order (the gate's path, --gate-path)
     _note(e, t)
     if admissible(e) and e['smax'] < best['g']:
         best.update(g=e['smax'], z=z.copy(), al=e['al'], t=t, clr=e['clr'], w=_argw(e))
@@ -1304,13 +1315,25 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             zn = z + alpha * d; tn = t + alpha * dt
             if ev_fn.pair_mode:
                 zn, _rres = ev_fn.retract(zn)             # back onto the manifold (second order in the step)
-            en = ev_fn(zn)
             _kc = 'al_ctrl_rest' if ev_fn.pair_mode else 'al_ctrl'
-            if (pen_adapt and np.isfinite(en.get(_kc, -np.inf)) and en[_kc] > lim + 1e-8
-                    and e.get(_kc, -np.inf) <= lim + 1e-8):
-                _rc = _ctrl_restore(zn, en)
-                if _rc is not None:
-                    zn, en = _rc; n_soc[0] += 1
+            en = None
+            if (pen_adapt and flags.get('K') and e.get(_kc, -np.inf) <= lim + 1e-8
+                    and _alc_cheap(zn) > lim + 1e-8):
+                # the trial's compensator crossed its line (exact, r x r: checked
+                # before the plant is evaluated): back onto the line, or a shorter
+                # step -- the constraint is exact and costs nothing, so an
+                # admissible iterate never steps outside it (2026-10-06, test plant,
+                # order 10, round 1: a step of 2.2 in z took a pole to +0.17 for 87
+                # of sigma against a penalty of 22, and the solve sat on
+                # inadmissible iterates from there)
+                _rc = _ctrl_restore(zn, None)
+                if _rc is None:
+                    n_ctrl_cut[0] += 1
+                    alpha *= 0.5
+                    continue
+                zn, en = _rc; n_soc[0] += 1
+            if en is None:
+                en = ev_fn(zn)
             if DEBUG_LS:
                 # the row attaining the trial's max: actual value vs its linear model
                 _i = int(np.argmax(en['s']))
@@ -1359,6 +1382,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             r_ = theta * yv + (1 - theta) * (H @ sv)
             H = H - np.outer(H @ sv, H @ sv) / sHs + np.outer(r_, r_) / max(float(sv @ r_), 1e-16)
         z, t, e = zn, tn, en
+        path.append(z.copy())
         if _pair_ok and not ev_fn.pair_mode and not any(p_.get('event') == 'exit' for p_ in pair_log):
             # entry DURING the solve too (2026-09-26): the ne=100 pair closed from
             # 0.078 to 0.047 over rounds 12-15 and was let onto its face only at
@@ -1366,6 +1390,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             _zp = _try_enter(z, f'it {it}')
             if _zp is not None:
                 ev_fn.pair_mode = True; z = _zp
+                path.append(z.copy())
                 e = ev_fn(z); t = max(t, e['smax']); _alpha_prev = 1.0
         if PAIR_BALL and ev_fn.pair_mode and alpha < 1.0:
             # the line search found where the model holds: a radius of twice the
@@ -1390,7 +1415,8 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                 added.extend(w for w, _ in mp)
                 if verbose:
                     print(f"    sqp refine: +{len(mp)} freq {[round(w, 3) for w, _ in mp]} "
-                          f"(reduced peaks {[round(v, 3) for _, v in mp]} > t {t:.4f})", flush=True)
+                          f"({'full-model sweep' if lattice is not None else 'reduced'} peaks {[round(v, 3) for _, v in mp]}"
+                          f" > t; t now {t:.4f})", flush=True)
         _note(e, t)
         if admissible(e) and e['smax'] < best['g']:
             best.update(g=e['smax'], z=z.copy(), al=e['al'], t=t, clr=e['clr'], w=_argw(e))
@@ -1486,9 +1512,10 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
     def _tops_at(zb):
         ev_fn.w_star = {}; ev_fn(zb); return dict(ev_fn.w_star)
     if verbose and pen_adapt:
-        print(f"    sqp: penalty nu = {nu:.3g} at the end; {n_soc[0]} compensator correction(s)", flush=True)
+        print(f"    sqp: penalty nu = {nu:.3g} at the end; {n_soc[0]} compensator correction(s), "
+              f"{n_ctrl_cut[0]} trial(s) cut back inside the compensator's line", flush=True)
     stats = dict(iters=len(hist), fn_evals=ev_fn.ncalls, termination_code=code, exit_info=exit_info, certified_checks=code_cert,
-                 nu_final=float(nu), ctrl_corrections=int(n_soc[0]),
+                 nu_final=float(nu), ctrl_corrections=int(n_soc[0]), ctrl_cuts=int(n_ctrl_cut[0]),
                  stat_value=(hist[-1].get('stat') if hist else None),
                  wall=time.time() - t_start, inner='sqp', kink_block=kink_block,
                  ctrl_lmi=bool(ctrl_lmi), alpha_rows=ev_fn.n_alpha_rows, alpha_fallback=ev_fn.n_fallback,
@@ -1497,7 +1524,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                  refine_log=list(ev_fn.refine_log[-40:]), clblock_fail=int(ev_fn.n_clblock_fail),
                  sub_failures=list(sub_status_log),
                  w_star=(_tops_at(best['z']) if (ev_fn.follow and best['z'] is not None) else {}),
-                 n_blocks=len(e['blocks']), dedup=int(sum(ev_fn.n_dedup)), history=hist,
+                 n_blocks=len(e['blocks']), dedup=int(sum(ev_fn.n_dedup)), history=hist, path=path,
                  lattice=(dict(evaluations=len(ev_fn.lat_info), gain_evals=int(sum(i_['nev'] for i_ in ev_fn.lat_info)),
                                deficit_max=float(max((i_['deficit'] for i_ in ev_fn.lat_info), default=0.0)),
                                line_shifts=int(sum(l_['nshift'] for l_ in ev_fn.lat_line)),

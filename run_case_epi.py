@@ -1740,7 +1740,7 @@ def main():
                          '2^-N of the band (0: no in-solve sweep)')
     ap.add_argument('--lattice-reach', dest='lattice_reach', type=float, default=0.25,
                     help='--oracle lattice: stability rows for the closed-loop eigenvalues within this of the line')
-    ap.add_argument('--lattice-k', dest='lattice_k', type=int, default=3,
+    ap.add_argument('--lattice-k', dest='lattice_k', type=int, default=1,
                     help='--oracle lattice: nearest eigenvalues computed at each disk centre of the line')
     ap.add_argument('--lattice-driver', dest='lattice_driver', choices=['on', 'off'], default='on',
                     help='--oracle lattice: the driver (rank 0) computes a share of every batch')
@@ -2233,6 +2233,10 @@ def main():
                          'role the warm trust radius was quietly playing is '
                          'now carried explicitly by the continuation gate '
                          'and the tau governor.')
+    ap.add_argument('--gate-path', dest='gate_path', choices=['auto', 'on', 'off'], default='auto',
+                    help='continuation gate along the SQP\'s accepted iterates (each certified on the full model with '
+                         '--oracle lattice) instead of the straight segment from the last accepted design; the straight '
+                         'segment if the path fails.  auto = on with --oracle lattice (BFS.md 5)')
     ap.add_argument('--gate-prefix', dest='gate_prefix', type=int, default=0,
                     help='when the continuation gate refuses a step, try the end of its certified prefix as the '
                          'candidate (line + gamma certificates) instead of losing the round (BFS.md 5)')
@@ -2449,6 +2453,42 @@ def main():
         if lam_ is not None and (lam_.real > -eps_ or abs(lam_.real + eps_) < 1e-9 * max(1.0, abs(lam_))):
             return False, f"eigenvalue at {lam_:.6g} on Re=-{eps_:g}", 0
         return False, f"INCONCLUSIVE: could not prove the line Re=-{eps_:g} clear (lattice)", 0
+
+    def _path_to(path_, z0_, z1_):
+        """The SQP's accepted iterates from z0_ (the last accepted design) to the
+        candidate z1_, consecutive duplicates removed; None if z1_ is not on it."""
+        if not path_:
+            return None
+        P_ = [np.asarray(p_, float) for p_ in path_]
+        j_ = next((i_ for i_ in range(len(P_) - 1, -1, -1) if np.array_equal(P_[i_], np.asarray(z1_, float))), None)
+        if j_ is None:
+            return None
+        pts_ = [np.asarray(z0_, float)]
+        for p_ in P_[:j_ + 1]:
+            if not np.array_equal(p_, pts_[-1]):
+                pts_.append(p_)
+        return pts_
+
+    def _gate_along(pts_, watch_):
+        """continuation_gate on each segment of pts_ in turn.  Returns (ok, watch
+        at the end, queries, splits, certified prefix {z, watch}, failing segment)."""
+        nq_ = ns_ = 0; w_ = list(watch_)
+        for i_ in range(len(pts_) - 1):
+            r_ = {}
+            ok_, w2_, q_, sp_ = continuation_gate(D, pk, pts_[i_], pts_[i_ + 1], w_, a.eps, depth=a.cont_depth,
+                                                  motion_frac=a.cont_motion, motion_floor=a.cont_floor,
+                                                  kwatch=a.cont_k, pool=fullpar.POOL, reach=r_)
+            nq_ += q_; ns_ += sp_
+            if not ok_:
+                if r_.get('z') is not None:
+                    pre_ = r_
+                elif i_ > 0:
+                    pre_ = dict(z=np.array(pts_[i_], float), watch=list(w_))
+                else:
+                    pre_ = {}
+                return False, w2_, nq_, ns_, pre_, i_
+            w_ = list(w2_)
+        return True, w_, nq_, ns_, {}, len(pts_) - 1
     _ctrl_borrowed, _ctrl_default = False, None
     _resume_gamma = None
     if BFS:
@@ -4034,10 +4074,32 @@ def main():
                 n_cont_fallback[0] += int(_nfb)
             else:
                 _reach = {}
-                _okc, watch_cand, _nq, _nsp = continuation_gate(
-                    D, pk, zwatch, zc, watch_cur, a.eps,
-                    depth=a.cont_depth, motion_frac=a.cont_motion,
-                    motion_floor=a.cont_floor, kwatch=a.cont_k, pool=fullpar.POOL, reach=_reach)
+                _okc = None
+                _gpath = (a.gate_path == 'on' or (a.gate_path == 'auto' and _lat is not None)) and a.inner == 'sqp'
+                _pts = _path_to(inner_stats.get('path'), zwatch, zc) if _gpath else None
+                if _pts is not None and len(_pts) > 2:
+                    # THE SQP'S OWN PATH (--gate-path; BFS.md 5, 2026-10-06): its accepted
+                    # iterates in order, segment by segment -- short steps, each end
+                    # certified on the full model by the SQP itself (lattice oracle) --
+                    # where the straight segment from the last accepted design to the
+                    # candidate can leave the feasible set (test plant, order 10: a
+                    # midpoint at alpha -0.0458 refused a round whose every iterate was
+                    # admissible)
+                    _okc, watch_cand, _nq, _nsp, _reach_p, _iseg = _gate_along(_pts, watch_cur)
+                    print(f"    continuation along the SQP's path: {len(_pts) - 1} segments, "
+                          f"{'certified' if _okc else 'refused at segment %d' % (_iseg + 1)} "
+                          f"({_nq} tracked queries, {_nsp} splits)", flush=True)
+                if not _okc:
+                    _okc, watch_cand, _nq2, _nsp2 = continuation_gate(
+                        D, pk, zwatch, zc, watch_cur, a.eps,
+                        depth=a.cont_depth, motion_frac=a.cont_motion,
+                        motion_floor=a.cont_floor, kwatch=a.cont_k, pool=fullpar.POOL, reach=_reach)
+                    if _pts is not None and len(_pts) > 2:
+                        _nq += _nq2; _nsp += _nsp2
+                        if not _okc and _reach_p.get('z') is not None:
+                            _reach = _reach_p           # the path's certified prefix: along improving iterates
+                    else:
+                        _nq, _nsp = _nq2, _nsp2
             _nsp_seen = _nsp
             _ndz_used = float(np.linalg.norm(zc - zwatch))
             if not _okc and a.cont_accept_winding:
