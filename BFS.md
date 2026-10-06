@@ -530,6 +530,12 @@ smoke test, 96 ranks at once on one node):
 - Port-range input bases (the actuator's Gaussian over x in [-1, 8], y in [0.1, 2.3]; the sensor window over [2, 10]): numerical rank 56 / 87 / 117 / 169 at 1e-2 / 1e-3 / 1e-4 / 1e-6 for the actuator (214 positions), 67 / 76 / 77 / 77 for the sensor (81 windows) -- they barely compress (sharp window edges, a 2-D range). Added at every anchor they give 1000-3000 basis vectors. Adding only the jets at a second set of positions (dimension 1186) produced a spurious near-axis reduced pole (sigma 3e7 at w = 3): a Galerkin projection of this non-normal operator does not preserve stability, and grows that risk with the dimension. Not pursued as is.
 - Full-model costs measured for the alternative (test plant, MUMPS, one core): LU 0.97 s and 133 MB, one solve 14 ms (10 right-hand sides 114 ms). The plant factor at iw does not depend on the design (ports and controller enter by Woodbury), so factors on Omega can be cached for a whole run.
 
+*Central 2x2 continued on 96 ranks (job 762583, version 20261006a, 2026-10-06)*
+- 191.11 -> 187.93 -> 184.29 -> (2 refused) -> **173.77** (0.119 of the open-loop peak) in 5 rounds, 2 h 49; winding count 0; actuator 1 now on the wall margin (y = 0.050).
+- Per round: wall 1130 / 1330 / 2470 / 2610 / ~2200 s; pool 70 / 560 / 780 / 910 / ~1100 s (critical path: line-certificate segments `_seg_worker` 2759 s of the run, gamma certificate `_shift_task` 521 s, winding 133 s; sigma samples 18 s); driver MUMPS 50-120 s; **the driver's own Python 1000-1600 s a round, 50-65 %**.
+- Refusals: model at the witness 4 % / 13 % / 21 % low (w = 2.99, 3.26, 2.70: beyond the plateau's edge), and one continuation rejection.
+- Profile of that driver time (sandbox, the same record, cProfile on rank 0, round 0's SQP, reduced dimension 481): the reduced level-set search for missed peaks after each accepted SQP step (`missed_peaks` -> `hinf_dense_levelset`, dense eigenvalues of the 982 x 982 Hamiltonian) 44 s a call, 393 s for 9 calls; the SQP evaluations 16 s each (MIMO: a dense eig of the 491 x 491 reduced pencil every evaluation, 6 s; the compensator correction re-evaluates the whole design, 14 s); the reduced rows 0.73 s per batch. All of it is reduced-model work growing as dim^3 -- and the dimension grows with the plateau.
+
 ## 9. Open items
 
 - **Starts below the open loop:** the zero-controller start works (test plant, cluster: 0.826 x the open-loop peak in 3 rounds, section 8). The certified prefix (section 5) is to be seen on the cluster rerun.
