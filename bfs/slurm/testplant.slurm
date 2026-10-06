@@ -21,7 +21,9 @@
 #         progress stops)
 #   RESUME=1 OUT=testplant_bfs/zero_s0_r5 OUTER=10 sbatch bfs/slurm/testplant.slurm
 #        (10 more rounds for that run: from its checkpoint if it was stopped, from
-#         its record if it finished; without RESUME the directory is started over)
+#         its record if it finished; CONTINUE=1 is the same.  A directory that
+#         holds a run is never deleted: without RESUME/CONTINUE the job refuses
+#         to start; FRESH=1 starts over and keeps the old one as OUT.old-<date>)
 #   KIND=hifoo R=10 OUTER=300 sbatch --array=0-7 --time=15:00:00 bfs/slurm/testplant.slurm
 #   KIND=hifoo M=2 P=2 STRUCT=decentral OUTER=300 sbatch --array=0-7 --time=15:00:00 bfs/slurm/testplant.slurm
 #        (MULTIPLE STARTS: array task i takes entry i of the catalogue of NSTART
@@ -76,12 +78,28 @@ if [ ! -f bfs/data/ops_coarse_range.npz ]; then
     echo "=== the test plant's certified range and poles (bfs/plant_cert.py) ==="
     time $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/plant_cert.py --ops "$OPS"
 fi
+# NEVER delete a run (2026-10-06: CONTINUE=1, codesign.slurm's word, was not
+# read here, and the directory of a 12.5 h run was started over): RESUME=1 or
+# CONTINUE=1 continues it; without them a directory holding a run is refused,
+# and FRESH=1 starts over after renaming the old one (OUT.old-<date>)
 CONT=()
-if [ "${RESUME:-0}" = "1" ] && [ -f "$OUT/run/$TAG.npz" -o -f "$OUT/run/${TAG}_ckpt.npz" ]; then
+HAVE=0
+if [ -f "$OUT/run/$TAG.npz" ] || [ -f "$OUT/run/${TAG}_ckpt.npz" ]; then HAVE=1; fi
+if [ "${RESUME:-0}" = "1" ] || [ "${CONTINUE:-0}" = "1" ]; then
+    if [ "$HAVE" != 1 ]; then
+        echo "*** RESUME/CONTINUE: no record or checkpoint in $OUT/run ($TAG): nothing to continue"; exit 1
+    fi
     echo "=== RESUME: $OUT/run continues (checkpoint if present, else the finished record) ==="
     CONT=(--continue-record 1)
 else
-    rm -rf "$OUT"; mkdir -p "$OUT"
+    if [ -e "$OUT" ]; then
+        if [ "$HAVE" = 1 ] && [ "${FRESH:-0}" != "1" ]; then
+            echo "*** $OUT holds a run: RESUME=1 (or CONTINUE=1) continues it; FRESH=1 starts over (the old directory is kept as $OUT.old-<date>)"; exit 1
+        fi
+        mv "$OUT" "$OUT.old-$(date +%Y%m%d-%H%M%S)"
+        echo "=== the previous $OUT kept as $OUT.old-<date> ==="
+    fi
+    mkdir -p "$OUT"
     python bfs/hifoo_init.py --ops "$OPS" --n "$NSTART" --seed "$SEED" --kind "$KIND" --r "$R" --m "$M" --p "$P" --struct "$STRUCT" --out "$OUT/starts" > "$OUT/starts.json"
 fi
 # the deadline from the job's own end time (any --time): no round starts that
