@@ -101,7 +101,7 @@ class Evaluator:
 
     def __init__(self, D, pk, flags, W, eps, ctrl_max, enroll, kink_block=True, ctrl_lmi=False, mg=0.0,
                  oracle=None, reach=1.0, res_tol=1e-4, ctrl_block=False, follow=None, row_screen=0.0,
-                 cl_block=False):
+                 cl_block=False, lattice=None):
         self.D, self.pk, self.flags, self.W = D, pk, flags, np.asarray(W, float)
         self.eps, self.ctrl_max = eps, ctrl_max
         self.enroll = sorted(set(int(i) for i in (enroll or [])))
@@ -131,6 +131,8 @@ class Evaluator:
         self.pair_mode = False               # compensator pair on the double-pole manifold (2026-09-25)
         self._E_ctrl = None       # dA_c/dz_j (A_c affine in z), for the exact block gradient
         self.force_full_alpha = False    # set when the reduced abscissa disagrees with the certified one at the start
+        self.lattice = lattice               # lattice.LatticeOracle: the full model on cached factors (BFS.md 5)
+        self.lat_info, self.lat_line = [], []
 
     def _ctrl_dirs(self):
         """dA_c/dz_j (A_c is affine in z), cached; None for non-compensator coordinates."""
@@ -275,7 +277,28 @@ class Evaluator:
 
     def missed_peaks(self, z, t, ws, tol):
         """A-N on the reduced model: sweep sigma_1 on `ws` at z (cheap on the
-        oracle), return the local maxima above t (1 + tol) not yet in W."""
+        oracle), return the local maxima above t (1 + tol) not yet in W.
+        Lattice (full model): sigma_1 on the lattice level lattice.SWEEP_LEVEL of
+        the band, cached factors; a local maximum above t (1 + tol) away from
+        every member and followed top is a new member (followed from then on)."""
+        if self.lattice is not None:
+            import lattice as _lt
+            if _lt.SWEEP_LEVEL <= 0:
+                return []
+            wg = self.lattice.grid(float(ws[0]), float(ws[-1]))
+            sv = self.lattice.sigmas(z, wg)
+            near = list(self.W) + list(self.w_star.values())
+            out = []
+            for i in range(len(wg)):
+                lo_ = sv[i - 1] if i > 0 else -np.inf
+                hi_ = sv[i + 1] if i + 1 < len(wg) else -np.inf
+                if sv[i] >= lo_ and sv[i] >= hi_ and sv[i] > t * (1.0 + tol) \
+                        and all(abs(float(wg[i]) - q) > 1e-3 for q in near):
+                    out.append((float(wg[i]), float(sv[i])))
+            self.refine_log.append(dict(t=float(t), gmax=float(sv.max()), wmax=float(wg[int(np.argmax(sv))]),
+                                        ok=True, above=bool(out), sweep=len(wg)))
+            out.sort(key=lambda p_: -p_[1])
+            return out
         if self.oracle is None:
             return []
         D, pk = self.D, self.pk
@@ -342,186 +365,196 @@ class Evaluator:
         G = lambda cl_, x_, z_, **kw: np.asarray(
             pk.grad(D.grads(clg, x_, z_, arow, nvec, K, xa, xs, pa, ps, na, ns, flags, **kw)),
             float)
-        m = len(W)
-        s = np.zeros(m); Gs = np.zeros((m, NZ))
-        blocks = {}
+        if self.lattice is not None:
+            # THE FULL MODEL ON THE LATTICE (lattice.py, BFS.md 5): every row on
+            # the MPI ranks holding its factor; followed members by bracket and
+            # refine (the row is an exact value at a lattice point); sigma_2
+            # blocks at the row point
+            s, Gs, blocks, _tops_l, _info_l = self.lattice.rows(
+                z, W, follow=self.follow, w_star=self.w_star, state=self.follow_state,
+                enroll=(self.enroll if self.kink_block else ()))
+            self.lat_info.append(_info_l)
+        else:
+            m = len(W)
+            s = np.zeros(m); Gs = np.zeros((m, NZ))
+            blocks = {}
 
-        def _block_set(i, P):
-            # the sigma_2 (Clarke 2x2) block of row i from its two leading singular
-            # pairs P: sigma_1's row, and the block's entry gradients
-            # Gc[a, b] = G(x_b, z_a) + i G(x_b, i z_a).  Both consumers (the
-            # subproblem's h11, h22, h12 and grad_L's Hermitian part) read only
-            # Re Gc[a, a] and Gc[0, 1] + conj Gc[1, 0], so the diagonal's
-            # imaginary part is never computed, and Gc[0, 0] is sigma_1's row:
-            # 6 gradient calls per block instead of 9 (STAGE6 6.29, exact)
-            s[i] = P[0]['sigma']
-            Gc = np.zeros((2, 2, NZ), complex)
-            Gc[0, 0] = Gs[i] = G(cl, P[0]['x'], P[0]['z'])
-            Gc[1, 1] = G(cl, P[1]['x'], P[1]['z'])
-            for a_, b_ in ((0, 1), (1, 0)):
-                Gc[a_, b_] = (G(cl, P[b_]['x'], P[a_]['z'])
-                              + 1j * G(cl, P[b_]['x'], 1j * P[a_]['z']))
-            blocks[i] = dict(sig=np.array([P[0]['sigma'], P[1]['sigma']]), Gc=Gc)
+            def _block_set(i, P):
+                # the sigma_2 (Clarke 2x2) block of row i from its two leading singular
+                # pairs P: sigma_1's row, and the block's entry gradients
+                # Gc[a, b] = G(x_b, z_a) + i G(x_b, i z_a).  Both consumers (the
+                # subproblem's h11, h22, h12 and grad_L's Hermitian part) read only
+                # Re Gc[a, a] and Gc[0, 1] + conj Gc[1, 0], so the diagonal's
+                # imaginary part is never computed, and Gc[0, 0] is sigma_1's row:
+                # 6 gradient calls per block instead of 9 (STAGE6 6.29, exact)
+                s[i] = P[0]['sigma']
+                Gc = np.zeros((2, 2, NZ), complex)
+                Gc[0, 0] = Gs[i] = G(cl, P[0]['x'], P[0]['z'])
+                Gc[1, 1] = G(cl, P[1]['x'], P[1]['z'])
+                for a_, b_ in ((0, 1), (1, 0)):
+                    Gc[a_, b_] = (G(cl, P[b_]['x'], P[a_]['z'])
+                                  + 1j * G(cl, P[b_]['x'], 1j * P[a_]['z']))
+                blocks[i] = dict(sig=np.array([P[0]['sigma'], P[1]['sigma']]), Gc=Gc)
 
-        def _block_at(i, wb):
-            _block_set(i, cl.gain_k(wb, arow, nvec, K, k=2))
-        _batched = BATCH_ROWS and self.oracle is not None and hasattr(cl, 'gain_batch')
-        _pending = []
-        _blk_pending = []
-        _fb = {}
-        if BATCH_ROWS and self.follow and self.oracle is not None and FOLLOW_SCAN <= 2 and hasattr(cl, 'gain_batch'):
-            # BATCHED PEAK FOLLOWING (2026-09-25): every followed member's Newton
-            # iteration in one batched evaluation (peakfollow.follow_batch)
-            # (the sigma_2-enrolled rows too, 2026-09-29: their tops were found one
-            # row at a time -- with 1/3 of the rows enrolled on an equalised MIMO
-            # optimum, 15 % of a round)
-            _fi = [i for i, w in enumerate(W) if self.follow.get(round(float(w), 6))]
-            if _fi:
-                from peakfollow import follow_batch as _fbatch
-                _keys = [round(float(W[i]), 6) for i in _fi]
-                _res = _fbatch(cl, [float(W[i]) for i in _fi], arow, nvec, K, [self.follow[k_] for k_ in _keys],
-                               [self.w_star.get(k_) for k_ in _keys], [self.follow_state.setdefault(k_, {}) for k_ in _keys],
-                               gtol=FOLLOW_GTOL)
-                _fb = dict(zip(_fi, _res))
-        for i, w in enumerate(W):
-            if self.kink_block and i in self.enroll:
-                # the block is built at the FOLLOWED top too (2026-09-22): the
-                # sigma_2-enrolled rows are the most active peaks, and a fixed
-                # block row let the -0.95 peak drift 0.0105 and rise to 8.027
-                # unseen (refused round, K+B+C ne=200)
-                wb = float(w)
-                radb = self.follow.get(round(float(w), 6)) if (self.follow and self.oracle is not None) else None
-                if radb and i in _fb:
-                    wb = _fb[i][0]
-                    self.w_star[round(float(w), 6)] = wb
-                elif radb:
-                    from peakfollow import follow as _follow
-                    wb, _ = _follow(cl, w, arow, nvec, K, radb, hint=self.w_star.get(round(float(w), 6)), nscan=FOLLOW_SCAN, gtol=FOLLOW_GTOL,
-                                         state=(self.follow_state.setdefault(round(float(w), 6), {}) if FOLLOW_SCAN <= 2 else None))
-                    self.w_star[round(float(w), 6)] = wb
-                if _batched:
-                    _blk_pending.append((i, wb))              # batched below
-                else:
-                    _block_at(i, wb)
-            else:
-                wf = float(w)
-                rad = self.follow.get(round(float(w), 6)) if (self.follow and self.oracle is not None) else None
-                if rad and i in _fb:
-                    wf, r = _fb[i]
-                    self.w_star[round(float(w), 6)] = wf
-                    s[i] = r['sigma']; Gs[i] = G(cl, r['x'], r['z'])
-                elif rad:
-                    # PEAK-FOLLOWING row: value and gradient at the relocated top
-                    # (safeguarded Newton; its evaluation at the top carries the
-                    # vectors, so the row needs no further gain call)
-                    from peakfollow import follow as _follow
-                    wf, r = _follow(cl, w, arow, nvec, K, rad, hint=self.w_star.get(round(float(w), 6)), nscan=FOLLOW_SCAN, gtol=FOLLOW_GTOL,
-                                         state=(self.follow_state.setdefault(round(float(w), 6), {}) if FOLLOW_SCAN <= 2 else None))
-                    self.w_star[round(float(w), 6)] = wf
-                    s[i] = r['sigma']; Gs[i] = G(cl, r['x'], r['z'])
-                elif self.row_screen > 0 and self.oracle is not None:
-                    # ROW SCREENING (2026-09-23), pass 1: value only (cheap,
-                    # loose tolerance, warm); vectors + gradient in pass 2 only
-                    # for rows near the maximum
-                    if BATCH_ROWS:
-                        _pending.append((i, wf))              # batched below
-                    else:
-                        s[i] = cl.gain(wf, arow, nvec, K, want_vectors=False)['sigma']
-                        _pending.append((i, wf))
-                else:
-                    r = cl.gain(wf, arow, nvec, K)
-                    s[i] = r['sigma']; Gs[i] = G(cl, r['x'], r['z'])
-        if _blk_pending:
-            # BATCHED sigma_2 blocks (2026-09-29): the two leading pairs at every
-            # enrolled top in one subspace iteration (reduced.gain_batch, k = 2)
-            _Pb = cl.gain_batch(np.array([wb for _, wb in _blk_pending]), arow, nvec, K,
-                                np.ones(len(_blk_pending), bool), k=2)
-            for (i, _), P_ in zip(_blk_pending, _Pb):
-                _block_set(i, P_)
-        if _pending and BATCH_ROWS and hasattr(cl, 'gain_batch'):
-            # BATCHED rows (2026-09-25): every pending frequency in one subspace
-            # iteration (reduced.gain_batch; agreement with the per-row path 4e-13
-            # in sigma, 2e-11 in the singular vectors, 8e-15 in the gradients;
-            # 401 rows 0.31 s against 1.44 s).  Pass 1 values, pass 2 vectors for
-            # the rows within row_screen of the maximum.
-            _wp = np.array([wf for _, wf in _pending])
-            r1 = cl.gain_batch(_wp, arow, nvec, K, np.zeros(len(_wp), bool))
-            for (i, wf), r in zip(_pending, r1):
-                s[i] = r['sigma']
-            thr = (1.0 - self.row_screen) * float(np.max(s))
-            sel = [(i, wf) for i, wf in _pending if s[i] >= thr]
-            if sel:
-                r2 = cl.gain_batch(np.array([wf for _, wf in sel]), arow, nvec, K, np.ones(len(sel), bool))
-                for (i, wf), r in zip(sel, r2):
-                    s[i] = r['sigma']; Gs[i] = G(cl, r['x'], r['z'])
-            self.screen_stats.append((len(_pending), len(sel)))
-        elif _pending:
-            # pass 2: rows within row_screen of the maximum get their gradient;
-            # the rest keep their TRUE value with a zero gradient -- an inactive
-            # constant row a factor (1 - row_screen) below the level, re-checked
-            # at every evaluation (a rising row gets its gradient from then on)
-            thr = (1.0 - self.row_screen) * float(np.max(s))
-            n_full = 0
-            for i, wf in _pending:
-                if s[i] >= thr:
-                    r = cl.gain(wf, arow, nvec, K)
-                    s[i] = r['sigma']; Gs[i] = G(cl, r['x'], r['z']); n_full += 1
-            self.screen_stats.append((len(_pending), n_full))
-        if FOLLOW_DEDUP and self.follow and self.oracle is not None:
-            # ONE TOP, SEVERAL MEMBERS (2026-09-26).  A followed member starts its
-            # Newton at its previous top, so members drift and collect on one
-            # peak; a neighbouring peak then goes unwatched, and when it overtakes
-            # the evaluation UNDER-states smax.  ne=100 K+B+C round 14: members
-            # based at -0.5280, -0.5105, -0.5094 all on the top at -0.524950
-            # (7.9057032) while the one at -0.509496 stood at 7.9063061 -- an
-            # iterate accepted on that value made every later trial "worse" than
-            # an impossible reference, and the solve stalled (radius 1e-10) or crept
-            # (alpha 1/128).  Where several members share a top, all but the one
-            # whose base is nearest restart from their OWN base (cold Newton).
-            _ft = []
+            def _block_at(i, wb):
+                _block_set(i, cl.gain_k(wb, arow, nvec, K, k=2))
+            _batched = BATCH_ROWS and self.oracle is not None and hasattr(cl, 'gain_batch')
+            _pending = []
+            _blk_pending = []
+            _fb = {}
+            if BATCH_ROWS and self.follow and self.oracle is not None and FOLLOW_SCAN <= 2 and hasattr(cl, 'gain_batch'):
+                # BATCHED PEAK FOLLOWING (2026-09-25): every followed member's Newton
+                # iteration in one batched evaluation (peakfollow.follow_batch)
+                # (the sigma_2-enrolled rows too, 2026-09-29: their tops were found one
+                # row at a time -- with 1/3 of the rows enrolled on an equalised MIMO
+                # optimum, 15 % of a round)
+                _fi = [i for i, w in enumerate(W) if self.follow.get(round(float(w), 6))]
+                if _fi:
+                    from peakfollow import follow_batch as _fbatch
+                    _keys = [round(float(W[i]), 6) for i in _fi]
+                    _res = _fbatch(cl, [float(W[i]) for i in _fi], arow, nvec, K, [self.follow[k_] for k_ in _keys],
+                                   [self.w_star.get(k_) for k_ in _keys], [self.follow_state.setdefault(k_, {}) for k_ in _keys],
+                                   gtol=FOLLOW_GTOL)
+                    _fb = dict(zip(_fi, _res))
             for i, w in enumerate(W):
-                k_ = round(float(w), 6)
-                if self.follow.get(k_) and k_ in self.w_star:
-                    _ft.append((float(self.w_star[k_]), i))
-            _ft.sort()
-            _groups, _g = [], []
-            for tp, i in _ft:
-                if _g and tp - _g[-1][0] > 1e-4:           # Newton's tops agree to ~1e-6 on a flat peak, not 1e-9
-                    _groups.append(_g); _g = []
-                _g.append((tp, i))
-            if _g:
-                _groups.append(_g)
-            _redo = []
-            for _g in _groups:
-                if len(_g) > 1:
-                    tp = _g[0][0]
-                    keep = min(_g, key=lambda q: abs(float(W[q[1]]) - tp))[1]
-                    # not a member whose base is at the top, nor one whose cold restart
-                    # already returned to (about) this top: truly merged
-                    _redo += [i for _, i in _g if i != keep and abs(float(W[i]) - tp) > 1e-3
-                              and abs(self.follow_merged.get(round(float(W[i]), 6), np.inf) - tp) > 5e-3]
-            if _redo:
-                from peakfollow import follow as _follow, follow_batch as _fbatch
-                _keys = [round(float(W[i]), 6) for i in _redo]
-                for k_ in _keys:
-                    self.follow_state[k_] = {}
-                if BATCH_ROWS and FOLLOW_SCAN <= 2 and hasattr(cl, 'gain_batch'):
-                    _rr = _fbatch(cl, [float(W[i]) for i in _redo], arow, nvec, K, [self.follow[k_] for k_ in _keys],
-                                  [None] * len(_redo), [self.follow_state[k_] for k_ in _keys], gtol=FOLLOW_GTOL)
-                else:
-                    _rr = [_follow(cl, float(W[i]), arow, nvec, K, self.follow[k_], hint=None, nscan=FOLLOW_SCAN, gtol=FOLLOW_GTOL,
-                                   state=(self.follow_state[k_] if FOLLOW_SCAN <= 2 else None)) for i, k_ in zip(_redo, _keys)]
-                for i, k_, (wf, r) in zip(_redo, _keys, _rr):
-                    self.w_star[k_] = wf
-                    if DEBUG_LS:
-                        print(f"        dedup: member {k_:+.4f} restarted -> top {wf:+.6f} sigma {r['sigma']:.7f}", flush=True)
-                    if any(abs(wf - q[0]) <= 1e-4 for q in _ft):
-                        self.follow_merged[k_] = wf        # back on the shared top: merged, not restarted again here
-                    if i in blocks:
-                        _block_at(i, wf)
+                if self.kink_block and i in self.enroll:
+                    # the block is built at the FOLLOWED top too (2026-09-22): the
+                    # sigma_2-enrolled rows are the most active peaks, and a fixed
+                    # block row let the -0.95 peak drift 0.0105 and rise to 8.027
+                    # unseen (refused round, K+B+C ne=200)
+                    wb = float(w)
+                    radb = self.follow.get(round(float(w), 6)) if (self.follow and self.oracle is not None) else None
+                    if radb and i in _fb:
+                        wb = _fb[i][0]
+                        self.w_star[round(float(w), 6)] = wb
+                    elif radb:
+                        from peakfollow import follow as _follow
+                        wb, _ = _follow(cl, w, arow, nvec, K, radb, hint=self.w_star.get(round(float(w), 6)), nscan=FOLLOW_SCAN, gtol=FOLLOW_GTOL,
+                                             state=(self.follow_state.setdefault(round(float(w), 6), {}) if FOLLOW_SCAN <= 2 else None))
+                        self.w_star[round(float(w), 6)] = wb
+                    if _batched:
+                        _blk_pending.append((i, wb))              # batched below
                     else:
+                        _block_at(i, wb)
+                else:
+                    wf = float(w)
+                    rad = self.follow.get(round(float(w), 6)) if (self.follow and self.oracle is not None) else None
+                    if rad and i in _fb:
+                        wf, r = _fb[i]
+                        self.w_star[round(float(w), 6)] = wf
                         s[i] = r['sigma']; Gs[i] = G(cl, r['x'], r['z'])
-            self.n_dedup.append(len(_redo))
+                    elif rad:
+                        # PEAK-FOLLOWING row: value and gradient at the relocated top
+                        # (safeguarded Newton; its evaluation at the top carries the
+                        # vectors, so the row needs no further gain call)
+                        from peakfollow import follow as _follow
+                        wf, r = _follow(cl, w, arow, nvec, K, rad, hint=self.w_star.get(round(float(w), 6)), nscan=FOLLOW_SCAN, gtol=FOLLOW_GTOL,
+                                             state=(self.follow_state.setdefault(round(float(w), 6), {}) if FOLLOW_SCAN <= 2 else None))
+                        self.w_star[round(float(w), 6)] = wf
+                        s[i] = r['sigma']; Gs[i] = G(cl, r['x'], r['z'])
+                    elif self.row_screen > 0 and self.oracle is not None:
+                        # ROW SCREENING (2026-09-23), pass 1: value only (cheap,
+                        # loose tolerance, warm); vectors + gradient in pass 2 only
+                        # for rows near the maximum
+                        if BATCH_ROWS:
+                            _pending.append((i, wf))              # batched below
+                        else:
+                            s[i] = cl.gain(wf, arow, nvec, K, want_vectors=False)['sigma']
+                            _pending.append((i, wf))
+                    else:
+                        r = cl.gain(wf, arow, nvec, K)
+                        s[i] = r['sigma']; Gs[i] = G(cl, r['x'], r['z'])
+            if _blk_pending:
+                # BATCHED sigma_2 blocks (2026-09-29): the two leading pairs at every
+                # enrolled top in one subspace iteration (reduced.gain_batch, k = 2)
+                _Pb = cl.gain_batch(np.array([wb for _, wb in _blk_pending]), arow, nvec, K,
+                                    np.ones(len(_blk_pending), bool), k=2)
+                for (i, _), P_ in zip(_blk_pending, _Pb):
+                    _block_set(i, P_)
+            if _pending and BATCH_ROWS and hasattr(cl, 'gain_batch'):
+                # BATCHED rows (2026-09-25): every pending frequency in one subspace
+                # iteration (reduced.gain_batch; agreement with the per-row path 4e-13
+                # in sigma, 2e-11 in the singular vectors, 8e-15 in the gradients;
+                # 401 rows 0.31 s against 1.44 s).  Pass 1 values, pass 2 vectors for
+                # the rows within row_screen of the maximum.
+                _wp = np.array([wf for _, wf in _pending])
+                r1 = cl.gain_batch(_wp, arow, nvec, K, np.zeros(len(_wp), bool))
+                for (i, wf), r in zip(_pending, r1):
+                    s[i] = r['sigma']
+                thr = (1.0 - self.row_screen) * float(np.max(s))
+                sel = [(i, wf) for i, wf in _pending if s[i] >= thr]
+                if sel:
+                    r2 = cl.gain_batch(np.array([wf for _, wf in sel]), arow, nvec, K, np.ones(len(sel), bool))
+                    for (i, wf), r in zip(sel, r2):
+                        s[i] = r['sigma']; Gs[i] = G(cl, r['x'], r['z'])
+                self.screen_stats.append((len(_pending), len(sel)))
+            elif _pending:
+                # pass 2: rows within row_screen of the maximum get their gradient;
+                # the rest keep their TRUE value with a zero gradient -- an inactive
+                # constant row a factor (1 - row_screen) below the level, re-checked
+                # at every evaluation (a rising row gets its gradient from then on)
+                thr = (1.0 - self.row_screen) * float(np.max(s))
+                n_full = 0
+                for i, wf in _pending:
+                    if s[i] >= thr:
+                        r = cl.gain(wf, arow, nvec, K)
+                        s[i] = r['sigma']; Gs[i] = G(cl, r['x'], r['z']); n_full += 1
+                self.screen_stats.append((len(_pending), n_full))
+            if FOLLOW_DEDUP and self.follow and self.oracle is not None:
+                # ONE TOP, SEVERAL MEMBERS (2026-09-26).  A followed member starts its
+                # Newton at its previous top, so members drift and collect on one
+                # peak; a neighbouring peak then goes unwatched, and when it overtakes
+                # the evaluation UNDER-states smax.  ne=100 K+B+C round 14: members
+                # based at -0.5280, -0.5105, -0.5094 all on the top at -0.524950
+                # (7.9057032) while the one at -0.509496 stood at 7.9063061 -- an
+                # iterate accepted on that value made every later trial "worse" than
+                # an impossible reference, and the solve stalled (radius 1e-10) or crept
+                # (alpha 1/128).  Where several members share a top, all but the one
+                # whose base is nearest restart from their OWN base (cold Newton).
+                _ft = []
+                for i, w in enumerate(W):
+                    k_ = round(float(w), 6)
+                    if self.follow.get(k_) and k_ in self.w_star:
+                        _ft.append((float(self.w_star[k_]), i))
+                _ft.sort()
+                _groups, _g = [], []
+                for tp, i in _ft:
+                    if _g and tp - _g[-1][0] > 1e-4:           # Newton's tops agree to ~1e-6 on a flat peak, not 1e-9
+                        _groups.append(_g); _g = []
+                    _g.append((tp, i))
+                if _g:
+                    _groups.append(_g)
+                _redo = []
+                for _g in _groups:
+                    if len(_g) > 1:
+                        tp = _g[0][0]
+                        keep = min(_g, key=lambda q: abs(float(W[q[1]]) - tp))[1]
+                        # not a member whose base is at the top, nor one whose cold restart
+                        # already returned to (about) this top: truly merged
+                        _redo += [i for _, i in _g if i != keep and abs(float(W[i]) - tp) > 1e-3
+                                  and abs(self.follow_merged.get(round(float(W[i]), 6), np.inf) - tp) > 5e-3]
+                if _redo:
+                    from peakfollow import follow as _follow, follow_batch as _fbatch
+                    _keys = [round(float(W[i]), 6) for i in _redo]
+                    for k_ in _keys:
+                        self.follow_state[k_] = {}
+                    if BATCH_ROWS and FOLLOW_SCAN <= 2 and hasattr(cl, 'gain_batch'):
+                        _rr = _fbatch(cl, [float(W[i]) for i in _redo], arow, nvec, K, [self.follow[k_] for k_ in _keys],
+                                      [None] * len(_redo), [self.follow_state[k_] for k_ in _keys], gtol=FOLLOW_GTOL)
+                    else:
+                        _rr = [_follow(cl, float(W[i]), arow, nvec, K, self.follow[k_], hint=None, nscan=FOLLOW_SCAN, gtol=FOLLOW_GTOL,
+                                       state=(self.follow_state[k_] if FOLLOW_SCAN <= 2 else None)) for i, k_ in zip(_redo, _keys)]
+                    for i, k_, (wf, r) in zip(_redo, _keys, _rr):
+                        self.w_star[k_] = wf
+                        if DEBUG_LS:
+                            print(f"        dedup: member {k_:+.4f} restarted -> top {wf:+.6f} sigma {r['sigma']:.7f}", flush=True)
+                        if any(abs(wf - q[0]) <= 1e-4 for q in _ft):
+                            self.follow_merged[k_] = wf        # back on the shared top: merged, not restarted again here
+                        if i in blocks:
+                            _block_at(i, wf)
+                        else:
+                            s[i] = r['sigma']; Gs[i] = G(cl, r['x'], r['z'])
+                self.n_dedup.append(len(_redo))
         self.ncalls += 1
         # closed-loop abscissa: ONE ROW PER NEAR-LINE EIGENVALUE (note item 2),
         # from the reduced pencil's residual-filtered Ritz pairs when the
@@ -530,7 +563,26 @@ class Evaluator:
         al_rows = []                     # list of (Re lam_j, g_j)
         clr = True
         pairs = []
-        if self.oracle is not None and not self.force_full_alpha:
+        al_line = None
+        if self.lattice is not None:
+            # the stability line swept on the full model in waves (lattice.line):
+            # clr is the certificate itself, the rows are the exact eigenvalues
+            # within ROW_REACH of the line with their left/right gradients
+            lr = self.lattice.line(z, self.eps, 0.0, float(getattr(D, 'stab_whi', 10.0)))
+            clr = bool(lr['clear']); al_line = float(lr['alpha'])
+            pairs = [dict(lam=r_['lam'], g=np.asarray(pk.grad(r_['g']), float), eta=r_['eta'], theta=r_['theta'],
+                          rank=r_['rank']) for r_ in lr['rows']]
+            if self.cl_block and len(pairs) >= 2:
+                for pr_, vec_ in zip(pairs[:2], self.lattice.vectors(z, lr['rows'][:2])):
+                    if vec_ is not None:
+                        pr_['v'], pr_['u'] = vec_[0], vec_[1]
+            for pr in pairs:
+                al_rows.append((float(pr['lam'].real), pr['g']))
+            if not al_rows:
+                al_rows.append((al_line, np.zeros(NZ)))      # nothing within reach: alpha without a gradient
+            self.n_alpha_rows.append(len(pairs))
+            self.lat_line.append(dict(nshift=lr['nshift'], waves=lr['waves'], clear=clr, rows=len(pairs)))
+        elif self.oracle is not None and not self.force_full_alpha:
             pairs = cl.near_line_pairs(arow, nvec, K, self.eps, reach=self.reach,
                                        res_tol=self.res_tol, mc=D.mc)
             for pr in pairs:
@@ -548,7 +600,7 @@ class Evaluator:
         # block's.  The two eigenvalues leave the per-eigenvalue rows.
         hermite_cl = None
         al_rows_qp = al_rows
-        if self.cl_block and len(pairs) >= 2 and len(al_rows) >= 2:
+        if self.cl_block and len(pairs) >= 2 and len(al_rows) >= 2 and all('v' in p_ for p_ in pairs[:2]):
             try:
                 hermite_cl = self._closed_loop_block(pairs[:2], cl, clf, clg, arow, nvec, K,
                                                      xa, xs, pa, ps, na, ns, flags, NZ)
@@ -568,6 +620,8 @@ class Evaluator:
                                                 pa, ps, na, ns, flags, eta=eta)), float)
             al_rows.append((float(al), ga))
         al, ga = al_rows[0]
+        if al_line is not None and al_line > al:
+            al = al_line                         # the rightmost seen has no row (its left vector failed): its value counts
         # Controller abscissa: ONE ROW PER POLE (item 2 in miniature).  At the
         # frozen K+B+C two poles sit on the margin (-0.05000, -0.05004); a
         # single max-Re row linearises one of them and the other violates on
@@ -955,14 +1009,14 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                        refine_tol=None, refine_grid=None, refine_max=3,
                        alpha_ref=None, alpha_ref_tol=1e-3, stat_rel=1e-4, pred_rel=1e-7, ctrl_block=False,
                        follow=None, follow_radius=0.1, row_screen=0.0, validate_full=True,
-                       cl_block=False, max_disp=None, pen_adapt=False):
+                       cl_block=False, max_disp=None, pen_adapt=False, lattice=None):
     if clarabel is None:
         raise RuntimeError("clarabel is not installed (pip install clarabel)")
     W = np.asarray(sorted(Omega), float)
     mg = sel_margin * eps
     ev_fn = Evaluator(D, pk, flags, W, eps, ctrl_max, enroll, kink_block, ctrl_lmi, mg,
                       oracle=oracle, reach=reach, res_tol=res_tol, ctrl_block=ctrl_block, follow=follow,
-                      row_screen=row_screen, cl_block=cl_block)
+                      row_screen=row_screen, cl_block=cl_block, lattice=lattice)
     if oracle is not None and alpha_ref is not None and np.isfinite(alpha_ref):
         # the reduced pencil's abscissa at the START of a round can be stale
         # after a large move (round 1 of scaled_002 read a certified design as
@@ -1318,7 +1372,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             # accepted step (2 alpha failed), so the next QP picks its direction
             # for the region it can use instead of a box corner cut by alpha
             Delta = min(Delta, max(2.0 * alpha * _tnorm(d), 1e-10))
-        if oracle is not None and refine_tol is not None:
+        if (oracle is not None or lattice is not None) and refine_tol is not None:
             # exchange refinement INSIDE the inner solve: the reduced model
             # knows where the new design's peaks are; add the ones the working
             # set misses, then re-evaluate so the rows include them.  The full
@@ -1386,7 +1440,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                                  row_blocks={nm_: round(float(np.linalg.norm(_g[ix])), 6) for nm_, ix in pk.blocks()},
                                  stat_blocks={nm_: round(float(np.linalg.norm(_gl[ix])), 6) for nm_, ix in pk.blocks()})
             break
-    if oracle is not None and added and cands:
+    if (oracle is not None or lattice is not None) and added and cands:
         # the working set grew during the solve: a candidate's recorded smax is
         # on the set of its time; re-evaluate all on the FINAL set (cheap on
         # the oracle) before choosing, so t handed back is honest (9.167
@@ -1443,5 +1497,12 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                  refine_log=list(ev_fn.refine_log[-40:]), clblock_fail=int(ev_fn.n_clblock_fail),
                  sub_failures=list(sub_status_log),
                  w_star=(_tops_at(best['z']) if (ev_fn.follow and best['z'] is not None) else {}),
-                 n_blocks=len(e['blocks']), dedup=int(sum(ev_fn.n_dedup)), history=hist)
+                 n_blocks=len(e['blocks']), dedup=int(sum(ev_fn.n_dedup)), history=hist,
+                 lattice=(dict(evaluations=len(ev_fn.lat_info), gain_evals=int(sum(i_['nev'] for i_ in ev_fn.lat_info)),
+                               deficit_max=float(max((i_['deficit'] for i_ in ev_fn.lat_info), default=0.0)),
+                               line_shifts=int(sum(l_['nshift'] for l_ in ev_fn.lat_line)),
+                               line_waves_max=int(max((l_['waves'] for l_ in ev_fn.lat_line), default=0)),
+                               line_not_clear=int(sum(not l_['clear'] for l_ in ev_fn.lat_line)),
+                               stab_rows_max=int(max((l_['rows'] for l_ in ev_fn.lat_line), default=0)))
+                          if lattice is not None else None))
     return best, ev_fn.ncalls, H, stats

@@ -1456,6 +1456,13 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
         nsw = 241                      # no reduced model yet: the frozen reference
     if getattr(certified_norm, 'sampled', 0) and not _peak_ref:
         ws, gs = cands, vals           # BFS sampled mode: its grid is the reference (no 241-point sweep)
+    elif not _peak_ref and getattr(certified_norm, 'lattice', None) is not None:
+        # --oracle lattice: the reference sweep on lattice points (the factors
+        # the in-solve sweep keeps on the ranks)
+        import lattice as _lt
+        _lc = certified_norm.lattice
+        ws = _lc.grid(wlo, whi, _lt.SWEEP_LEVEL if _lt.SWEEP_LEVEL > 0 else 5)
+        gs = _lc.sigmas(z, ws)
     elif not _peak_ref:
         ws = np.linspace(wlo, whi, nsw)
         gs = np.array(sig_many(ws) if sig_many else [sig(x) for x in ws])
@@ -1717,9 +1724,26 @@ def main():
                     help='reduced-model rows (gain_batch) evaluated in this many FORKED processes besides this one, '
                          'frequencies split by w-blocks (reduced._RowPool; STAGE6 6.26). 0 = serial; '
                          'mpi = on the ranks of the MPI pool, the driver included (reduced._MPIRowPool; BFS.md 5)')
-    ap.add_argument('--oracle', choices=['full', 'reduced'], default='full',
+    ap.add_argument('--oracle', choices=['full', 'reduced', 'lattice'], default='full',
                     help='STAGE 5: sigma rows of the inner solve on the full oracle '
-                         '(frozen) or on the projected one (reduced.py).')
+                         '(frozen) or on the projected one (reduced.py); lattice (BFS only, 2026-10-06): the full '
+                         'model on the MPI ranks, its factors cached on a dyadic lattice of frequencies and line '
+                         'shifts (lattice.py, BFS.md 5)')
+    ap.add_argument('--lattice-cap', dest='lattice_cap', type=int, default=16,
+                    help='--oracle lattice: plant factorisations kept per rank (least recently used dropped); '
+                         'test plant 133 MB each, full mesh ~1.05 GB')
+    ap.add_argument('--lattice-tol', dest='lattice_tol', type=float, default=1e-6,
+                    help='--oracle lattice: a followed peak\'s bracket is refined until the Hermite top is within '
+                         'this (relative) of the row')
+    ap.add_argument('--lattice-sweep', dest='lattice_sweep', type=int, default=5,
+                    help='--oracle lattice: missed peaks and the certificate\'s reference sweep on the lattice level '
+                         '2^-N of the band (0: no in-solve sweep)')
+    ap.add_argument('--lattice-reach', dest='lattice_reach', type=float, default=0.25,
+                    help='--oracle lattice: stability rows for the closed-loop eigenvalues within this of the line')
+    ap.add_argument('--lattice-k', dest='lattice_k', type=int, default=3,
+                    help='--oracle lattice: nearest eigenvalues computed at each disk centre of the line')
+    ap.add_argument('--lattice-driver', dest='lattice_driver', choices=['on', 'off'], default='on',
+                    help='--oracle lattice: the driver (rank 0) computes a share of every batch')
     ap.add_argument('--oracle-nvec', dest='oracle_nvec', type=int, default=3,
                     help='singular pairs per anchor')
     ap.add_argument('--oracle-tol', dest='oracle_tol', type=float, default=1e-3,
@@ -2238,6 +2262,13 @@ def main():
             if a.lu_order:
                 import sparse_lu; sparse_lu.ORDER = a.lu_order
             _mpp.serve()
+    if a.oracle == 'lattice':
+        if a.plant != 'bfs':
+            raise SystemExit("--oracle lattice: backward-facing step only (real plant, lattice.py)")
+        import lattice as _lat_mod                # its settings go to the ranks with every context (mpipool)
+        _lat_mod.LU_CAP = int(a.lattice_cap); _lat_mod.FOLLOW_TOL = float(a.lattice_tol)
+        _lat_mod.SWEEP_LEVEL = int(a.lattice_sweep); _lat_mod.ROW_REACH = float(a.lattice_reach)
+        _lat_mod.LINE_K = int(a.lattice_k)
     certified_norm.rtol = float(a.cert_rtol)      # BEFORE the start certification: one tolerance for every certified value of a run
     global REDUCED_CERT
     REDUCED_CERT = a.reduced_cert
@@ -2397,6 +2428,27 @@ def main():
     D.cert_itmax = a.cert_itmax
     D.cert_shrink = a.cert_shrink
     flags = parse_case(a.case)
+    _lat = None                                   # lattice.LatticeOracle (--oracle lattice), made with the pool below
+
+    def _gate(arow_, b_, c_, nvec_, K_, **kw):
+        """csp.stability_gate (the compensator's poles exactly, then the line
+        Re = -eps clear); with --oracle lattice the line is the lattice's sweep
+        through D.alpha_certified (memoised: the design's own sweep costs nothing
+        again), on the band of the abscissa certificate, which contains the
+        gate's."""
+        if _lat is None:
+            return csp.stability_gate(D.A, D.M, b_, c_, ctl.A_of(*arow_), ctl.Bc_of(arow_, D.r, D.mc), nvec_, K_, **kw)
+        eps_ = float(kw.get('eps', 1e-3)); lim_ = max(-eps_, float(kw.get('ctrl_max', 0.0)))
+        pol_ = np.linalg.eigvals(np.asarray(ctl.A_of(*arow_), complex))
+        if pol_.size and float(np.max(pol_.real)) > lim_ + 1e-8:
+            j_ = int(np.argmax(pol_.real))
+            return False, f"controller pole Re={pol_[j_].real:+.6g} > allowance {lim_:+.6g}", 0
+        al_, lam_, _, _, _, clr_ = D.alpha_certified(arow_, nvec_, K_, b_, c_, eps=eps_)
+        if clr_:
+            return True, "controller poles stable and the line is clear (lattice)", 0
+        if lam_ is not None and (lam_.real > -eps_ or abs(lam_.real + eps_) < 1e-9 * max(1.0, abs(lam_))):
+            return False, f"eigenvalue at {lam_:.6g} on Re=-{eps_:g}", 0
+        return False, f"INCONCLUSIVE: could not prove the line Re=-{eps_:g} clear (lattice)", 0
     _ctrl_borrowed, _ctrl_default = False, None
     _resume_gamma = None
     if BFS:
@@ -3253,6 +3305,44 @@ def main():
         # anchors' tasks use them)
         fullpar.start(a.nproc, D=D, Phi_b=getattr(_ro, 'Phi_b', None) if _ro is not None else None,
                       Psi_c=getattr(_ro, 'Psi_c', None) if _ro is not None else None)
+    if a.oracle == 'lattice':
+        # THE FULL MODEL ON THE LATTICE (lattice.py; BFS.md 5, 2026-10-06): the
+        # SQP's rows, its stability rows and the gates' line certificates on the
+        # MPI ranks, each rank keeping the plant factors of its lattice points
+        import lattice as _lat_mod
+        _lat = _lat_mod.LatticeOracle(D, pk, flags, pool=(fullpar.POOL if fullpar._MPI is not None else None),
+                                      use_driver=(a.lattice_driver == 'on'), real=True)
+        certified_norm.lattice = _lat
+        print(f"oracle: the full model on the lattice ({_lat.size} rank(s){', the driver included' if _lat.use_driver else ''}; "
+              f"{_lat_mod.LU_CAP} factors kept per rank, rows on 2^-{_lat_mod.ROW_LEVEL}, followed peaks to "
+              f"{_lat_mod.FOLLOW_TOL:g}, sweep on 2^-{_lat_mod.SWEEP_LEVEL}, stability rows within {_lat_mod.ROW_REACH:g} "
+              f"of the line, {_lat_mod.LINE_K} eigenvalues per disk)", flush=True)
+        # the ports' positions behind every (b, c) this process builds: the gates
+        # call D.alpha_certified with b and c, and the ranks build them from the
+        # positions
+        _bc_orig = D.bc; _bc_reg = {}
+
+        def _bc_lat(xa_, xs_, va_=None, vs_=None):
+            out_ = _bc_orig(xa_, xs_, va_, vs_)
+            _bc_reg[(hash(np.asarray(out_[0]).tobytes()), hash(np.asarray(out_[1]).tobytes()))] = \
+                (np.array(xa_, float), np.array(xs_, float))
+            while len(_bc_reg) > 256:
+                _bc_reg.pop(next(iter(_bc_reg)))
+            return out_
+        D.bc = _bc_lat
+        _ac_orig_l = D.alpha_certified
+
+        def _ac_lattice(arow_, nvec_, K_, b_, c_, eps=1e-3, wlo=None, whi=None, eigs_seen=None):
+            pos_ = _bc_reg.get((hash(np.asarray(b_).tobytes()), hash(np.asarray(c_).tobytes())))
+            if pos_ is None:                          # ports not built here: the serial certificate
+                return _ac_orig_l(arow_, nvec_, K_, b_, c_, eps=eps, wlo=wlo, whi=whi, eigs_seen=eigs_seen)
+            r_ = _lat.line(_lat.design_raw(arow_, nvec_, K_, pos_[0], pos_[1]), eps,
+                           0.0 if wlo is None else max(0.0, wlo), D.stab_whi if whi is None else whi, reach=-np.inf)
+            if eigs_seen is not None:
+                eigs_seen.extend(r_['seen'])
+            lam_ = r_['witness'] if r_['witness'] is not None else max(r_['seen'], key=lambda l_: l_.real, default=None)
+            return float(r_['alpha']), lam_, None, None, D.cl(b_, c_), bool(r_['clear'])
+        D.alpha_certified = _ac_lattice
     if a.oracle == 'reduced':
         # MEMOISE the closed-loop abscissa certificate per design: the SQP's
         # certified validation and the gate certified the identical design one
@@ -3399,6 +3489,8 @@ def main():
                   f"{fullpar.report()}" + (f"; {_red_mod.rows_report()}" if _ro is not None and _red_mod.ROW_MPI else ''),
                   flush=True)
             print(f"  [ledger] pool by task (cumulative): {fullpar.by_task(95)}", flush=True)
+            if _lat is not None:
+                print(f"  [ledger] {_lat.report()}", flush=True)
         if a.deadline > 0:
             # stop BEFORE a round that would not finish: the job's time limit
             # then never cuts a round (or the final save) in half (BFS.md 7)
@@ -3508,7 +3600,12 @@ def main():
             _bb2, _cc2, *_ = D.bc(_xa2, _xs2, _va2, _vs2)
             # on the reduced oracle when it exists: |Omega| full LUs per round otherwise
             _cl2 = _ro.make_cl(_bb2, _cc2, D.r, D.mc) if _ro is not None else D.cl(_bb2, _cc2)
-            _s1 = _sigmas(_cl2, _W, _aa2, _nn2, _KK2)
+            if _lat is not None:
+                # the rows' own lattice points (cached factors), sigma_1 and sigma_2 at once
+                _s12 = _lat.sigmas(zbest, [_lat_mod.snap(w_, _lat_mod.ROW_LEVEL) for w_ in _W], k=2)
+                _s1 = _s12[:, 0]
+            else:
+                _s1 = _sigmas(_cl2, _W, _aa2, _nn2, _KK2)
             _gref = float(np.max(_s1))
             _new = set()
             for _i, _w in enumerate(_W):
@@ -3517,7 +3614,8 @@ def main():
                 _was = any(abs(_w - _wp) < 1e-9 for _wp in _sigma2_prev)
                 if not (_active or _near or _was):
                     continue
-                _p2 = _cl2.gain_k(float(_w), _aa2, _nn2, _KK2, k=2)
+                _p2 = (_cl2.gain_k(float(_w), _aa2, _nn2, _KK2, k=2) if _lat is None else
+                       [dict(sigma=_s12[_i, 0]), dict(sigma=_s12[_i, 1])])
                 _ratio = _p2[1]['sigma'] / max(_p2[0]['sigma'], 1e-300)
                 # always at the active frequencies; elsewhere thresholded with
                 # hysteresis: enter above 1 - sigma2_on, leave below 1 - sigma2_off
@@ -3538,7 +3636,7 @@ def main():
         # PEAK-FOLLOWING members (STAGE5 9): every member enrolled as a peak
         _follow_dict = ({round(float(w_), 6): float(a.follow_radius) for w_ in Omega
                          if round(float(w_), 6) in _peakset}
-                        if (a.peak_follow == 'on' and _ro is not None) else None)
+                        if (a.peak_follow == 'on' and (_ro is not None or _lat is not None)) else None)
         _prov_pre = bool(a.cert_every > 1 and _ro is not None and (it % a.cert_every != 0)
                          and it < a.outer - 1 and _ro.dim > 0 and a.prov_gate == 'reduced')
         if a.inner == 'sqp':
@@ -3563,8 +3661,13 @@ def main():
                 refine_grid=np.linspace(a.wlo, a.whi, 1201), refine_max=a.sqp_refine_max,
                 alpha_ref=(float(_al_accepted) if _al_accepted is not None else None),
                 pred_rel=(1e-7 if (a.sqp_stat == 'pred' or (a.sqp_stat == 'auto' and MIMO)) else None),
-                pen_adapt=(a.sqp_pen == 'adaptive'))
+                pen_adapt=(a.sqp_pen == 'adaptive'), lattice=_lat)
             _sqp_trust_prev = inner_stats.get('trust_final')
+            if _lat is not None and inner_stats.get('lattice'):
+                _li = inner_stats['lattice']
+                print(f"    lattice: {_li['evaluations']} evaluations, {_li['gain_evals']} sigma evaluations, largest bracket "
+                      f"deficit {_li['deficit_max']:.1e}; line {_li['line_shifts']} shifts (at most {_li['line_waves_max']} waves, "
+                      f"{_li['line_not_clear']} not clear), up to {_li['stab_rows_max']} stability rows", flush=True)
             # STALL RECOVERY (2026-09-25): a solve that ended on a collapsed radius
             # (code 6) or with failed subproblems hands its quasi-Newton matrix and
             # radius to the next round no more.  The ne=100 K+B+C run sat at
@@ -3635,14 +3738,19 @@ def main():
                 print(f"      member {_m:+.4f} -> top {_top:+.4f}: reduced {_vr:.6f}, full {_vf:.6f}", flush=True)
         if _follow_dict and best['z'] is not None:
             # move each followed member to its peak's top AT THE CANDIDATE, so
-            # the next round starts on the tops (reduced model: no factorisation)
+            # the next round starts on the tops (reduced model: no factorisation;
+            # lattice: the rows' points at the candidate, from the SQP's stats)
             from peakfollow import follow as _follow
             _aa_, _nn_, _KK_, _xa_, _xs_, _va_, _vs_ = pk.unpack(zc)
             _bb_, _cc_, *_ = D.bc(_xa_, _xs_, _va_, _vs_)
-            _rcf = _ro.make_cl(_bb_, _cc_, D.r, D.mc)
+            _rcf = _ro.make_cl(_bb_, _cc_, D.r, D.mc) if _ro is not None else None
+            _wst = inner_stats.get('w_star') or {}
             _moved = 0; _newO = set(Omega)
             for _w in list(_follow_dict):
-                _ws, _ = _follow(_rcf, _w, _aa_, _nn_, _KK_, float(a.follow_radius))
+                if _rcf is None:
+                    _ws = _wst.get(round(float(_w), 6), _w)
+                else:
+                    _ws, _ = _follow(_rcf, _w, _aa_, _nn_, _KK_, float(a.follow_radius))
                 _ws = round(float(_ws), 6)
                 if abs(_ws - _w) > 1e-4 and all(abs(_ws - q) > 1e-3 for q in _newO if q != _w):
                     _newO.discard(_w); _newO.add(_ws); _peakset.discard(_w); _peakset.add(_ws); _moved += 1
@@ -3831,9 +3939,8 @@ def main():
                     _skip = None
                     if _ro is not None and bool(_clr_c) and int(getattr(D, 'cert_nseg', 1)) <= 1:
                         _skip = csp.stability_region(D.A, D.M, ctl.A_of(*aa))[:2]
-                    okr, why, nsr = csp.stability_gate(
-                        D.A, D.M, bb, cc, ctl.A_of(*aa),
-                        ctl.Bc_of(aa, D.r, D.mc), nn, KK, eps=a.eps,
+                    okr, why, nsr = _gate(
+                        aa, bb, cc, nn, KK, eps=a.eps,
                         shrink=a.cert_shrink, wlo=a.wlo, whi=a.whi,
                         ctrl_max=a.ctrl_max, skip=_skip)
                     if not okr and why.startswith('INCONCLUSIVE') and _wind_accept:
@@ -3983,8 +4090,8 @@ def main():
                 _okp = bool(_clrp) and _alp + a.eps <= 0.0
                 _why_p = f"alpha {_alp:+.4f}" + ('' if _clrp else ', line not clear')
                 if _okp and a.rect_cert:
-                    _okr_p, _why_r, _ = csp.stability_gate(
-                        D.A, D.M, _bp, _cp, ctl.A_of(*_ap), ctl.Bc_of(_ap, D.r, D.mc), _np_, _Kp, eps=a.eps,
+                    _okr_p, _why_r, _ = _gate(
+                        _ap, _bp, _cp, _np_, _Kp, eps=a.eps,
                         shrink=a.cert_shrink, wlo=a.wlo, whi=a.whi, ctrl_max=a.ctrl_max)
                     _okp = bool(_okr_p)
                     _why_p += f"; {_why_r}"
@@ -4095,10 +4202,9 @@ def main():
                     _okr_p = True
                     if a.rect_cert:
                         try:
-                            _okr_p, _, _ = csp.stability_gate(D.A, D.M, _bb_p, _cc_p, ctl.A_of(*_aa_p),
-                                                              ctl.Bc_of(_aa_p, D.r, D.mc), _nn_p, _KK_p, eps=a.eps,
-                                                              shrink=a.cert_shrink, wlo=a.wlo, whi=a.whi,
-                                                              ctrl_max=a.ctrl_max)
+                            _okr_p, _, _ = _gate(_aa_p, _bb_p, _cc_p, _nn_p, _KK_p, eps=a.eps,
+                                                 shrink=a.cert_shrink, wlo=a.wlo, whi=a.whi,
+                                                 ctrl_max=a.ctrl_max)
                         except Exception:
                             _okr_p = bool(_clr_p)
                     if not (_clr_p and _okr_p and _al_p + a.eps <= 0.0) and zbest_cert is not None:
@@ -4548,9 +4654,8 @@ def main():
         # same inversion as the gate: check the certificate before refusing
         why_final = ''
         try:
-            _okf, why_final, _ = csp.stability_gate(
-                D.A, D.M, b, c, ctl.A_of(*arow),
-                ctl.Bc_of(arow, D.r, D.mc), nvec, K, eps=a.eps,
+            _okf, why_final, _ = _gate(
+                arow, b, c, nvec, K, eps=a.eps,
                 shrink=a.cert_shrink, wlo=a.wlo, whi=a.whi,
                 ctrl_max=a.ctrl_max)
         except Exception:

@@ -149,6 +149,8 @@ class ClosedLoopResolvent:
         key = complex(omega)
         if cache is not None and key in cache:
             lu = cache[key]                         # reused across iterates
+            if getattr(self, 'lu_lru', False):
+                cache[key] = cache.pop(key)         # least-recently-used order (lattice.py)
         elif pin is not None and key in pin:
             lu = pin[key]                           # pinned anchor frequency (STAGE6 6.29)
         else:
@@ -232,7 +234,7 @@ class ClosedLoopResolvent:
                                              self._UHapply(t))
 
     # ---------------- gain at one frequency ----------------
-    def gain(self, omega, arow, nvec, K, tol=1e-10, want_vectors=True):
+    def gain(self, omega, arow, nvec, K, tol=1e-10, want_vectors=True, v0=None, ncv=None):
         n, r = self.n, self.r
         self.setup(omega, arow, nvec, K)
 
@@ -245,12 +247,16 @@ class ClosedLoopResolvent:
         Wop = spla.LinearOperator(
             (n, n), matvec=lambda v: self.M @ THv(self.M @ Tv(v)),
             dtype=complex)
-        lam, V = spla.eigs(Wop, k=1, which='LM', tol=tol, maxiter=5000, ncv=GAIN_NCV,
-                           v0=_v0(Wop.shape[0]))
+        # v0 / ncv: a warm start (lattice.py: the last vector at the same
+        # frequency, ncv 4 -- 4-5 applications instead of 9-17, sigma within 1e-13)
+        lam, V = spla.eigs(Wop, k=1, which='LM', tol=tol, maxiter=5000, ncv=(GAIN_NCV if ncv is None else ncv),
+                           v0=(_v0(Wop.shape[0]) if v0 is None else v0))
         lam = float(np.real(lam[0]))
         sigma = float(np.sqrt(max(lam, 0.0)))
         out = dict(omega=omega, sigma=sigma, lam=lam)
         if not want_vectors:
+            if v0 is not None or ncv is not None:
+                out['v'] = V[:, 0]                  # the direction, for the next warm start
             return out
         v = V[:, 0]
         x = self.solve(np.concatenate([v, np.zeros(r, complex)]))

@@ -73,6 +73,8 @@ class ClosedLoopResolventMIMO(ClosedLoopResolvent):
         key = complex(omega)
         if cache is not None and key in cache:
             lu = cache[key]
+            if getattr(self, 'lu_lru', False):
+                cache[key] = cache.pop(key)         # least-recently-used order (lattice.py)
         elif pin is not None and key in pin:
             lu = pin[key]                           # pinned anchor frequency (STAGE6 6.29)
         else:

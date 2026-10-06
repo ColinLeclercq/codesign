@@ -31,7 +31,7 @@ import importlib
 import numpy as np
 
 SYNC_MODULES = ('sparse_lu', 'closedloop_sparse', 'certify_sparse', 'sparse_spectrum', 'winding_cert',
-                'reduced', 'massops', 'fullpar', 'peakfollow')
+                'reduced', 'massops', 'fullpar', 'peakfollow', 'lattice')
 _TAG_TASK, _TAG_RES, _TAG_CTX, _TAG_STOP = 1, 2, 3, 4
 _SIMPLE = (str, int, float, bool, type(None), complex)
 
