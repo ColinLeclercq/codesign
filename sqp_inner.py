@@ -1122,7 +1122,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             nu = max(nu, 1.5 * sub_['stab_dual'])
         return sub_, st_
 
-    _Ec = [None]; n_soc = [0]; n_ctrl_cut = [0]
+    _Ec = [None]; n_soc = [0]; n_ctrl_cut = [0]; n_stab_cut = [0]
     def _ctrl_restore(zn_, en_):
         """SECOND-ORDER CORRECTION on the compensator (pen_adapt; 2026-10-05): a
         step along the linearised boundary Re lambda(A_c) = lim leaves it at
@@ -1347,6 +1347,16 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                 # the merit decides, as before
             if en is None:
                 en = ev_fn(zn)
+            if lattice is not None and admissible(e) and not admissible(en):
+                # THE FULL MODEL'S LINE IS EXACT (lattice oracle): every trial's
+                # stability is certified, so an admissible iterate is never left
+                # for an inadmissible one -- a shorter step instead (2026-10-06,
+                # test plant, MIMO central, zero start: a step took a closed-loop
+                # eigenvalue to -0.0496, across the line at -0.05, for a sigma
+                # decrease that outweighed the penalty)
+                n_stab_cut[0] += 1
+                alpha *= 0.5
+                continue
             if DEBUG_LS:
                 # the row attaining the trial's max: actual value vs its linear model
                 _i = int(np.argmax(en['s']))
@@ -1526,9 +1536,10 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         ev_fn.w_star = {}; ev_fn(zb); return dict(ev_fn.w_star)
     if verbose and pen_adapt:
         print(f"    sqp: penalty nu = {nu:.3g} at the end; {n_soc[0]} compensator correction(s), "
-              f"{n_ctrl_cut[0]} trial(s) cut back inside the compensator's line", flush=True)
+              f"{n_ctrl_cut[0]} trial(s) cut back inside the compensator's line"
+              + (f", {n_stab_cut[0]} inside the closed loop's (lattice)" if lattice is not None else ''), flush=True)
     stats = dict(iters=len(hist), fn_evals=ev_fn.ncalls, termination_code=code, exit_info=exit_info, certified_checks=code_cert,
-                 nu_final=float(nu), ctrl_corrections=int(n_soc[0]), ctrl_cuts=int(n_ctrl_cut[0]),
+                 nu_final=float(nu), ctrl_corrections=int(n_soc[0]), ctrl_cuts=int(n_ctrl_cut[0]), stab_cuts=int(n_stab_cut[0]),
                  stat_value=(hist[-1].get('stat') if hist else None),
                  wall=time.time() - t_start, inner='sqp', kink_block=kink_block,
                  ctrl_lmi=bool(ctrl_lmi), alpha_rows=ev_fn.n_alpha_rows, alpha_fallback=ev_fn.n_fallback,
