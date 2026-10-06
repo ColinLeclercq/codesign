@@ -578,6 +578,8 @@ class Evaluator:
                         pr_['v'], pr_['u'] = vec_[0], vec_[1]
             for pr in pairs:
                 al_rows.append((float(pr['lam'].real), pr['g']))
+            if not np.isfinite(al_line):
+                al_line = -self.eps - 1.0                 # nothing verified anywhere (then not clear): a finite placeholder
             if not al_rows:
                 al_rows.append((al_line, np.zeros(NZ)))      # nothing within reach: alpha without a gradient
             self.n_alpha_rows.append(len(pairs))
@@ -1166,6 +1168,13 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         key_ = 'al_ctrl_rest' if ev_fn.pair_mode else 'al_ctrl'
         return (zc_, ec_) if ec_[key_] <= lim + 1e-8 else None
 
+    def _close_at_line(zn_):
+        """Two compensator poles within 1e-3 of each other at or over the line
+        (the case _ctrl_restore leaves to the face S)."""
+        lam_ = np.linalg.eigvals(ev_fn.ctl.A_of(*pk.unpack(zn_)[0]))
+        act_ = [l_ for l_ in lam_ if l_.real > lim - 1e-6]
+        return any(abs(p_ - q_) < 1e-3 for p_ in act_ for q_ in lam_ if q_ is not p_ and abs(p_ - q_) > 0)
+
     def _alc_cheap(zn_):
         """The compensator's abscissa at zn_ as the evaluation reports it
         (al_ctrl; on the pair's face al_ctrl_rest, the pair excluded): an r x r
@@ -1327,11 +1336,15 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                 # of sigma against a penalty of 22, and the solve sat on
                 # inadmissible iterates from there)
                 _rc = _ctrl_restore(zn, None)
-                if _rc is None:
+                if _rc is not None:
+                    zn, en = _rc; n_soc[0] += 1
+                elif not _close_at_line(zn):
                     n_ctrl_cut[0] += 1
                     alpha *= 0.5
                     continue
-                zn, en = _rc; n_soc[0] += 1
+                # a nearly double pole at the line off the face S: its crossing moves
+                # like the square root of the step, halving cannot bring it back --
+                # the merit decides, as before
             if en is None:
                 en = ev_fn(zn)
             if DEBUG_LS:

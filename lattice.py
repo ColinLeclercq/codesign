@@ -68,8 +68,10 @@ LINE_SHRINK = 0.9    # disk used = LINE_SHRINK x the distance to the nearest eig
 LINE_WAVES = 60      # waves before the sweep is declared inconclusive
 LINE_TOL = 1e-9      # ARPACK tolerance at a centre (the serial certificate's)
 ROW_REACH = 0.25     # stability rows for the eigenvalues within this of the line (to its left)
-WARM_NCV = 4         # sigma_1 restarted from the last vector at the same point with this subspace (0: cold, the
-                     # serial code's start); the line's disks always cold (a warm start did not help there)
+WARM_NCV = 0         # > 0: sigma_1 restarted from the last vector at the same point with this subspace (4: 4-5
+                     # applications instead of 9-17).  Off by default: where sigma_1 and sigma_2 swap between designs
+                     # (kinks; the MIMO plateau) the restart vector lies along the new sigma_2 and a small subspace can
+                     # converge there; cold, a row does not depend on its rank.  The line's disks are always cold.
 SWEEP_LEVEL = 5      # missed-peak sweep and the certificate's reference sweep on 2^-5
 GAIN_COST, LU_COST = 1.0, 3.0   # relative costs for the balancing (a cached task, a factorisation)
 
@@ -151,13 +153,15 @@ def _hermite_top(x0, x1, f0, f1, d0, d1):
     h = x1 - x0
     a1, a2, a3 = h * d0, 3.0 * (f1 - f0) - h * (2.0 * d0 + d1), 2.0 * (f0 - f1) + h * (d0 + d1)
     ts = [0.0, 1.0]
-    if abs(a3) > 1e-300:
-        disc = a2 * a2 - 3.0 * a3 * a1
-        if disc >= 0.0:
-            r = np.sqrt(disc)
-            ts += [(-a2 + r) / (3.0 * a3), (-a2 - r) / (3.0 * a3)]
-    elif abs(a2) > 1e-300:
-        ts.append(-a1 / (2.0 * a2))
+    # roots of p'(t) = a1 + 2 a2 t + 3 a3 t^2, in the cancellation-free form
+    # (a3 -> 0 near a quadratic top: the textbook formula lost the root)
+    disc = a2 * a2 - 3.0 * a3 * a1
+    if disc >= 0.0:
+        q = -(a2 + np.copysign(np.sqrt(disc), a2))
+        if abs(a3) > 1e-300:
+            ts.append(q / (3.0 * a3))
+        if abs(q) > 1e-300:
+            ts.append(a1 / q)
     best = max((f0 + a1 * t + a2 * t * t + a3 * t ** 3, t) for t in ts if 0.0 <= t <= 1.0)
     return x0 + best[1] * h, best[0]
 
@@ -293,13 +297,15 @@ def _nearest(cl, s, dz, k):
     OP = spla.LinearOperator((N, N), matvec=lambda x: -cl.solve(cl.Mcl_apply(x)), dtype=complex)
     kk = min(k, N - 2)
     th = V = None
+    complete = True
     try:
         th, V = spla.eigs(OP, k=kk, which='LM', tol=LINE_TOL, maxiter=300, v0=_v0(N), ncv=min(N - 1, max(2 * kk + 2, 24)))
     except spla.ArpackNoConvergence as e:
+        complete = False
         if e.eigenvalues is not None and len(e.eigenvalues):
             th, V = e.eigenvalues, e.eigenvectors
     if th is None or len(th) == 0:
-        return [], []
+        return [], [], 0.0
     keep = np.abs(th) > 1e-300
     th, V = th[keep], V[:, keep]
     lam = s + 1.0 / th
@@ -311,7 +317,13 @@ def _nearest(cl, s, dz, k):
         res = np.linalg.norm(cl.Acl_apply(v, arow, nvec, K) - lam[i] * cl.Mcl_apply(v)) / nv
         if res < 1e-6 * max(1.0, abs(lam[i])):
             ok.append(i)
-    return [complex(lam[i]) for i in ok], [V[:, i] for i in ok]
+    # the free radius: the distance to the nearest of ALL returned Ritz values
+    # (an unverified one only shrinks the disk), and no disk at all when the k
+    # nearest did not all converge or one failed its residual -- the nearest
+    # eigenvalue may then be missing from the set (the serial strict code's
+    # untrusted disks); verified eigenvalues still count as witnesses and rows
+    rad = float(np.min(np.abs(lam - s))) if (complete and len(ok) == len(lam) and len(lam)) else 0.0
+    return [complex(lam[i]) for i in ok], [V[:, i] for i in ok], rad
 
 
 def _left(cl, s, lams):
@@ -350,8 +362,7 @@ def line_task(t):
     for th in thetas:
         s = complex(-eps, float(th))
         _note(complex(-1j * s))
-        lams, vs = _nearest(cl, s, dz, LINE_K)
-        rad = float(min(abs(l_ - s) for l_ in lams)) if lams else 0.0
+        lams, vs, rad = _nearest(cl, s, dz, LINE_K)
         rows = []
         near = [j for j, l_ in enumerate(lams) if l_.real >= -eps - reach]
         if near:
@@ -580,7 +591,7 @@ class LatticeOracle:
         witness, rows, seen, nshift, waves, uncovered)."""
         dz = z if isinstance(z, dict) else self.design(z)
         reach = ROW_REACH if reach is None else float(reach)
-        mk = (dz['key'], round(float(eps), 12), float(wlo), float(whi))
+        mk = (dz['key'], round(float(eps), 12), float(wlo), float(whi), eps_int)
         hit = self._line_memo.get(mk)
         if hit is not None and hit[0] >= reach:
             return hit[1]                                  # this design's line, swept already (same or more rows)

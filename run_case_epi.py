@@ -1742,6 +1742,10 @@ def main():
                     help='--oracle lattice: stability rows for the closed-loop eigenvalues within this of the line')
     ap.add_argument('--lattice-k', dest='lattice_k', type=int, default=1,
                     help='--oracle lattice: nearest eigenvalues computed at each disk centre of the line')
+    ap.add_argument('--lattice-warm', dest='lattice_warm', type=int, default=0,
+                    help='--oracle lattice: > 0 restarts sigma_1 from the last vector at the same point with this '
+                         'Arnoldi subspace (4: about half the solves); 0 (default): cold, as the serial code -- a warm '
+                         'start can land on sigma_2 where the two swap')
     ap.add_argument('--lattice-driver', dest='lattice_driver', choices=['on', 'off'], default='on',
                     help='--oracle lattice: the driver (rank 0) computes a share of every batch')
     ap.add_argument('--oracle-nvec', dest='oracle_nvec', type=int, default=3,
@@ -2272,7 +2276,7 @@ def main():
         import lattice as _lat_mod                # its settings go to the ranks with every context (mpipool)
         _lat_mod.LU_CAP = int(a.lattice_cap); _lat_mod.FOLLOW_TOL = float(a.lattice_tol)
         _lat_mod.SWEEP_LEVEL = int(a.lattice_sweep); _lat_mod.ROW_REACH = float(a.lattice_reach)
-        _lat_mod.LINE_K = int(a.lattice_k)
+        _lat_mod.LINE_K = int(a.lattice_k); _lat_mod.WARM_NCV = int(a.lattice_warm)
     certified_norm.rtol = float(a.cert_rtol)      # BEFORE the start certification: one tolerance for every certified value of a run
     global REDUCED_CERT
     REDUCED_CERT = a.reduced_cert
@@ -3378,10 +3382,16 @@ def main():
                 return _ac_orig_l(arow_, nvec_, K_, b_, c_, eps=eps, wlo=wlo, whi=whi, eigs_seen=eigs_seen)
             r_ = _lat.line(_lat.design_raw(arow_, nvec_, K_, pos_[0], pos_[1]), eps,
                            0.0 if wlo is None else max(0.0, wlo), D.stab_whi if whi is None else whi, reach=-np.inf)
+            if not np.isfinite(r_['alpha']):                # no eigenvalue verified anywhere: the serial certificate
+                return _ac_orig_l(arow_, nvec_, K_, b_, c_, eps=eps, wlo=wlo, whi=whi, eigs_seen=eigs_seen)
             if eigs_seen is not None:
                 eigs_seen.extend(r_['seen'])
             lam_ = r_['witness'] if r_['witness'] is not None else max(r_['seen'], key=lambda l_: l_.real, default=None)
-            return float(r_['alpha']), lam_, None, None, D.cl(b_, c_), bool(r_['clear'])
+            # an INCONCLUSIVE line (no witness, a gap left) reports alpha = +inf: every
+            # caller then refuses -- the continuation gate's midpoint test reads alpha
+            # only, and the rightmost eigenvalue seen says nothing about the gap
+            al_ = float(r_['alpha']) if (r_['clear'] or r_['witness'] is not None) else np.inf
+            return al_, lam_, None, None, D.cl(b_, c_), bool(r_['clear'])
         D.alpha_certified = _ac_lattice
     if a.oracle == 'reduced':
         # MEMOISE the closed-loop abscissa certificate per design: the SQP's
