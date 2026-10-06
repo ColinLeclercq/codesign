@@ -4619,7 +4619,7 @@ def main():
         if not newf and not (_progress if a.converge else improved):
             # nothing new to add and no progress: enlarge Omega with the peaks
             # of the CURRENT best design instead, then stop if still nothing
-            if _ro is not None:
+            if _ro is not None or _lat is not None:
                 # the best design was certified when it was accepted; its peak list
                 # (reduced fine sweep + full peak reference) is _peaks_of_best --
                 # a second full certificate only to list them (level set, all-w,
@@ -4863,11 +4863,11 @@ def main():
             except Exception as _e:
                 print(f"winding certificate failed non-fatally: {_e!r}",
                       flush=True)
-    if _ro is not None and _ro.dim > 0:
+    if (_ro is not None and _ro.dim > 0) or _lat is not None:
         # the record's value is the CERTIFIED gbest (and the all-w certificate
         # below); D.hinf's seeded Newton with finite differences (tens of full
         # factorisations) only fed max(gam, gbest) and the active count, which
-        # the reduced gain curve below gives (STAGE6 6.29)
+        # the reduced (or lattice) gain curve below gives (STAGE6 6.29)
         gam, clh, nact = float(gbest), D.cl(b, c), None
     else:
         gam, _, _, clh, _, nact = D.hinf(arow, nvec, K, b, c)
@@ -4892,7 +4892,15 @@ def main():
             _clg = _ro.make_cl(b, c, D.r, D.mc); _gain_model = 'reduced'
         except Exception:
             _clg = clh
-    gain = _sigmas(_clg, ws, arow, nvec, K)
+    if _lat is not None:
+        # --oracle lattice: the full model on the ranks, at the lattice points of
+        # 2^-6 on the band (w >= 0: real plant) -- serially here it was ~1700
+        # factorisations (37 min on the test plant, hours on the full mesh)
+        ws = _lat.grid(max(float(a.wlo), 0.0), float(a.whi), 6)
+        gain = _lat.sigmas(zbest, ws)
+        _gain_model = 'full (lattice)'
+    else:
+        gain = _sigmas(_clg, ws, arow, nvec, K)
     if nact is None:                          # local maxima within 2e-3 of the top (D.hinf's tol_active)
         _i = np.arange(1, len(gain) - 1)
         _loc = _i[(gain[_i] >= gain[_i - 1]) & (gain[_i] >= gain[_i + 1])]
