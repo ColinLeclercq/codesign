@@ -5,8 +5,19 @@
 # NOTE: no `set -u` anywhere near the conda activation — the site's older
 # anaconda conda.sh references an unbound PS1 and aborts under `set -u`.
 
+# Two sites (user, 2026-10-07): on sator the env lives at a path and conda
+# comes from the anaconda module; elsewhere the named env `codesign`.
+case "$(hostname)" in
+    *sator*) SATOR=1 ;;
+    *)       SATOR=0 ;;
+esac
+
 module purge
-module load python/3.8.14-intel2220     # site module (compilers / MPI libs)
+if [ "$SATOR" = 1 ]; then
+    module load anaconda/2021.05           # provides conda on sator
+else
+    module load python/3.8.14-intel2220    # site module (compilers / MPI libs)
+fi
 
 # conda AFTER the module: its python (3.12) then takes precedence on PATH.
 source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -21,7 +32,11 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 # sbatch defaults to --export=ALL, so a job submitted from such a shell
 # inherits it.  Deactivating first makes the activate real in every case.
 conda deactivate 2>/dev/null || true
-conda activate codesign
+if [ "$SATOR" = 1 ]; then
+    conda activate /tmp_user/sator/cleclerc/envs/codesign
+else
+    conda activate codesign
+fi
 
 # stop ~/.local (python3.8 site-packages) from shadowing the conda env
 export PYTHONNOUSERSITE=1
