@@ -596,6 +596,9 @@ smoke test, 96 ranks at once on one node):
 - 3 MPI ranks against serial: rows 7e-13 (sigma ~750), gradients 4e-12, followed rows 5e-13, alpha 5e-15. The previous code's 3-rank run gives the same numbers against its own serial run: rounding on the worker ranks, not the change.
 - Synthetic peaks (`_follow` driven as `_drive` does; Lorentzian, Gaussian and tilted peaks, 3000 cold starts and 1500 x 8 drifting designs; the previous sequential walk for comparison). Waves per member: 3.85 cold, 2.68 drifting, against 10.6 and 7.5. Points: 11.5 and 8.7, against 10.6 and 7.5. Bracketed within the walk: 94 % and 95 %, against 62 % and 66 %. Largest deficit 3.5e-6 in both versions: the Hermite estimate, not the walk. A four-point jump (with a constant-step walk) cost 12.9 points for 3.62 waves, against 11.5 for 3.70 with two points, so two points.
 - GL frozen path bit-identical (10.23128516441147).
+- End to end (2 ranks, cap 8; the sandbox thrashes, so the times say little about the cluster):
+  - SISO order 10, zero start, round 0: 1464.37 -> **1077.62** certified, in 23 evaluations and ~2000 s. The previous code gave 1091.07 in 26 evaluations and 2388 s. Iterations 0-4 are identical; from iteration 5 the followed rows sit on other lattice points of the same tops. The line took at most 1 wave per evaluation.
+  - From the 804.77 checkpoint with `--sqp-partial-shrink on` and `RETIRE=0.95:1` (one round, to exercise the code): after the first step (alpha 1/16) the radius went 2.56 -> 0.32. The next steps were taken at alpha 1/2: smax 797.61 -> 755.06 -> 734.20 -> ... -> 665.78 in 10 iterations. The previous code from the same checkpoint (box radius 2.56 kept) went 797.61 -> 794.02 at alpha 1/32-1/16. Certified **666.04** (round 0: 35 evaluations, 2930 s). Retirement: 16 of 38 members below 0.95 gamma, retired -> |Omega| = 22.
 
 ## 9. Open items
 
