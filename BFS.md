@@ -621,6 +621,20 @@ smoke test, 96 ranks at once on one node):
   - One reading: with the radius cut to 2 alpha |d| at every partial step, the box becomes too small for the linearised stability rows. The elastic slacks and the steered penalty then grow until the QP fails.
 - The A/B did not start. The two `SHRINK=0` jobs (765398 SISO, 765400 central) found the 20261008a runs' directories and refused, as designed. Only `SHRINK=1` SISO (765399, `_shr`) runs: 1078.44, 726.39, 704.29 after rounds 0-2. 20261008a had 691.79 after round 2, but 20261008c also has the slope sweep, so the paths differ.
 - 765399 (20261008c, `SHRINK=1`, SISO) after 2.2 h: 1078.44, 726.39, 704.29, 689.10, 685.32, then 685.302, 685.283, 685.282 with "stalled solve" in rounds 5-7. No refusals in 8 rounds (the slope sweep added 5-13 members a round; |Omega| 59). The October 6 code was at 670.6 after round 5 and went on to 632.2. So the shrink stalls again, now with the missed-peak fix in. The `SHRINK=0` arm (three jobs, launched in a new directory on 2026-10-08 17:xx) is the comparison.
+
+*20261008c, the default (`SHRINK=0`) against `SHRINK=1` (read 2026-10-08 22:00)*
+
+| run | result | rounds, wall | inner codes | October 6 code |
+|---|---|---|---|---|
+| SISO, `SHRINK=0` (765568) | **641.52** | 13, 1.75 h | 0 in 8 of 13 rounds, 12 twice | 632.24 (19 rounds, 7.8 h) |
+| SISO, `SHRINK=1` (765399) | 685.28, fixed point | 12, 3.2 h | 12 in every round from 5 on | -- |
+| decentral, `SHRINK=0` (765570) | 605.97, progress rule | 6, 1.9 h | 4 in every round (budget), stat 11-36 | 547.30 (12 rounds, 7.6 h) |
+| central, `SHRINK=0` (765569) | 474.85 after 9 rounds, running | 2.9 h so far | -- | (145.80: resumed from the reduced run's 173.77) |
+
+- The A/B settles the trust radius. The same code and start reach 641.52 without the shrink and stall at 685.28 with it, where every round from 5 on ends on a failed subproblem (code 12). The shrink stays off.
+- SISO without it: 641.52 against the October 6 code's 632.24, at 1/4.5 of the time, with 8 of its 13 rounds ending stationary on Omega (code 0). That is another local minimum, not a stall.
+- Decentral: 605.97 against 547.30. The paths split at round 1 (623.94 against 602.0). Rounds 2-5 each gained 0.01-0.03 % with the inner budget spent (code 4, stat 11-36: not stationary), so the progress rule (3 rounds below 0.15 %) stopped it. The October 6 decentral run had a 3.9 % jump at round 4 (590.5 -> 567.6) that this one did not get.
+- Central: 145.80 is not comparable to a cold start. It is the end of 49 reduced-model rounds (173.77, 632 members) followed by 15 lattice rounds. The cold central run went 1040.66 -> 576.98 -> 533.09 -> ... -> 474.85 in 9 rounds.
 - Retirement: the two central runs are identical through round 3 (720.44). After it, the `_ret` run retired 8 of 47 members, its round 4 stalled after 13 evaluations, and round 5 made no progress, so the progress rule stopped it at 720.44. The run without retirement went on to 703.83 and then 660.40 in rounds 4-5. One pair of runs, but a clean one: retirement made things worse here, as on the reduced model.
 
 *Speed-ups (2026-10-08, sandbox, test plant; `tools/check_lattice.py` on the SISO record 752.96)*
