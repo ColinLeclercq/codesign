@@ -84,7 +84,7 @@ WARM_NCV = 0         # > 0: sigma_1 restarted from the last vector at the same p
                      # (kinks; the MIMO plateau) the restart vector lies along the new sigma_2 and a small subspace can
                      # converge there; cold, a row does not depend on its rank.  The line's disks are always cold.
 SWEEP_LEVEL = 5      # missed-peak sweep and the certificate's reference sweep on 2^-5
-TASK_COST = dict(row=1.0, value=1.0, value2=2.0, block=2.0, centre=3.0)   # relative costs of the requests
+TASK_COST = dict(row=1.0, value=1.0, slope=1.0, value2=2.0, block=2.0, centre=3.0)   # relative costs of the requests
 LU_COST = 2.0        # ... and of a factorisation (balancing, LatticeOracle._assign)
 
 _CACHE = {}          # complex shift key (closedloop's: complex(omega)) -> factor, LRU order
@@ -288,8 +288,8 @@ def eval_task(t):
     """Every evaluation of one rank in one wave: [(request)] -> results.
     Requests (LatticeOracle._drive): ('row', w) sigma_1, its slope and raw
     gradient; ('block', w) the sigma_2 block (and sigma_1's row); ('value', w)
-    sigma_1 alone; ('value2', w) sigma_1 and sigma_2; ('centre', eps, theta,
-    reach) a disk of the stability line."""
+    sigma_1 alone; ('slope', w) sigma_1 and its slope; ('value2', w) sigma_1
+    and sigma_2; ('centre', eps, theta, reach) a disk of the stability line."""
     dz, reqs = t
     t0 = time.perf_counter()
     d = _design(dz)
@@ -303,6 +303,9 @@ def eval_task(t):
             res = _block(d, dz, q[1])
         elif kind == 'value':
             res = dict(sigma=_gain(d, dz, q[1], vectors=False)['sigma'])
+        elif kind == 'slope':
+            r = _gain(d, dz, q[1])
+            res = dict(sigma=r['sigma'], gprime=r['gprime'])
         elif kind == 'value2':
             _note(complex(q[1]))
             P = d['cl'].gain_k(float(q[1]), dz['arow'], dz['nvec'], dz['K'], k=2)
@@ -696,16 +699,19 @@ class LatticeOracle:
                 blocks[i] = dict(sig=np.array(B['sig']), Gc=Gc)
         return s, Gs, blocks, tops, info, lr
 
-    def sigmas(self, z, ws, k=1):
+    def sigmas(self, z, ws, k=1, slope=False):
         """sigma_1 values (no vectors) at the lattice points ws; k = 2: the
-        pairs (sigma_1, sigma_2) as an (len(ws), 2) array."""
+        pairs (sigma_1, sigma_2) as an (len(ws), 2) array; slope: the pairs
+        (sigma_1, its slope in w)."""
         dz = self.design(z)
-        reqs = [('value' if k == 1 else 'value2', float(w)) for w in ws]
+        reqs = [('slope' if slope else ('value' if k == 1 else 'value2'), float(w)) for w in ws]
         R = {}
 
         def once():
             yield reqs
         self._drive(dz, {0: once()}, 'sweep', R)
+        if slope:
+            return np.array([(R[q]['sigma'], R[q]['gprime']) for q in reqs]).reshape(len(ws), 2)
         if k == 1:
             return np.array([R[q]['sigma'] for q in reqs])
         return np.array([(R[q]['sigma'], R[q]['sigma2']) for q in reqs]).reshape(len(ws), 2)

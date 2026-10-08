@@ -282,25 +282,46 @@ class Evaluator:
     def missed_peaks(self, z, t, ws, tol):
         """A-N on the reduced model: sweep sigma_1 on `ws` at z (cheap on the
         oracle), return the local maxima above t (1 + tol) not yet in W.
-        Lattice (full model): sigma_1 on the lattice level lattice.SWEEP_LEVEL of
-        the band, cached factors; a local maximum above t (1 + tol) away from
-        every member and followed top is a new member (followed from then on)."""
+        Lattice (full model): sigma_1 AND ITS SLOPE on the lattice level
+        lattice.SWEEP_LEVEL of the band (cached factors).  Between two points
+        where the slope goes from + to -, the cubic Hermite fit locates the top;
+        a top whose fit lies above t (1 + tol), away from every member and
+        followed top, is evaluated at its lattice point on 2^-ROW_LEVEL (one
+        more wave) and joins as a new member (followed from then on) if it is
+        above there too.  A grid point that is itself a local maximum above the
+        level counts likewise.  (2026-10-08: the values alone saw a peak only at
+        a grid point, and not at all next to a member that sits on one -- central
+        2x2, round 2: the top at 1.6376 rose 0.0126 from the fixed member 1.625,
+        between two sweep points, unseen by the SQP; the round was refused.)"""
         if self.lattice is not None:
             import lattice as _lt
             if _lt.SWEEP_LEVEL <= 0:
                 return []
             wg = self.lattice.grid(float(ws[0]), float(ws[-1]))
-            sv = self.lattice.sigmas(z, wg)
+            P = self.lattice.sigmas(z, wg, slope=True)
+            sv, sp = P[:, 0], P[:, 1]
             near = list(self.W) + list(self.w_star.values())
-            out = []
+            lev = t * (1.0 + tol)
+            free = lambda w_: all(abs(w_ - q) > 1e-3 for q in near)
+            cand = {}
             for i in range(len(wg)):
                 lo_ = sv[i - 1] if i > 0 else -np.inf
                 hi_ = sv[i + 1] if i + 1 < len(wg) else -np.inf
-                if sv[i] >= lo_ and sv[i] >= hi_ and sv[i] > t * (1.0 + tol) \
-                        and all(abs(float(wg[i]) - q) > 1e-3 for q in near):
-                    out.append((float(wg[i]), float(sv[i])))
+                if sv[i] >= lo_ and sv[i] >= hi_ and sv[i] > lev and free(float(wg[i])):
+                    cand[float(wg[i])] = float(sv[i])            # a grid point: evaluated already
+            for i in range(len(wg) - 1):
+                if sp[i] > 0.0 > sp[i + 1]:
+                    wt_, ft_, _ = _lt._hermite_top(float(wg[i]), float(wg[i + 1]), sv[i], sv[i + 1], sp[i], sp[i + 1])
+                    wr_ = _lt.snap(wt_, _lt.ROW_LEVEL)
+                    if ft_ > lev and free(wr_) and wr_ not in cand:
+                        cand[wr_] = None
+            todo = [w_ for w_, v_ in cand.items() if v_ is None]
+            if todo:
+                for w_, v_ in zip(todo, self.lattice.sigmas(z, todo)):
+                    cand[w_] = float(v_)
+            out = [(w_, v_) for w_, v_ in cand.items() if v_ > lev]
             self.refine_log.append(dict(t=float(t), gmax=float(sv.max()), wmax=float(wg[int(np.argmax(sv))]),
-                                        ok=True, above=bool(out), sweep=len(wg)))
+                                        ok=True, above=bool(out), sweep=len(wg), between=len(todo)))
             out.sort(key=lambda p_: -p_[1])
             return out
         if self.oracle is None:
