@@ -1729,7 +1729,7 @@ def main():
                          '(frozen) or on the projected one (reduced.py); lattice (BFS only, 2026-10-06): the full '
                          'model on the MPI ranks, its factors cached on a dyadic lattice of frequencies and line '
                          'shifts (lattice.py, BFS.md 5)')
-    ap.add_argument('--lattice-cap', dest='lattice_cap', type=int, default=16,
+    ap.add_argument('--lattice-cap', dest='lattice_cap', type=int, default=24,
                     help='--oracle lattice: plant factorisations kept per rank (least recently used dropped); '
                          'test plant 133 MB each, full mesh ~1.05 GB')
     ap.add_argument('--lattice-tol', dest='lattice_tol', type=float, default=1e-6,
@@ -1900,6 +1900,11 @@ def main():
                     help='retire and cap only from this outer round on; seeding runs from the start')
     ap.add_argument('--omega-floor', dest='omega_floor', type=int, default=30,
                     help='never retire below this many members')
+    ap.add_argument('--omega-retire', dest='omega_retire', default=None, metavar='FRAC:ROUNDS',
+                    help='--oracle lattice (2026-10-08): a member of Omega whose sigma_1 stays below FRAC x gamma at '
+                         'the accepted design for ROUNDS consecutive accepted rounds retires (never the certified '
+                         'peaks, the sigma_2-enrolled members, a recent refuter, the highest member), e.g. 0.95:3.  '
+                         'Off by default')
     ap.add_argument('--inner', choices=['pygranso', 'sqp'], default='pygranso',
                     help='note item 8: inner solver.  pygranso = frozen.  sqp = '
                          'sqp_inner.py (Clarabel subproblem, 2x2 block cones at '
@@ -1916,6 +1921,9 @@ def main():
                     help='item 2: closed-loop eigenvalues with Re >= -eps - reach get their own row in the SQP (reduced pencil)')
     ap.add_argument('--sqp-lmi', dest='sqp_lmi', choices=['on', 'off'], default='on',
                     help='compensator stability as a Lyapunov LMI in the SQP subproblem (r x r, any plant size); off = one row per pole')
+    ap.add_argument('--sqp-partial-shrink', dest='sqp_partial_shrink', choices=['on', 'off'], default='off',
+                    help='after a step accepted at alpha < 1 the trust radius becomes 2 alpha |d| (sqp_inner.'
+                         'PARTIAL_SHRINK; off = the frozen path, where only the double-pole face does this)')
     ap.add_argument('--sqp-trust', dest='sqp_trust', type=float, default=0.0,
                     help='initial box trust radius (0 = 0.05 |z0|)')
     ap.add_argument('--qp-solver', dest='qp_solver', choices=['osqp', 'daqp'],
@@ -2277,10 +2285,19 @@ def main():
         _lat_mod.LU_CAP = int(a.lattice_cap); _lat_mod.FOLLOW_TOL = float(a.lattice_tol)
         _lat_mod.SWEEP_LEVEL = int(a.lattice_sweep); _lat_mod.ROW_REACH = float(a.lattice_reach)
         _lat_mod.LINE_K = int(a.lattice_k); _lat_mod.WARM_NCV = int(a.lattice_warm)
+    _retire_frac = _retire_rounds = None
+    if a.omega_retire:
+        if a.oracle != 'lattice':
+            raise SystemExit("--omega-retire: --oracle lattice only (sigma_1 on the full model)")
+        _rf, _rr = a.omega_retire.split(':')
+        _retire_frac, _retire_rounds = float(_rf), int(_rr)
+        if not (0.0 < _retire_frac < 1.0 and _retire_rounds >= 1):
+            raise SystemExit("--omega-retire FRAC:ROUNDS with 0 < FRAC < 1 and ROUNDS >= 1")
     certified_norm.rtol = float(a.cert_rtol)      # BEFORE the start certification: one tolerance for every certified value of a run
     global REDUCED_CERT
     REDUCED_CERT = a.reduced_cert
     import sqp_inner as _sqi; _sqi.REDUCED_CERT = a.reduced_cert; _sqi.FOLLOW_SCAN = a.follow_scan; _sqi.PAIR_MANIFOLD = (a.sqp_pair_manifold == 'on'); _sqi.FIELD_KMAX2 = (a.field_kmax ** 2 if a.field_kmax else None); _sqi.FIELD_ORDER = a.field_order
+    _sqi.PARTIAL_SHRINK = (a.sqp_partial_shrink == 'on')
     certified_norm.enroll_rel = float(a.enroll_rel)
     if a.ctrl_line == 'eps':
         # Re <= -eps everywhere: the gate's allowance and every consumer of ctrl_max
@@ -3169,6 +3186,7 @@ def main():
     _born = {w: 0 for w in Omega}                       # round a member was added (never retire the young)
     _refuter = {}                                       # freq -> round it refuted a trial design
     _omega_log = []
+    _retire_streak = {}                                 # --omega-retire: member -> consecutive rounds below FRAC x gamma
     t0 = g0
     print(f"start gamma={g0:.6f}, |Omega|={len(Omega)}", flush=True)
     if a.resume and _resume_gamma is not None and a.resume_guard > 0 and g0 > a.resume_guard * _resume_gamma:
@@ -4626,6 +4644,47 @@ def main():
             print(f"    omega policy: +{len(_seeded)} satellites, -{len(_retire)} retired "
                   f"-> |Omega|={len(_kept)} ({len(_active)} active)", flush=True)
             Omega = sorted(_kept)
+        if _retire_frac is not None and improved:
+            # ---- RETIREMENT on the full model (--omega-retire FRAC:ROUNDS,
+            # lattice; 2026-10-08), after an ACCEPTED round only (the followed
+            # members sit on their tops at the candidate, which is then the
+            # accepted design; a refused round leaves the streaks as they are):
+            # sigma_1 at every member's lattice point -- a followed member's top
+            # (its lattice point at the bracket's level, recovered on 2^-16 from
+            # the 1e-6 rounding), the others on 2^-10, all of them points the
+            # last SQP evaluation factored; a member below FRAC x gamma for
+            # ROUNDS consecutive accepted rounds leaves Omega.  The streak
+            # follows a member that moved with its peak (the nearest member of
+            # last round within half the follow radius).  Never retired: the
+            # certified peaks of the accepted design, the sigma_2-enrolled
+            # members, a member that refuted a trial design within
+            # --omega-refuter-rounds, the highest member.  A peak that rises
+            # again is caught by the in-solve sweep and by the certificate, which
+            # add it back.
+            _Wr = sorted(Omega)
+            _sr = _lat.sigmas(zbest, [_lat_mod.snap(w_, _lat_mod.FOLLOW_LMAX if round(float(w_), 6) in _peakset
+                                                     else _lat_mod.ROW_LEVEL) for w_ in _Wr])
+            _prev = _retire_streak
+            _retire_streak = {}
+            for w_, s_ in zip(_Wr, _sr):
+                q_ = min(_prev, key=lambda x_: abs(x_ - w_)) if _prev else None
+                st_ = _prev[q_] if (q_ is not None and abs(q_ - w_) <= 0.5 * a.follow_radius) else 0
+                _retire_streak[w_] = st_ + 1 if s_ < _retire_frac * gbest else 0
+            _keep_r = set(round(float(x_), 6) for x_ in _peaks_of_best)
+            _keep_r |= set(round(float(x_), 6) for x_ in _sigma2_prev)
+            _keep_r |= {w_ for w_, r0 in _refuter.items() if (it + 1) - r0 < a.omega_refuter_rounds}
+            _keep_r.add(_Wr[int(np.argmax(_sr))])
+            _retired = {w_ for w_ in _Wr if _retire_streak[w_] >= _retire_rounds
+                        and all(abs(w_ - q_) > 1e-3 for q_ in _keep_r)}
+            if _retired:
+                Omega = [w_ for w_ in Omega if w_ not in _retired]
+                _peakset.difference_update(_retired)
+                for w_ in _retired:
+                    _retire_streak.pop(w_)
+            _omega_log.append(dict(round=it, kind='retire', retired=len(_retired), after=len(Omega),
+                                   below=int(sum(s_ < _retire_frac * gbest for s_ in _sr))))
+            print(f"    omega retire: {_omega_log[-1]['below']} of {len(_Wr)} member(s) below {_retire_frac:g} x gamma, "
+                  f"-{len(_retired)} retired after {_retire_rounds} accepted round(s) -> |Omega|={len(Omega)}", flush=True)
         if not newf and not (_progress if a.converge else improved):
             # nothing new to add and no progress: enlarge Omega with the peaks
             # of the CURRENT best design instead, then stop if still nothing
@@ -5082,7 +5141,7 @@ def main():
                 oracle=a.oracle,
                 stabilise=_stab_rec,
                 oracle_log=(_oracle_log if a.oracle == 'reduced' else None),
-                omega_log=(_omega_log if a.omega_policy == 'an' else None),
+                omega_log=(_omega_log if (a.omega_policy == 'an' or _retire_frac is not None) else None),
                 opt_tol=float(a.opt_tol),
                 select_cons=a.select_cons,
                 band_final=[float(a.wlo), float(a.whi)],

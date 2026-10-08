@@ -30,11 +30,14 @@
 #         draws (default 64, deterministic in SEED) into its own directory,
 #         e.g. testplant_bfs/hifoo_o10_s0_r300_i003; without --array the
 #         directory names are those above, entry 0)
-#   ORACLE=lattice LATTICE_CAP=16 ... sbatch ...
+#   ORACLE=lattice LATTICE_CAP=24 ... sbatch ...
 #        (the inner loop on the FULL model, lattice.py, BFS.md 5: every rank keeps
-#         up to LATTICE_CAP plant factors -- 133 MB each on the test plant, ~1.05 GB
-#         on the full mesh -- so give the job ranks x cap x that in memory; the
-#         directories get _lat, e.g. zero_m2p2_central_o10_lat_s0_r300)
+#         up to LATTICE_CAP plant factors (default 24) -- 133 MB each on the test
+#         plant, ~1.05 GB on the full mesh -- so give the job ranks x cap x that in
+#         memory; the directories get _lat, e.g. zero_m2p2_central_o10_lat_s0_r300)
+#   ORACLE=lattice RETIRE=0.95:3 ... sbatch ...
+#        (members of Omega below 0.95 gamma for 3 rounds retire, --omega-retire;
+#         the directories get _ret, e.g. zero_m2p2_central_o10_lat_ret_s0_r300)
 #
 # One start on the small test plant (n = 33,593, bfs/mesh_coarse.py), the
 # production path on 24 ranks (BFS.md 6): the start (KIND=zero: HIFOO's
@@ -60,7 +63,8 @@ SUF=""
 if [ "$MIMO" = 1 ]; then SUF="_m${M}p${P}_${STRUCT}"; fi
 if [ "$R" != 5 ]; then SUF="${SUF}_o$R"; fi
 if [ "${ORACLE:-reduced}" = lattice ]; then SUF="${SUF}_lat"; fi
-export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-16}
+if [ "${ORACLE:-reduced}" = lattice ] && [ -n "${RETIRE:-}" ]; then SUF="${SUF}_ret"; fi
+export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-24} RETIRE=${RETIRE:-}
 IDX=${SLURM_ARRAY_TASK_ID:-}                           # array job: the start index (catalogue entry)
 NSTART=${NSTART:-64}
 if [ -n "$IDX" ]; then

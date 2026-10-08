@@ -14,7 +14,9 @@ Checks, at the record's design:
           serial certificate, stability_and_abscissa): the same clear / not clear,
           the same rightmost eigenvalue, and its gradient row against the one
           from the serial eigenvectors (eigvecs_at);
-  reuse   the same calls at a design moved by 1e-4: waves, shifts, factorisations.
+  reuse   the same calls at a design moved by 1e-4 (the followed rows and the
+          line in one evaluation, as the SQP calls them): waves, shifts,
+          factorisations; the line again alone and from scratch.
 --out saves the numbers; --ref compares them with a saved run (MPI vs serial).
 """
 import sys, time, argparse
@@ -80,7 +82,7 @@ def direct(zz, w):
 # ---- rows
 W = np.array([0.0, 0.1, 0.25, 0.42, 0.79, 1.13, 1.31, 1.79, 2.35, 3.0, 5.0, 8.0])
 t0 = time.perf_counter()
-s, Gs, blocks, tops, info = lat.rows(z0, W)
+s, Gs, blocks, tops, info, _ = lat.evaluate(z0, W)
 t1 = time.perf_counter()
 dmax = gmax = 0.0
 for i, w in enumerate(W):
@@ -90,7 +92,7 @@ print(f"rows: {len(W)} fixed rows in {t1 - t0:.1f} s; vs the direct evaluation: 
       flush=True)
 out['rows_s'] = s; out['rows_G'] = Gs
 # sigma_2 blocks (the Clarke 2x2 rows) at two members
-_, _, blk, _, _ = lat.rows(z0, W[:3], enroll=(0, 2))
+_, _, blk, _, _, _ = lat.evaluate(z0, W[:3], enroll=(0, 2))
 arow_, nvec_, K_, xa_, xs_, _, _ = pk.unpack(z0)
 b_, c_, pa_, ps_, na_, ns_ = D.bc(xa_, xs_)
 clb = D.cl(b_, c_)
@@ -116,17 +118,18 @@ from peakfollow import follow as newton_follow
 Wf = np.array([float(ws[i]) for i in loc])
 fol = {round(float(w), 6): 0.1 for w in Wf}
 w_star, state = {}, {}
-t0 = time.perf_counter(); s2, G2, _, tops, info = lat.rows(z0, Wf, follow=fol, w_star=w_star, state=state); t1 = time.perf_counter()
+t0 = time.perf_counter(); s2, G2, _, tops, info, _ = lat.evaluate(z0, Wf, follow=fol, w_star=w_star, state=state); t1 = time.perf_counter()
 _, _, cl = direct(z0, 0.5)
 for i, w in enumerate(Wf):
     wt, rt = newton_follow(cl, float(w), *pk.unpack(z0)[:3], 0.1, nscan=21)
     k6 = round(float(w), 6)
     print(f"  follow {w:.4f}: lattice row at {w_star[k6]:.6f} (level {state[k6]['lvl']}) sigma {s2[i]:.9f}; "
           f"Newton top {wt:.6f} sigma {rt['sigma']:.9f}; deficit {(rt['sigma'] - s2[i]) / rt['sigma']:.1e}", flush=True)
-print(f"follow: {len(Wf)} members, {info['nev']} evaluations, {t1 - t0:.1f} s; largest Hermite deficit {info['deficit']:.1e}",
+print(f"follow: {len(Wf)} members, {info['nev']} evaluations in {info['waves']} waves, {t1 - t0:.1f} s; largest Hermite "
+      f"deficit {info['deficit']:.1e}",
       flush=True)
-t0 = time.perf_counter(); s3, _, _, _, info3 = lat.rows(z0, Wf, follow=fol, w_star=w_star, state=state); t1 = time.perf_counter()
-print(f"follow again (same design, warm starts): {info3['nev']} evaluations, {t1 - t0:.1f} s, rows' largest relative "
+t0 = time.perf_counter(); s3, _, _, _, info3, _ = lat.evaluate(z0, Wf, follow=fol, w_star=w_star, state=state); t1 = time.perf_counter()
+print(f"follow again (same design, warm starts): {info3['nev']} evaluations in {info3['waves']} waves, {t1 - t0:.1f} s, rows' largest relative "
       f"difference {np.max(np.abs(s3 - s2) / s2):.1e}", flush=True)
 out['follow_s'] = s2
 
@@ -157,17 +160,21 @@ out['line_alpha'] = L['alpha']; out['line_clear'] = L['clear']
 rng = np.random.default_rng(0)
 z1 = z0 + 1e-4 * rng.standard_normal(z0.shape) * np.maximum(np.abs(z0), 1e-2)
 n0, h0 = lat.counts()
-t0 = time.perf_counter(); s4, _, _, _, info4 = lat.rows(z1, W); t1 = time.perf_counter()
+t0 = time.perf_counter(); s4, _, _, _, info4, _ = lat.evaluate(z1, W); t1 = time.perf_counter()
 n1, h1 = lat.counts()
 print(f"moved design: {len(W)} fixed rows {t1 - t0:.1f} s, {n1 - n0} factorisations, {h1 - h0} cached", flush=True)
-t0 = time.perf_counter(); s5, _, _, _, info5 = lat.rows(z1, Wf, follow=fol, w_star=w_star, state=state); t1 = time.perf_counter()
+# the SQP's evaluation: followed rows and the line in the same waves
+t0 = time.perf_counter()
+s5, _, _, _, info5, L1 = lat.evaluate(z1, Wf, follow=fol, w_star=w_star, state=state, line=(a.eps, 0.0, a.whi))
+t1 = time.perf_counter()
 n2, h2 = lat.counts()
-print(f"moved design: {len(Wf)} followed rows, {info5['nev']} evaluations {t1 - t0:.1f} s, {n2 - n1} factorisations, "
-      f"{h2 - h1} cached", flush=True)
-t0 = time.perf_counter(); L1 = lat.line(z1, a.eps, 0.0, a.whi); t1 = time.perf_counter()
-n3, h3 = lat.counts()
-print(f"moved design: line clear {L1['clear']}, alpha {L1['alpha']:+.10f}, {L1['nshift']} shifts in {L1['waves']} waves, "
-      f"{t1 - t0:.1f} s, {n3 - n2} factorisations, {h3 - h2} cached", flush=True)
+print(f"moved design, rows and line together: {len(Wf)} followed rows ({info5['nev']} evaluations), line clear "
+      f"{L1['clear']}, alpha {L1['alpha']:+.10f}, {L1['nshift']} shifts; {info5['waves']} waves, {t1 - t0:.1f} s, "
+      f"{n2 - n1} factorisations, {h2 - h1} cached", flush=True)
+lat.line_prev.clear()
+L2 = lat.line(lat.design_raw(*pk.unpack(z1)[:5]), a.eps, 0.0, a.whi, eps_int=1e-5)
+print(f"moved design, line alone from scratch: clear {L2['clear']}, alpha {L2['alpha']:+.10f}, {L2['nshift']} shifts in "
+      f"{L2['waves']} waves", flush=True)
 print(lat.report(), flush=True)
 out['moved_alpha'] = L1['alpha']
 if a.out:

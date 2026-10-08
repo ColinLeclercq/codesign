@@ -40,6 +40,10 @@ PAIR_ON_LINE = 1e-6     # or: both poles within this of the line, any separation
 ALPHA_WARM = True       # line search starts at 2 x the last accepted alpha (2026-09-25)
 PAIR_BALL = True        # on S: 2-norm trust region shrunk to the accepted step (measured: 7.8241 -> 7.7943 in 25 iterations / 71
                         # evaluations at the stalled ne=200 point; box, no shrink: 7.8236 in 113)
+PARTIAL_SHRINK = False  # everywhere (not only on S): after a step accepted at alpha < 1 the radius becomes 2 alpha |d|, the
+                        # region the line search found the model good for (--sqp-partial-shrink; off: the frozen GL path.
+                        # 2026-10-08: the SISO lattice run spent 5-8 evaluations per SQP iteration in its last rounds,
+                        # against 2-3 in its first -- line-search trials of steps the box kept proposing at its corner)
 PAIR_EXIT_TOL = 1e-2    # release S at an S-stationary point when the pair is inside and |mu_b| > this (duals of the rows sum to 1;
                         # 6.7e-4 released at ne=200 and 200 evaluations in the pole regime gained nothing)
 PEN_STEER = 6           # adaptive penalty: at most this many x10 steering increases per QP
@@ -369,10 +373,11 @@ class Evaluator:
             # THE FULL MODEL ON THE LATTICE (lattice.py, BFS.md 5): every row on
             # the MPI ranks holding its factor; followed members by bracket and
             # refine (the row is an exact value at a lattice point); sigma_2
-            # blocks at the row point
-            s, Gs, blocks, _tops_l, _info_l = self.lattice.rows(
+            # blocks at the row point.  The stability line in the same waves
+            s, Gs, blocks, _tops_l, _info_l, _lr_l = self.lattice.evaluate(
                 z, W, follow=self.follow, w_star=self.w_star, state=self.follow_state,
-                enroll=(self.enroll if self.kink_block else ()))
+                enroll=(self.enroll if self.kink_block else ()),
+                line=(self.eps, 0.0, float(getattr(D, 'stab_whi', 10.0))))
             self.lat_info.append(_info_l)
         else:
             m = len(W)
@@ -565,10 +570,11 @@ class Evaluator:
         pairs = []
         al_line = None
         if self.lattice is not None:
-            # the stability line swept on the full model in waves (lattice.line):
-            # clr is the certificate itself, the rows are the exact eigenvalues
-            # within ROW_REACH of the line with their left/right gradients
-            lr = self.lattice.line(z, self.eps, 0.0, float(getattr(D, 'stab_whi', 10.0)))
+            # the stability line swept on the full model in waves (beside the
+            # rows, above): clr is the certificate itself, the rows are the exact
+            # eigenvalues within ROW_REACH of the line with their left/right
+            # gradients
+            lr = _lr_l
             clr = bool(lr['clear']); al_line = float(lr['alpha'])
             pairs = [dict(lam=r_['lam'], g=np.asarray(pk.grad(r_['g']), float), eta=r_['eta'], theta=r_['theta'],
                           rank=r_['rank']) for r_ in lr['rows']]
@@ -1316,8 +1322,9 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         # ... but not where the radius itself is shrunk to the accepted step (the
         # pair's face): there the radius is the memory, and a warm alpha < 1 on
         # top of it ratcheted both down (ne=100 round 11: radius 2.5e-7, alpha
-        # never back to 1; the same design from alpha = 1 moved 7.9285 -> 7.8808)
-        _shrinking = PAIR_BALL and ev_fn.pair_mode
+        # never back to 1; the same design from alpha = 1 moved 7.9285 -> 7.8808),
+        # nor anywhere with PARTIAL_SHRINK (the same ratchet)
+        _shrinking = (PAIR_BALL and ev_fn.pair_mode) or PARTIAL_SHRINK
         alpha, accepted = (min(1.0, 2.0 * _alpha_prev) if (ALPHA_WARM and not _shrinking) else 1.0), False
         _a0 = alpha
         for _ls in range(8):
@@ -1415,7 +1422,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                 ev_fn.pair_mode = True; z = _zp
                 path.append(z.copy())
                 e = ev_fn(z); t = max(t, e['smax']); _alpha_prev = 1.0
-        if PAIR_BALL and ev_fn.pair_mode and alpha < 1.0:
+        if (PARTIAL_SHRINK or (PAIR_BALL and ev_fn.pair_mode)) and alpha < 1.0:
             # the line search found where the model holds: a radius of twice the
             # accepted step (2 alpha failed), so the next QP picks its direction
             # for the region it can use instead of a box corner cut by alpha

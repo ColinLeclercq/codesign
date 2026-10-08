@@ -19,8 +19,10 @@
 #   ORACLE    the inner loop's model: reduced (default; the projected model) or lattice (2026-10-06:
 #             the FULL model on the MPI ranks, its factors cached on a lattice of frequencies and
 #             line shifts, lattice.py, BFS.md 5)
-#   LATTICE_CAP  with ORACLE=lattice: plant factorisations kept per rank (default 16; 133 MB each on
+#   LATTICE_CAP  with ORACLE=lattice: plant factorisations kept per rank (default 24; 133 MB each on
 #             the test plant, ~1.05 GB on the full mesh -- size the ranks per node accordingly)
+#   RETIRE    with ORACLE=lattice: FRAC:ROUNDS, members of Omega below FRAC x gamma for ROUNDS
+#             rounds retire (--omega-retire, e.g. 0.95:3); unset = Omega only grows
 #
 # The flags are the nominal SISO set of the GL production (STAGE6, the K+B+C
 # runs: SQP inner solve, reduced oracle, slope-climb certificate, progress
@@ -57,7 +59,9 @@ STAB=()
 [ "${STABILISE:-1}" = "1" ] && STAB=(--stabilise)
 ORC=(--oracle reduced --oracle-inputs on --row-workers mpi --oracle-union new)
 if [ "${ORACLE:-reduced}" = "lattice" ]; then
-    ORC=(--oracle lattice --lattice-cap "${LATTICE_CAP:-16}")
+    # the trust radius shrinks to 2 alpha |d| after a partial step (sqp_inner.PARTIAL_SHRINK)
+    ORC=(--oracle lattice --lattice-cap "${LATTICE_CAP:-24}" --sqp-partial-shrink on)
+    if [ -n "${RETIRE:-}" ]; then ORC+=(--omega-retire "$RETIRE"); fi
 elif [ "${ORACLE:-reduced}" != "reduced" ]; then
     echo "run_bfs.sh: ORACLE must be reduced or lattice (got ${ORACLE})"; exit 2
 fi
