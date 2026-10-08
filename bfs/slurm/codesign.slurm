@@ -28,6 +28,9 @@
 #         up to LATTICE_CAP plant factors (default 16) -- 133 MB each on the test
 #         plant, ~1.05 GB on the full mesh -- so give the job ranks x cap x that in
 #         memory; the directories get _lat, e.g. zero_m2p2_central_o10_lat_s0_r300)
+#   ORACLE=lattice SHRINK=1 ... sbatch ...
+#        (trust radius 2 alpha |d| after a partial step, --sqp-partial-shrink on;
+#         off by default since 20261008c; the directories get _shr)
 #   ORACLE=lattice RETIRE=0.95:3 ... sbatch ...
 #        (members of Omega below 0.95 gamma for 3 rounds retire, --omega-retire;
 #         the directories get _ret, e.g. zero_m2p2_central_o10_lat_ret_s0_r300)
@@ -74,7 +77,8 @@ if [ "$MIMO" = 1 ]; then SUF="_m${M}p${P}_${STRUCT}"; fi
 if [ "$R" != 5 ]; then SUF="${SUF}_o$R"; fi
 if [ "${ORACLE:-reduced}" = lattice ]; then SUF="${SUF}_lat"; fi
 if [ "${ORACLE:-reduced}" = lattice ] && [ -n "${RETIRE:-}" ]; then SUF="${SUF}_ret"; fi
-export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-16} RETIRE=${RETIRE:-}
+if [ "${ORACLE:-reduced}" = lattice ] && [ "${SHRINK:-0}" = 1 ]; then SUF="${SUF}_shr"; fi
+export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-16} RETIRE=${RETIRE:-} SHRINK=${SHRINK:-0}
 TAG=K_B_C_s0_bfs                                       # the driver's record name
 if [ "$MIMO" = 1 ]; then TAG=K_B_C_s0_bfs_mimo${M}x${P}_${STRUCT}; fi
 NAME=$(printf "%s_%03d" "$KIND" "$IDX")

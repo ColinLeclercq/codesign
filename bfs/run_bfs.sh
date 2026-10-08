@@ -21,6 +21,8 @@
 #             line shifts, lattice.py, BFS.md 5)
 #   LATTICE_CAP  with ORACLE=lattice: plant factorisations kept per rank (default 24; 133 MB each on
 #             the test plant, ~1.05 GB on the full mesh -- size the ranks per node accordingly)
+#   SHRINK    with ORACLE=lattice: 1 = trust radius 2 alpha |d| after a partial step
+#             (--sqp-partial-shrink on; default 0 since 20261008c)
 #   RETIRE    with ORACLE=lattice: FRAC:ROUNDS, members of Omega below FRAC x gamma for ROUNDS
 #             rounds retire (--omega-retire, e.g. 0.95:3); unset = Omega only grows
 #
@@ -59,8 +61,11 @@ STAB=()
 [ "${STABILISE:-1}" = "1" ] && STAB=(--stabilise)
 ORC=(--oracle reduced --oracle-inputs on --row-workers mpi --oracle-union new)
 if [ "${ORACLE:-reduced}" = "lattice" ]; then
-    # the trust radius shrinks to 2 alpha |d| after a partial step (sqp_inner.PARTIAL_SHRINK)
-    ORC=(--oracle lattice --lattice-cap "${LATTICE_CAP:-24}" --sqp-partial-shrink on)
+    # SHRINK=1: the trust radius shrinks to 2 alpha |d| after a partial step
+    # (sqp_inner.PARTIAL_SHRINK).  Off by default since 20261008c: on in 20261008a,
+    # the four cluster runs stalled (code 6, "stalled solve") from round 3-6 on at
+    # values the October 6 code went well below (BFS.md 8)
+    ORC=(--oracle lattice --lattice-cap "${LATTICE_CAP:-24}" --sqp-partial-shrink "$([ "${SHRINK:-0}" = 1 ] && echo on || echo off)")
     if [ -n "${RETIRE:-}" ]; then ORC+=(--omega-retire "$RETIRE"); fi
 elif [ "${ORACLE:-reduced}" != "reduced" ]; then
     echo "run_bfs.sh: ORACLE must be reduced or lattice (got ${ORACLE})"; exit 2
