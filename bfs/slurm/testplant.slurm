@@ -83,9 +83,22 @@ if [ "$MIMO" = 1 ]; then TAG=K_B_C_s0_bfs_mimo${M}x${P}_${STRUCT}; fi
 OPS=bfs/data/ops_coarse.npz
 echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none}  $(date -Is)  $KIND start $IDX, ${M}x${P} $([ "$MIMO" = 1 ] && echo "$STRUCT "), order $R, $OUTER rounds -> $OUT ==="
 python -c "import clarabel, qdldl, matplotlib" || { echo "*** clarabel / qdldl / matplotlib missing: run bash bfs/setup_cluster.sh on the login node"; exit 1; }
+# The plant's files are built once per code directory, by the first job that
+# needs them; the others WAIT on the lock (2026-10-08: jobs 765560-765562,
+# submitted together into a fresh directory, built bfs/data/coarse at the same
+# time and corrupted each other's mesh.h5 -- "file signature not found",
+# "Failed to read HDF5 data").  A half-written mesh from such a crash is
+# rebuilt: the mesh is trusted only when its two .h5 files open and its
+# baseflow.npz loads, the operators only when they load.
+mkdir -p bfs/data
+exec 9>bfs/data/.build.lock
+flock 9
 if ! python -c "import numpy as np, sys; sys.exit(0 if 'shear_S_data' in np.load('$OPS').files else 1)" 2>/dev/null; then
     echo "=== test plant operators (missing or without the shear trace) ==="
-    [ -f bfs/data/coarse/mesh.xdmf ] || python bfs/mesh_coarse.py
+    if ! python -c "import h5py, numpy as np; [h5py.File(f'bfs/data/coarse/{f}.h5', 'r') for f in ('mesh', 'facets')]; np.load('bfs/data/coarse/baseflow.npz')" 2>/dev/null; then
+        rm -rf bfs/data/coarse
+        python bfs/mesh_coarse.py
+    fi
     python bfs/ops_dolfinx.py --data bfs/data/coarse --baseflow baseflow.npz --out "$OPS"
     rm -f bfs/data/ops_coarse_range*.npz
 fi
@@ -93,6 +106,7 @@ if [ ! -f bfs/data/ops_coarse_range.npz ]; then
     echo "=== the test plant's certified range and poles (bfs/plant_cert.py) ==="
     time $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/plant_cert.py --ops "$OPS"
 fi
+flock -u 9
 # NEVER delete a run (2026-10-06: CONTINUE=1, codesign.slurm's word, was not
 # read here, and the directory of a 12.5 h run was started over): RESUME=1 or
 # CONTINUE=1 continues it; without them a directory holding a run is refused,
