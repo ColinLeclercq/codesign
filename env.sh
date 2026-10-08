@@ -7,10 +7,15 @@
 
 # Two sites (user, 2026-10-07): on sator the env lives at a path and conda
 # comes from the anaconda module; elsewhere the named env `codesign`.
+# Sator is recognised by that path, not by the hostname: only the login nodes
+# are called sator* -- job 764742 on compute node n1380 took the other branch
+# and could not find the named env.
+SATOR_ENV=/tmp_user/sator/cleclerc/envs/codesign
 case "$(hostname)" in
     *sator*) SATOR=1 ;;
     *)       SATOR=0 ;;
 esac
+[ -d "$SATOR_ENV" ] && SATOR=1
 
 module purge
 if [ "$SATOR" = 1 ]; then
@@ -33,7 +38,7 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 # inherits it.  Deactivating first makes the activate real in every case.
 conda deactivate 2>/dev/null || true
 if [ "$SATOR" = 1 ]; then
-    conda activate /tmp_user/sator/cleclerc/envs/codesign
+    conda activate "$SATOR_ENV"
 else
     conda activate codesign
 fi
