@@ -23,6 +23,8 @@
 #             the test plant, ~1.05 GB on the full mesh -- size the ranks per node accordingly)
 #   SHRINK    with ORACLE=lattice: 1 = trust radius 2 alpha |d| after a partial step
 #             (--sqp-partial-shrink on; default 0 since 20261008c)
+#   LATTICE_K with ORACLE=lattice: eigenvalues per disk centre of the line, each with its
+#             stability row (--lattice-k; default 1)
 #   RETIRE    with ORACLE=lattice: FRAC:ROUNDS, members of Omega below FRAC x gamma for ROUNDS
 #             rounds retire (--omega-retire, e.g. 0.95:3); unset = Omega only grows
 #
@@ -67,6 +69,10 @@ if [ "${ORACLE:-reduced}" = "lattice" ]; then
     # values the October 6 code went well below (BFS.md 8)
     ORC=(--oracle lattice --lattice-cap "${LATTICE_CAP:-24}" --sqp-partial-shrink "$([ "${SHRINK:-0}" = 1 ] && echo on || echo off)")
     if [ -n "${RETIRE:-}" ]; then ORC+=(--omega-retire "$RETIRE"); fi
+    # LATTICE_K=2: the two nearest eigenvalues per disk centre, each with its
+    # stability row (default 1; an eigenvalue behind another, seen from the
+    # line, then gets a row too)
+    ORC+=(--lattice-k "${LATTICE_K:-1}")
 elif [ "${ORACLE:-reduced}" != "reduced" ]; then
     echo "run_bfs.sh: ORACLE must be reduced or lattice (got ${ORACLE})"; exit 2
 fi

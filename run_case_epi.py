@@ -3735,7 +3735,9 @@ def main():
                 _li = inner_stats['lattice']
                 print(f"    lattice: {_li['evaluations']} evaluations, {_li['gain_evals']} sigma evaluations, largest bracket "
                       f"deficit {_li['deficit_max']:.1e}; line {_li['line_shifts']} shifts (at most {_li['line_waves_max']} waves, "
-                      f"{_li['line_not_clear']} not clear), up to {_li['stab_rows_max']} stability rows", flush=True)
+                      f"{_li['line_not_clear']} not clear), up to {_li['stab_rows_max']} stability rows; "
+                      f"{_li['stab_cuts']} trial(s) cut back inside the line, {_li['stab_cuts_unseen']} of them by an "
+                      f"eigenvalue without a row at the iterate", flush=True)
             # STALL RECOVERY (2026-09-25): a solve that ended on a collapsed radius
             # (code 6) or with failed subproblems hands its quasi-Newton matrix and
             # radius to the next round no more.  The ne=100 K+B+C run sat at

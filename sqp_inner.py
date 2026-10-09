@@ -590,6 +590,7 @@ class Evaluator:
         clr = True
         pairs = []
         al_line = None
+        lat_eigs = None                  # lattice: (eigenvalues with a row, eigenvalues the line saw, witness)
         if self.lattice is not None:
             # the stability line swept on the full model in waves (beside the
             # rows, above): clr is the certificate itself, the rows are the exact
@@ -597,6 +598,7 @@ class Evaluator:
             # gradients
             lr = _lr_l
             clr = bool(lr['clear']); al_line = float(lr['alpha'])
+            lat_eigs = ([complex(r_['lam']) for r_ in lr['rows']], [complex(l_) for l_ in lr['seen']], lr['witness'])
             pairs = [dict(lam=r_['lam'], g=np.asarray(pk.grad(r_['g']), float), eta=r_['eta'], theta=r_['theta'],
                           rank=r_['rank']) for r_ in lr['rows']]
             if self.cl_block and len(pairs) >= 2:
@@ -769,7 +771,7 @@ class Evaluator:
                     pos_rows=pos_rows,
                     al=float(al), ga=ga, clr=bool(clr), al_rows=al_rows_qp, al_rows_all=al_rows,
                     al_ctrl=al_ctrl, al_ctrl_rest=al_ctrl_rest, ctrl_rows=ctrl_rows, lmi=lmi, hermite=hermite, pair=pair,
-                    hermite_cl=hermite_cl, z=z.copy())
+                    hermite_cl=hermite_cl, lat_eigs=lat_eigs, z=z.copy())
 
     def _closed_loop_block(self, pr2, cl, clf, clg, arow, nvec, K, xa, xs, pa, ps, na, ns, flags, NZ):
         """Hermite data for the two rightmost near-line closed-loop eigenvalues.
@@ -1150,6 +1152,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         return sub_, st_
 
     _Ec = [None]; n_soc = [0]; n_ctrl_cut = [0]; n_stab_cut = [0]
+    n_stab_unseen = [0]                # of those: the crossing eigenvalue had no stability row at the iterate
     def _ctrl_restore(zn_, en_):
         """SECOND-ORDER CORRECTION on the compensator (pen_adapt; 2026-10-05): a
         step along the linearised boundary Re lambda(A_c) = lim leaves it at
@@ -1303,6 +1306,26 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         return float(ev_fn.w_star.get(round(w0_, 6), w0_))
 
     _alpha_prev = 1.0; _last_pair_mu = None
+
+    def _had_row(e_, en_):
+        # DIAGNOSTIC (2026-10-08, the cold central run: up to 131 of 156 trials of
+        # a round crossed the closed loop's line): did the eigenvalue that made
+        # the trial inadmissible have a stability row at the iterate it left?
+        # The trial's offender is the line's witness, else its rightmost seen
+        # eigenvalue; "had a row" = within 0.05 of a row eigenvalue of e_ (or
+        # its conjugate).  No row = the QP could not see it coming (one
+        # eigenvalue per disk, ROW_REACH).
+        if not e_.get('lat_eigs') or not en_.get('lat_eigs'):
+            return True
+        rows0 = e_['lat_eigs'][0]
+        w_ = en_['lat_eigs'][2]
+        if w_ is None:
+            seen_ = en_['lat_eigs'][1]
+            if not seen_:
+                return True
+            w_ = max(seen_, key=lambda l_: l_.real)
+        return any(min(abs(w_ - q), abs(w_ - np.conj(q))) < 0.05 for q in rows0)
+
     def _tnorm(v):
         # the trust region's norm: the ball on the pair's face (PAIR_BALL), else the box
         if PAIR_BALL and ev_fn.pair_mode:
@@ -1383,6 +1406,8 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                 # eigenvalue to -0.0496, across the line at -0.05, for a sigma
                 # decrease that outweighed the penalty)
                 n_stab_cut[0] += 1
+                if not _had_row(e, en):
+                    n_stab_unseen[0] += 1
                 alpha *= 0.5
                 continue
             if DEBUG_LS:
@@ -1582,6 +1607,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                                line_shifts=int(sum(l_['nshift'] for l_ in ev_fn.lat_line)),
                                line_waves_max=int(max((l_['waves'] for l_ in ev_fn.lat_line), default=0)),
                                line_not_clear=int(sum(not l_['clear'] for l_ in ev_fn.lat_line)),
-                               stab_rows_max=int(max((l_['rows'] for l_ in ev_fn.lat_line), default=0)))
+                               stab_rows_max=int(max((l_['rows'] for l_ in ev_fn.lat_line), default=0)),
+                               stab_cuts=int(n_stab_cut[0]), stab_cuts_unseen=int(n_stab_unseen[0]))
                           if lattice is not None else None))
     return best, ev_fn.ncalls, H, stats
