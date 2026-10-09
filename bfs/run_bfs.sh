@@ -25,6 +25,7 @@
 #             (--sqp-partial-shrink on; default 0 since 20261008c)
 #   LATTICE_K with ORACLE=lattice: eigenvalues per disk centre of the line, each with its
 #             stability row (--lattice-k; default 1)
+#   STRIP     with ORACLE=lattice: 0 = no strip (--lattice-strip off; default 1)
 #   RETIRE    with ORACLE=lattice: FRAC:ROUNDS, members of Omega below FRAC x gamma for ROUNDS
 #             rounds retire (--omega-retire, e.g. 0.95:3); unset = Omega only grows
 #
@@ -73,6 +74,9 @@ if [ "${ORACLE:-reduced}" = "lattice" ]; then
     # stability row (default 1; an eigenvalue behind another, seen from the
     # line, then gets a row too)
     ORC+=(--lattice-k "${LATTICE_K:-1}")
+    # STRIP=0: no strip -- the stability rows are those of the eigenvalues the
+    # line's disks see (as before 20261009a); the A/B of whether the strip pays
+    ORC+=(--lattice-strip "$([ "${STRIP:-1}" = 0 ] && echo off || echo on)")
 elif [ "${ORACLE:-reduced}" != "reduced" ]; then
     echo "run_bfs.sh: ORACLE must be reduced or lattice (got ${ORACLE})"; exit 2
 fi

@@ -1457,8 +1457,7 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
     if getattr(certified_norm, 'sampled', 0) and not _peak_ref:
         ws, gs = cands, vals           # BFS sampled mode: its grid is the reference (no 241-point sweep)
     elif not _peak_ref and getattr(certified_norm, 'lattice', None) is not None:
-        # --oracle lattice: the reference sweep on lattice points (the factors
-        # the in-solve sweep keeps on the ranks)
+        # --oracle lattice: the reference sweep on lattice points of 2^-SWEEP_LEVEL
         import lattice as _lt
         _lc = certified_norm.lattice
         ws = _lc.grid(wlo, whi, _lt.SWEEP_LEVEL if _lt.SWEEP_LEVEL > 0 else 5)
@@ -1736,8 +1735,12 @@ def main():
                     help='--oracle lattice: a followed peak\'s Newton stops at |sigma\'| <= this x sigma '
                          '(lattice.FOLLOW_GTOL)')
     ap.add_argument('--lattice-sweep', dest='lattice_sweep', type=int, default=5,
-                    help='--oracle lattice: missed peaks and the certificate\'s reference sweep on the lattice level '
-                         '2^-N of the band (0: no in-solve sweep)')
+                    help='--oracle lattice: the certificate\'s reference sweep on the lattice level 2^-N of the band '
+                         '(the in-solve missed peaks are the level-set certificate, lattice.LatticeOracle.level)')
+    ap.add_argument('--lattice-strip', dest='lattice_strip', choices=['on', 'off'], default='on',
+                    help='--oracle lattice: on = the strip [-eps - reach, -eps] covered at every iterate the QP reads, '
+                         'every eigenvalue in it a stability row; off = the rows of the eigenvalues the line\'s disks see '
+                         '(sqp_inner.LAT_STRIP)')
     ap.add_argument('--lattice-reach', dest='lattice_reach', type=float, default=0.25,
                     help='--oracle lattice: stability rows for the closed-loop eigenvalues within this of the line')
     ap.add_argument('--lattice-k', dest='lattice_k', type=int, default=1,
@@ -2298,6 +2301,7 @@ def main():
     REDUCED_CERT = a.reduced_cert
     import sqp_inner as _sqi; _sqi.REDUCED_CERT = a.reduced_cert; _sqi.FOLLOW_SCAN = a.follow_scan; _sqi.PAIR_MANIFOLD = (a.sqp_pair_manifold == 'on'); _sqi.FIELD_KMAX2 = (a.field_kmax ** 2 if a.field_kmax else None); _sqi.FIELD_ORDER = a.field_order
     _sqi.PARTIAL_SHRINK = (a.sqp_partial_shrink == 'on')
+    _sqi.LAT_STRIP = (a.lattice_strip == 'on')
     certified_norm.enroll_rel = float(a.enroll_rel)
     if a.ctrl_line == 'eps':
         # Re <= -eps everywhere: the gate's allowance and every consumer of ctrl_max
@@ -3377,9 +3381,12 @@ def main():
         certified_norm.lattice = _lat
         print(f"oracle: the full model on the lattice ({_lat.size} rank(s){', the driver included' if _lat.use_driver else ''}; "
               f"{_lat_mod.LU_CAP} factors kept per rank, fixed rows on 2^-{_lat_mod.ROW_LEVEL}, followed peaks by Newton "
-              f"to |sigma'| <= {_lat_mod.FOLLOW_GTOL:g} sigma, sweep on 2^-{_lat_mod.SWEEP_LEVEL}; the line from "
-              f"{_lat.base_grid(0.0, 1.0).__len__()} equispaced centres, the strip [-eps - {_lat_mod.ROW_REACH:g}, -eps] "
-              f"covered and every eigenvalue in it a row; {_lat_mod.LINE_K} eigenvalue(s) per disk)", flush=True)
+              f"to |sigma'| <= {_lat_mod.FOLLOW_GTOL:g} sigma, missed peaks by the level-set certificate ("
+              f"{_lat_mod.LEVEL_K} pencil eigenvalues per axis disk, through the plant factors); the line from "
+              f"{_lat.base_grid(0.0, 1.0).__len__()} equispaced centres, "
+              + (f"the strip [-eps - {_lat_mod.ROW_REACH:g}, -eps] covered and every eigenvalue in it a row"
+                 if _sqi.LAT_STRIP else "NO strip (the rows of the eigenvalues the line's disks see)")
+              + f"; {_lat_mod.LINE_K} eigenvalue(s) per disk)", flush=True)
         # the ports' positions behind every (b, c) this process builds: the gates
         # call D.alpha_certified with b and c, and the ranks build them from the
         # positions
@@ -3741,6 +3748,16 @@ def main():
                       f"stability rows; "
                       f"{_li['stab_cuts']} trial(s) cut back inside the line, {_li['stab_cuts_unseen']} of them by an "
                       f"eigenvalue without a row at the iterate", flush=True)
+                _cr = _li.get('cross')
+                if _cr:
+                    print(f"    lattice: crossings: past the line by up to {_cr['depth_max']:.2e} (median "
+                          f"{_cr['depth_med']:.2e}); {_cr['with_row']} had a row, whose linearisation predicted "
+                          + (f"a median {_cr['pred_med']:+.2e} past it ({_cr['pred_pos']} > 0: the step gave the row up)"
+                             if _cr['pred_med'] is not None else "nothing")
+                          + f"; {_cr['full_step']} at a full step", flush=True)
+                print(f"    lattice: level set {_li['level_calls']} call(s), up to {_li['level_shifts_max']} shifts "
+                      f"({_li['level_pencil_max']} with pencil eigenvalues, the rest norm disks) / {_li['level_waves_max']} "
+                      f"waves, {_li['level_not_clear']} inconclusive, inner CG up to {_li['level_cg_max']} iterations", flush=True)
             # STALL RECOVERY (2026-09-25): a solve that ended on a collapsed radius
             # (code 6) or with failed subproblems hands its quasi-Newton matrix and
             # radius to the next round no more.  The ne=100 K+B+C run sat at

@@ -38,6 +38,10 @@
 #   ORACLE=lattice LATTICE_K=2 ... sbatch ...
 #        (two eigenvalues per disk centre of the stability line, each with its
 #         row, --lattice-k 2; the directories get _k2)
+#   ORACLE=lattice STRIP=0 ... sbatch ...
+#        (no strip, --lattice-strip off: the stability rows are those of the
+#         eigenvalues the line's disks see -- the A/B of whether the strip pays;
+#         the directories get _nostrip)
 #   ORACLE=lattice SHRINK=1 ... sbatch ...
 #        (trust radius 2 alpha |d| after a partial step, --sqp-partial-shrink on;
 #         off by default since 20261008c; the directories get _shr)
@@ -72,7 +76,8 @@ if [ "${ORACLE:-reduced}" = lattice ]; then SUF="${SUF}_lat"; fi
 if [ "${ORACLE:-reduced}" = lattice ] && [ -n "${RETIRE:-}" ]; then SUF="${SUF}_ret"; fi
 if [ "${ORACLE:-reduced}" = lattice ] && [ "${SHRINK:-0}" = 1 ]; then SUF="${SUF}_shr"; fi
 if [ "${ORACLE:-reduced}" = lattice ] && [ "${LATTICE_K:-1}" != 1 ]; then SUF="${SUF}_k${LATTICE_K}"; fi
-export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-24} RETIRE=${RETIRE:-} SHRINK=${SHRINK:-0} LATTICE_K=${LATTICE_K:-1}
+if [ "${ORACLE:-reduced}" = lattice ] && [ "${STRIP:-1}" = 0 ]; then SUF="${SUF}_nostrip"; fi
+export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-24} RETIRE=${RETIRE:-} SHRINK=${SHRINK:-0} LATTICE_K=${LATTICE_K:-1} STRIP=${STRIP:-1}
 IDX=${SLURM_ARRAY_TASK_ID:-}                           # array job: the start index (catalogue entry)
 NSTART=${NSTART:-64}
 if [ -n "$IDX" ]; then

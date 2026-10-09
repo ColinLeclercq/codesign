@@ -44,6 +44,9 @@ PARTIAL_SHRINK = False  # everywhere (not only on S): after a step accepted at a
                         # region the line search found the model good for (--sqp-partial-shrink; off: the frozen GL path.
                         # 2026-10-08: the SISO lattice run spent 5-8 evaluations per SQP iteration in its last rounds,
                         # against 2-3 in its first -- line-search trials of steps the box kept proposing at its corner)
+LAT_STRIP = True        # lattice: the strip [-eps - reach, -eps] covered at every iterate the QP reads, every eigenvalue in it
+                        # a stability row (--lattice-strip; off: the rows of the eigenvalues the line's disks see, as before
+                        # 20261009a -- the A/B of whether the strip pays, user 2026-10-09)
 PAIR_EXIT_TOL = 1e-2    # release S at an S-stationary point when the pair is inside and |mu_b| > this (duals of the rows sum to 1;
                         # 6.7e-4 released at ne=200 and 200 evaluations in the pole regime gained nothing)
 PEN_STEER = 6           # adaptive penalty: at most this many x10 steering increases per QP
@@ -137,7 +140,8 @@ class Evaluator:
         self.force_full_alpha = False    # set when the reduced abscissa disagrees with the certified one at the start
         self.lattice = lattice               # lattice.LatticeOracle: the full model on cached factors (BFS.md 5)
         self.lat_strip = True                # lattice: cover the strip (every eigenvalue near the line a row); off for trials
-        self.lat_info, self.lat_line = [], []
+        self.level_req = None                # lattice: (gam, wlo, whi) -> the level-set certificate beside the evaluation
+        self.lat_info, self.lat_line, self.level_log = [], [], []
 
     def _ctrl_dirs(self):
         """dA_c/dz_j (A_c is affine in z), cached; None for non-compensator coordinates."""
@@ -283,24 +287,16 @@ class Evaluator:
     def missed_peaks(self, z, t, ws, tol):
         """A-N on the reduced model: sweep sigma_1 on `ws` at z (cheap on the
         oracle), return the local maxima above t (1 + tol) not yet in W.
-        Lattice (full model): sigma_1 AND ITS SLOPE on the lattice level
-        lattice.SWEEP_LEVEL of the band (cached factors).  Between two points
-        where the slope goes from + to -, the cubic Hermite fit locates the top;
-        a top whose fit lies above t (1 + tol), away from every member and
-        followed top, is evaluated at its lattice point on 2^-ROW_LEVEL (one
-        more wave) and joins as a new member (followed from then on) if it is
-        above there too.  A grid point that is itself a local maximum above the
-        level counts likewise.  (2026-10-08: the values alone saw a peak only at
-        a grid point, and not at all next to a member that sits on one -- central
-        2x2, round 2: the top at 1.6376 rose 0.0126 from the fixed member 1.625,
-        between two sweep points, unseen by the SQP; the round was refused.)"""
+        Lattice (full model): the LEVEL-SET certificate at gam = t (1 + tol) on
+        the band of `ws` (lattice.LatticeOracle.level: the even pencil's disks
+        on the axis, applied through the plant factors the rows use): either
+        sigma_1 < gam everywhere, proven, or the regions above gam, each with a
+        top estimate that joins as a new member (followed from then on) unless a
+        followed member or its top already watches it.  (2026-10-08/09: the
+        sweep of sigma_1 and its slope on 2^-5 missed peaks narrower than its
+        grid -- central 2x2, rounds 2 of 20261008c and 20261009b: tops at 1.6376
+        and 0.0656 next to fixed members, the rounds refused.)"""
         if self.lattice is not None:
-            import lattice as _lt
-            if _lt.SWEEP_LEVEL <= 0:
-                return []
-            wg = self.lattice.grid(float(ws[0]), float(ws[-1]))
-            P = self.lattice.sigmas(z, wg, slope=True)
-            sv, sp = P[:, 0], P[:, 1]
             # a top near a FIXED member is still new: the member's row sits on its
             # own point and does not follow (central 2x2, 20261009b, round 2: the
             # top at 0.0656 stood 5 % above t, 0.0008 from the fixed member 0.0664,
@@ -308,27 +304,13 @@ class Evaluator:
             # already watch a peak
             near = [float(w_) for w_ in self.W if (self.follow or {}).get(round(float(w_), 6))] + \
                 list(self.w_star.values())
-            lev = t * (1.0 + tol)
-            free = lambda w_: all(abs(w_ - q) > 1e-3 for q in near)
-            cand = {}
-            for i in range(len(wg)):
-                lo_ = sv[i - 1] if i > 0 else -np.inf
-                hi_ = sv[i + 1] if i + 1 < len(wg) else -np.inf
-                if sv[i] >= lo_ and sv[i] >= hi_ and sv[i] > lev and free(float(wg[i])):
-                    cand[float(wg[i])] = float(sv[i])            # a grid point: evaluated already
-            for i in range(len(wg) - 1):
-                if sp[i] >= 0.0 > sp[i + 1]:                     # >= : the slope is 0 at w = 0 (a real plant)
-                    wt_, ft_, _ = _lt._hermite_top(float(wg[i]), float(wg[i + 1]), sv[i], sv[i + 1], sp[i], sp[i + 1])
-                    wr_ = _lt.snap(wt_, _lt.ROW_LEVEL)
-                    if ft_ > lev and free(wr_) and wr_ not in cand:
-                        cand[wr_] = None
-            todo = [w_ for w_, v_ in cand.items() if v_ is None]
-            if todo:
-                for w_, v_ in zip(todo, self.lattice.sigmas(z, todo)):
-                    cand[w_] = float(v_)
-            out = [(w_, v_) for w_, v_ in cand.items() if v_ > lev]
-            self.refine_log.append(dict(t=float(t), gmax=float(sv.max()), wmax=float(wg[int(np.argmax(sv))]),
-                                        ok=True, above=bool(out), sweep=len(wg), between=len(todo)))
+            L = self.lattice.level(z, t * (1.0 + tol), float(ws[0]), float(ws[-1]))
+            out = [(w_, v_) for w_, v_ in L['cross'] if all(abs(w_ - q) > 1e-3 for q in near)]
+            self.level_log.append(dict(shifts=L['shifts'], waves=L['waves'], clear=L['clear'], cross=len(L['cross']),
+                                       cg_max=L['cg_max'], pencil=L['pencil']))
+            self.refine_log.append(dict(t=float(t), ok=bool(L['clear'] or L['cross']), above=bool(out),
+                                        level_shifts=L['shifts'], level_waves=L['waves'],
+                                        uncovered=L['uncovered'], cross=[(round(w_, 6), v_) for w_, v_ in L['cross']]))
             out.sort(key=lambda p_: -p_[1])
             return out
         if self.oracle is None:
@@ -405,7 +387,7 @@ class Evaluator:
             s, Gs, blocks, _tops_l, _info_l, _lr_l = self.lattice.evaluate(
                 z, W, follow=self.follow, w_star=self.w_star, state=self.follow_state,
                 enroll=(self.enroll if self.kink_block else ()),
-                line=(self.eps, 0.0, float(getattr(D, 'stab_whi', 10.0))), strip=self.lat_strip)
+                line=(self.eps, 0.0, float(getattr(D, 'stab_whi', 10.0))), strip=(self.lat_strip and LAT_STRIP), level=self.level_req)
             self.lat_info.append(_info_l)
         else:
             m = len(W)
@@ -780,7 +762,7 @@ class Evaluator:
                     pos_rows=pos_rows,
                     al=float(al), ga=ga, clr=bool(clr), al_rows=al_rows_qp, al_rows_all=al_rows,
                     al_ctrl=al_ctrl, al_ctrl_rest=al_ctrl_rest, ctrl_rows=ctrl_rows, lmi=lmi, hermite=hermite, pair=pair,
-                    hermite_cl=hermite_cl, lat_eigs=lat_eigs, lat_strip=(self.lattice is None or self.lat_strip), z=z.copy())
+                    hermite_cl=hermite_cl, lat_eigs=lat_eigs, lat_strip=(self.lattice is None or self.lat_strip or not LAT_STRIP), z=z.copy())
 
     def _closed_loop_block(self, pr2, cl, clf, clg, arow, nvec, K, xa, xs, pa, ps, na, ns, flags, NZ):
         """Hermite data for the two rightmost near-line closed-loop eigenvalues.
@@ -1042,6 +1024,22 @@ def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, di
 
 
 # ---------------------------------------------------------------------- SQP
+def _cross_stats(cr):
+    """Summary of the trials cut back inside the closed loop's line: how far past
+    the line the offending eigenvalue went (depth = Re lambda + eps, a lower bound:
+    the line stops at its first witness), and what the iterate's linearised row
+    predicted for the same step (pred; > 0: the QP's step gave the row up through
+    its elastic slack, <= 0: the eigenvalue moved further than its linearisation)."""
+    if not cr:
+        return None
+    dep = np.array([c['depth'] for c in cr])
+    pr = np.array([c['pred'] for c in cr if c['pred'] is not None])
+    return dict(n=len(cr), depth_max=float(dep.max()), depth_med=float(np.median(dep)),
+                with_row=int(len(pr)), pred_med=(float(np.median(pr)) if len(pr) else None),
+                pred_pos=int(np.sum(pr > 0.0)),
+                full_step=int(sum(c['alpha'] >= 1.0 for c in cr)))
+
+
 def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                        enroll=None, kink_block=True, trust0=None, tol=1e-6,
                        sel_margin=1e-3, verbose=False, H0=None, ctrl_lmi=False,
@@ -1162,6 +1160,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
 
     _Ec = [None]; n_soc = [0]; n_ctrl_cut = [0]; n_stab_cut = [0]
     n_stab_unseen = [0]                # of those: the crossing eigenvalue had no stability row at the iterate
+    stab_cross = []                    # of those: how far past the line, and the iterate's linearised prediction (_offender)
     def _ctrl_restore(zn_, en_):
         """SECOND-ORDER CORRECTION on the compensator (pen_adapt; 2026-10-05): a
         step along the linearised boundary Re lambda(A_c) = lim leaves it at
@@ -1316,24 +1315,24 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
 
     _alpha_prev = 1.0; _last_pair_mu = None
 
-    def _had_row(e_, en_):
+    def _offender(e_, en_):
         # DIAGNOSTIC (2026-10-08, the cold central run: up to 131 of 156 trials of
-        # a round crossed the closed loop's line): did the eigenvalue that made
-        # the trial inadmissible have a stability row at the iterate it left?
-        # The trial's offender is the line's witness, else its rightmost seen
-        # eigenvalue; "had a row" = within 0.05 of a row eigenvalue of e_ (or
-        # its conjugate).  No row = the QP could not see it coming (one
-        # eigenvalue per disk, ROW_REACH).
+        # a round crossed the closed loop's line): the eigenvalue that made the
+        # trial inadmissible -- the line's witness, else its rightmost seen
+        # eigenvalue -- and the index of the stability row it had at the iterate
+        # it left (within 0.05 of a row eigenvalue of e_, or its conjugate), None
+        # when it had none: the QP could not see it coming.
         if not e_.get('lat_eigs') or not en_.get('lat_eigs'):
-            return True
-        rows0 = e_['lat_eigs'][0]
+            return None, None
         w_ = en_['lat_eigs'][2]
         if w_ is None:
             seen_ = en_['lat_eigs'][1]
             if not seen_:
-                return True
+                return None, None
             w_ = max(seen_, key=lambda l_: l_.real)
-        return any(min(abs(w_ - q), abs(w_ - np.conj(q))) < 0.05 for q in rows0)
+        dist = [min(abs(w_ - q), abs(w_ - np.conj(q))) for q in e_['lat_eigs'][0]]
+        j_ = int(np.argmin(dist)) if dist and min(dist) < 0.05 else None
+        return w_, j_
 
     def _tnorm(v):
         # the trust region's norm: the ball on the pair's face (PAIR_BALL), else the box
@@ -1422,8 +1421,17 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                 # eigenvalue to -0.0496, across the line at -0.05, for a sigma
                 # decrease that outweighed the penalty)
                 n_stab_cut[0] += 1
-                if not _had_row(e, en):
+                _w, _j = _offender(e, en)
+                if _w is not None and _j is None:
                     n_stab_unseen[0] += 1
+                if _w is not None:
+                    # how far past the line it went, and how far the iterate's
+                    # linearised row said it would go (> 0: the QP's step itself
+                    # gave the row up, its elastic slack; <= 0: the eigenvalue moved
+                    # further than its linearisation)
+                    _al_j, _g_j = e['al_rows_all'][_j] if _j is not None else (None, None)
+                    stab_cross.append(dict(depth=float(_w.real + eps), alpha=float(alpha),
+                                           pred=(None if _j is None else float(_al_j + alpha * float(_g_j @ d) + eps))))
                 alpha *= 0.5
                 continue
             if DEBUG_LS:
@@ -1464,7 +1472,15 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                 code = 6; break
             continue
         if not en.get('lat_strip', True):
-            en = ev_fn(zn)                                # the accepted trial with its strip: the QP's rows
+            # the accepted trial with its strip (the QP's rows) and, in the same
+            # waves, the level-set certificate the missed-peak check below asks
+            # for at this design and level (lattice memo)
+            ev_fn.level_req = ((tn * (1.0 + refine_tol), float(refine_grid[0]), float(refine_grid[-1]))
+                               if refine_tol is not None else None)
+            try:
+                en = ev_fn(zn)
+            finally:
+                ev_fn.level_req = None
         # damped BFGS on the Lagrangian
         subn, _ = subproblem(en, tn, H, Delta, eps, ctrl_max, kink_block,
                              disp=((zn - z_start, float(max_disp)) if max_disp is not None else None), pen=nu / 100.0)
@@ -1628,6 +1644,14 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                                line_waves_max=int(max((l_['waves'] for l_ in ev_fn.lat_line), default=0)),
                                line_not_clear=int(sum(not l_['clear'] for l_ in ev_fn.lat_line)),
                                stab_rows_max=int(max((l_['rows'] for l_ in ev_fn.lat_line), default=0)),
-                               stab_cuts=int(n_stab_cut[0]), stab_cuts_unseen=int(n_stab_unseen[0]))
+                               stab_cuts=int(n_stab_cut[0]), stab_cuts_unseen=int(n_stab_unseen[0]),
+                               cross=_cross_stats(stab_cross),
+                               level_shifts_max=int(max((l_['shifts'] for l_ in ev_fn.level_log), default=0)),
+                               level_waves_max=int(max((l_['waves'] for l_ in ev_fn.level_log), default=0)),
+                               level_calls=len(ev_fn.level_log),
+                               level_not_clear=int(sum(not l_['clear'] and not l_['cross'] for l_ in ev_fn.level_log)),
+                               level_cg_max=int(max((l_['cg_max'] for l_ in ev_fn.level_log), default=0)),
+                               level_pencil_max=int(max((l_['pencil'] for l_ in ev_fn.level_log), default=0)),
+                               strip=bool(LAT_STRIP))
                           if lattice is not None else None))
     return best, ev_fn.ncalls, H, stats

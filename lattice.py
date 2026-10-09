@@ -84,9 +84,19 @@ WARM_NCV = 0         # > 0: sigma_1 restarted from the last vector at the same p
                      # applications instead of 9-17).  Off by default: where sigma_1 and sigma_2 swap between designs
                      # (kinks; the MIMO plateau) the restart vector lies along the new sigma_2 and a small subspace can
                      # converge there; cold, a row does not depend on its rank.  The line's disks are always cold.
-SWEEP_LEVEL = 5      # missed-peak sweep and the certificate's reference sweep on 2^-5
+SWEEP_LEVEL = 5      # the certificate's reference sweep on 2^-5
+LEVEL_K = 2          # level-set disks: nearest eigenvalues of the even pencil per axis centre (a mirrored pair;
+                     # k = 4 cost 2-10 x the applications: 35-357 against 21-39, central record 191.11)
+LEVEL_NCV = 24       # ... and their Krylov subspace (ncv 24: 25 applications where 20 needed 39 and 12 needed 33, w = 3)
+LEVEL_MAXIT = 8      # ... and their Arnoldi restarts at most (then the norm disk alone; far from the peaks the
+                     # pencil's Arnoldi needed 350-850 applications)
+LEVEL_NORM_MIN = 2.0 ** -5   # a level-set centre whose norm disk is at least this needs no pencil eigenvalues
+LEVEL_CG_TOL = 1e-12 # the inner CG on the plant factor (_level_disk): relative residual in the M semi-norm
+LEVEL_CG_MAX = 200   # ... iterations at most
+LEVEL_IMAG = 1e-8    # a pencil eigenvalue with |Re| <= this x max(1, |lambda|) is ON the axis: a level crossing
+LEVEL_CONFIRM = 1e-6 # a crossing is confirmed where sigma_1 >= gam (1 - this) (certify_greater's sampling)
 TASK_COST = dict(row=1.0, value=1.0, slope=1.0, value2=2.0, block=2.0, centre=3.0,
-                 rowx=1.0, slopex=1.0, blockx=2.0)   # relative costs of the requests
+                 rowx=1.0, slopex=1.0, blockx=2.0, level=10.0)   # relative costs of the requests
 LU_COST = 2.0        # ... and of a factorisation (balancing, LatticeOracle._assign)
 
 _CACHE = {}          # complex shift key (closedloop's: complex(omega)) -> factor, LRU order
@@ -296,6 +306,155 @@ def _centre(d, dz, sre, th, rlo):
     return dict(sre=float(sre), theta=float(th), lams=lams, rad=rad, rows=rows)
 
 
+def _ports(cl, dz):
+    """(B, C, A_c, B_c, C_c) of the closed loop as 2-D arrays (SISO and MIMO):
+    A_cl = blockdiag(A, A_c) + U V, U = [[B, 0], [0, B_c]], V = [[D_c C^H, C_c],
+    [C^H, 0]] (certify_sparse.SparsePencil)."""
+    B = cl.b if np.ndim(cl.b) == 2 else cl.b[:, None]
+    C = cl.c if np.ndim(cl.c) == 2 else cl.c[:, None]
+    m, p, r = B.shape[1], C.shape[1], cl.r
+    Bc = cl.Bc_of(dz['arow']) if hasattr(cl, 'Bc_of') else cl.B_of()[:, None]
+    return B, C, cl.L_of_a(dz['arow']), np.asarray(Bc, complex).reshape(r, p), np.asarray(dz['nvec'], complex).reshape(m, r)
+
+
+def _norm_disk(d, dz, th, gam):
+    """(sigma_1(th), a radius rho such that ||G(lam)|| < gam on the disk |lam - i th|
+    < rho) from norms at i th alone, the controller handled exactly.  Then the
+    even pencil has no eigenvalue in the disk (it is singular at lam only where
+    ||G(lam)|| ||G(-conj lam)|| >= gam^2), so sigma_1 < gam on its diameter.
+
+    G(lam) = R S(lam)^-1 R^T with S(lam) = lam M - A - B K(lam) C^H, K(lam) = D_c
+    + C_c (lam - A_c)^-1 B_c (the controller states eliminated; R^T R = M, never
+    formed).  At lam = i th + delta, S = S_0 + Q Delta P with P = [R; a C^H], Q =
+    [R^T, b B], Delta = diag(delta I, -(K(lam) - K(i th)) / (a b)), so by the push-
+    through identity G(lam) is a block of Y (I + Delta Y)^-1, Y = P S_0^-1 Q, and
+    ||G(lam)|| <= ||Y|| / (1 - ||Delta|| ||Y||).  ||Y|| <= the 2-norm of the 2 x 2
+    matrix of its blocks' norms: sigma_1, ||R S_0^-1 B||, ||C^H S_0^-1 R^T||,
+    ||C^H S_0^-1 B|| (m + p solves, the rest dense m x m and p x p);  ||K(lam) -
+    K(i th)|| <= |delta| ||C_c R_0|| ||R_0 B_c|| / (1 - |delta| ||R_0||), R_0 = (i th -
+    A_c)^-1 (r x r).  The weights a, b (powers of 2) maximise the radius.  A
+    controller resonance near th (||R_0|| large) or sigma_1 near gam make it
+    small; elsewhere it is the cheap disk -- far from the peaks the pencil's
+    nearest eigenvalues are many at similar distances and its Arnoldi needs
+    350-850 applications (90-220 s on the test plant, w = 6-10) where this costs
+    one sigma_1 and m + p solves (1-2 s) for radii 0.07-0.22 (central record
+    191.11; checked against ||G|| on the disks' boundaries, BFS.md 5)."""
+    cl = d['cl']
+    n, r = cl.n, cl.r
+    s1 = _gain(d, dz, th, vectors=False)['sigma'] * (1.0 + 1e-6)       # Arnoldi approaches sigma_1 from below
+    B, C, Ac, Bc, Cc = _ports(cl, dz)
+    zr = np.zeros(r, complex)
+    TB = np.column_stack([cl.solve(np.concatenate([B[:, j], zr]))[:n] for j in range(B.shape[1])])
+    THC = np.column_stack([cl.solveH(np.concatenate([C[:, j], zr]))[:n] for j in range(C.shape[1])])
+    M = cl.M
+    n12 = float(np.sqrt(max(np.linalg.eigvalsh(TB.conj().T @ (M @ TB)).max(), 0.0)))
+    n21 = float(np.sqrt(max(np.linalg.eigvalsh(THC.conj().T @ (M @ THC)).max(), 0.0)))
+    n22 = float(np.linalg.norm(C.conj().T @ TB, 2))
+    if r:
+        R0 = np.linalg.inv(1j * float(th) * np.eye(r) - Ac)
+        nR0 = float(np.linalg.norm(R0, 2)); c1 = float(np.linalg.norm(Cc @ R0, 2) * np.linalg.norm(R0 @ Bc, 2))
+    else:
+        nR0 = c1 = 0.0
+    best = 0.0
+    for la in range(-30, 31):
+        for lb in range(-30, 31):
+            wa, wb = 2.0 ** la, 2.0 ** lb
+            ny = float(np.linalg.norm(np.array([[s1, wb * n12], [wa * n21, wa * wb * n22]]), 2))
+            lim = 1.0 / ny - 1.0 / float(gam)            # needs ||Delta|| < lim
+            if lim <= 0.0:
+                continue
+            # ||Delta|| <= max(rho, c1 rho / ((1 - rho ||R_0||) a b)) < lim  <=>  rho < both:
+            rho = min(lim, lim / (c1 / (wa * wb) + lim * nR0)) * (1.0 - 1e-9)
+            best = max(best, rho)
+    return s1, best
+
+
+def _level_disk(d, dz, th, gam):
+    """One disk of the LEVEL-SET certificate at the axis point i th, at level
+    gam: a radius around i th free of eigenvalues of the even pencil (so free of
+    level crossings), the pencil eigenvalues found, and sigma_1(th).  First the
+    norm disk (_norm_disk: cheap, large far from the peaks); where it is smaller
+    than LEVEL_NORM_MIN, the pencil's nearest eigenvalues as well (Schwerdtner-
+    Mengi-Voigt, certify_sparse.certify_greater), applied through the closed
+    loop's plant factor of i th M - A -- the lattice's own, shared with the rows
+    -- with no factor of the 2n pencil (it carries M / gam^2 in a full block: no
+    factor serves two levels; user, 2026-10-09).
+
+    The pencil (certify_sparse.SparsePencil) at the shift s = i th:
+        A_H - s E_H = [[-S, g MP], [MP, -S^H]],   E_H = diag(M_cl, -M_cl),
+    S = i th M_cl - A_cl (the closed loop's matrix, cl.solve = S^-1), MP =
+    diag(M, 0), g = 1 / gam^2.  OP v = (A_H - s E_H)^-1 E_H v by block
+    elimination: with f = M_cl v1, a = S^-1 f, c = S^-H [0; v2_c],
+        (I - B) y = v2_p - a_p + g (S^-1 [M c_p; 0])_p,   B = g T M T^H M,
+        x2 = S^-H [M y; 0] + c,   x1 = S^-1 (g MP x2 - f),
+    T u = (S^-1 [u; 0])_p.  B is self-adjoint and positive semidefinite in the
+    M semi-inner product, with eigenvalues sigma_i^2 / gam^2 < 1 (the closed
+    loop's singular values at th): CG in that inner product converges in 5-11
+    iterations even where sigma_1 is within 1e-4 of gam (restarted GMRES in
+    the Euclidean product needed 350-730 there: central record 191.11, w = 0).
+    Each iteration is one solve and one adjoint solve on the factor held;
+    LEVEL_K = 2 nearest eigenvalues (they come in pairs mirrored across the
+    axis, at equal distance from it), Krylov subspace LEVEL_NCV, at most
+    LEVEL_MAXIT restarts: 21-39 applications, 5-8 s on the test plant near the
+    peaks (BFS.md 5).  The disk is the larger of the two."""
+    import scipy.sparse.linalg as spla
+    from closedloop_sparse import _v0
+    s1, rn = _norm_disk(d, dz, th, gam)
+    if s1 >= gam or rn >= LEVEL_NORM_MIN:
+        return dict(theta=float(th), lams=[], rad=(0.0 if s1 >= gam else rn), sigma=s1, cg_max=0, pencil=False)
+    cl = d['cl']
+    n, r = cl.n, cl.r
+    N = n + r
+    M = cl.M
+    g = 1.0 / float(gam) ** 2
+    cl.setup(float(th), dz['arow'], dz['nvec'], dz['K'])
+    zr, zn = np.zeros(r, complex), np.zeros(n, complex)
+    S, SH = cl.solve, cl.solveH
+    nit = []
+
+    def B(y):
+        return g * S(np.concatenate([M @ SH(np.concatenate([M @ y, zr]))[:n], zr]))[:n]
+
+    def cg(y0):
+        y = np.zeros(n, complex); res = y0.copy(); rr = float(np.vdot(res, M @ res).real); rr0 = rr
+        p = res.copy(); it = 0
+        while rr > LEVEL_CG_TOL ** 2 * rr0 and it < LEVEL_CG_MAX:
+            Ap = p - B(p)
+            a = rr / float(np.vdot(p, M @ Ap).real)
+            y += a * p; res -= a * Ap
+            rn_ = float(np.vdot(res, M @ res).real)
+            p = res + (rn_ / rr) * p; rr = rn_; it += 1
+        nit.append(it)
+        return y0 + B(y)                     # the components M does not see, from the converged M y
+
+    def op(v):
+        v1, v2 = v[:N], v[N:]
+        f = np.concatenate([M @ v1[:n], v1[n:]])
+        a = S(f)
+        c = SH(np.concatenate([zn, v2[n:]]))
+        y = cg(v2[:n] - a[:n] + g * S(np.concatenate([M @ c[:n], zr]))[:n])
+        x2 = SH(np.concatenate([M @ y, zr])) + c
+        x1 = S(g * np.concatenate([M @ x2[:n], zr]) - f)
+        return np.concatenate([x1, x2])
+    O = spla.LinearOperator((2 * N, 2 * N), matvec=op, dtype=complex)
+    s = 1j * float(th)
+    conv = True
+    try:
+        mu = spla.eigs(O, k=LEVEL_K, which='LM', tol=LINE_TOL, maxiter=LEVEL_MAXIT, v0=_v0(2 * N), ncv=LEVEL_NCV,
+                       return_eigenvectors=False)
+    except spla.ArpackNoConvergence as e:
+        conv = False
+        mu = e.eigenvalues if e.eigenvalues is not None else np.zeros(0, complex)
+    mu = np.asarray(mu)[np.abs(mu) > 1e-300]
+    lam = s + 1.0 / mu
+    # the pencil's disk only when the LEVEL_K nearest all converged (a partial
+    # set need not hold the nearest); converged eigenvalues still count as
+    # crossings
+    rp = float(np.min(np.abs(lam - s))) if (conv and len(lam) == LEVEL_K) else 0.0
+    return dict(theta=float(th), lams=[complex(l_) for l_ in lam], rad=max(rp, rn), sigma=s1,
+                cg_max=max(nit, default=0), pencil=True)
+
+
 def eval_task(t):
     """Every evaluation of one rank in one wave: [(request)] -> results.
     Requests (LatticeOracle._drive): ('row', w) sigma_1, its slope and raw
@@ -303,7 +462,8 @@ def eval_task(t):
     sigma_1 alone; ('slope', w) sigma_1 and its slope; ('value2', w) sigma_1
     and sigma_2; ('rowx', w), ('slopex', w), ('blockx', w) the same at an exact
     (off-lattice) point, factor in the side cache; ('centre', sre, theta, rlo)
-    a disk centred at sre + i theta, rows for its eigenvalues with Re >= rlo."""
+    a disk centred at sre + i theta, rows for its eigenvalues with Re >= rlo;
+    ('level', theta, gam) a level-set disk at i theta (_level_disk)."""
     dz, reqs = t
     t0 = time.perf_counter()
     d = _design(dz)
@@ -334,6 +494,8 @@ def eval_task(t):
             res = dict(sigma=P[0]['sigma'], sigma2=P[1]['sigma'])
         elif kind == 'centre':
             res = _centre(d, dz, q[1], q[2], q[3])
+        elif kind == 'level':
+            res = _level_disk(d, dz, q[1], q[2])
         else:
             raise ValueError(kind)
         out.append(res)
@@ -443,10 +605,12 @@ class LatticeOracle:
         self.tops = {}                   # the followed tops of the last evaluation
         self.line_prev = {}              # eps -> centres that covered the line at the last call
         self.strip_prev = {}             # eps -> the strip's shifts (sre, theta) that served its last cover
+        self.level_prev = []             # the level-set centres that covered the band at the last call
         self.calls = {}                  # kind -> [calls, tasks, wall, critical path (longest rank), misses]
         self.verbose = False
         self._dkey = None; self._dz = None
         self._line_memo = {}             # (design key, eps, wlo, whi, eps_int) -> (reach, result): the last few designs
+        self._level_memo = {}            # (design key, gam, wlo, whi) -> the level set computed beside an evaluation
         self._rot = 0                    # the ranks' tie-break order rotates from one wave to the next
 
     # ---------------------------------------------------------------- plumbing
@@ -579,7 +743,7 @@ class LatticeOracle:
         return sum(o['miss'] for o in res.values()), sum(o['hit'] for o in res.values())
 
     # -------------------------------------------------------------- evaluation
-    def evaluate(self, z, W, follow=None, w_star=None, state=None, enroll=(), line=None, strip=True):
+    def evaluate(self, z, W, follow=None, w_star=None, state=None, enroll=(), line=None, strip=True, level=None):
         """sigma_1 rows at every member of W and, with line = (eps, wlo, whi),
         the stability line and the strip -- in ONE sequence of waves: the first
         carries the fixed rows, every followed member's first Newton point, the
@@ -591,7 +755,9 @@ class LatticeOracle:
         (s, Gs, blocks, tops, info, line result or None); the line result's rows
         are every eigenvalue the line and the strip exhibited in the strip.
         strip = False: the line only (a line-search trial: its admissibility is
-        the line's certificate; the rows the QP reads come from the iterate)."""
+        the line's certificate; the rows the QP reads come from the iterate).
+        level = (gam, wlo, whi): the level-set certificate (level()) in the same
+        waves, its result kept for the call of level() that asks for it."""
         dz = self.design(z)
         follow = follow or {}
         w_star = {} if w_star is None else w_star
@@ -635,7 +801,16 @@ class LatticeOracle:
                 agents['line'] = self._line(eps, wlo, whi, ROW_REACH, None, R)
             if strip and (lr is None or 'strip' not in lr):
                 agents['strip'] = self._strip(eps, wlo, whi, ROW_REACH, R)
+        lk = None
+        if level is not None:
+            lk = (dz['key'],) + tuple(float(v) for v in level)
+            if lk not in self._level_memo:
+                agents['level'] = self._level(*lk[1:], R)
         done, waves = self._drive(dz, agents, 'eval', R)
+        if 'level' in done:
+            self._level_memo[lk] = done['level']
+            while len(self._level_memo) > 4:
+                self._level_memo.pop(next(iter(self._level_memo)))
         if 'line' in done:
             lr = done['line']
         if 'strip' in done:
@@ -744,32 +919,7 @@ class LatticeOracle:
             if witness is not None:
                 break
             gaps = self._gaps(done, wlo, whi)
-            cent = []
-            for a_, b_ in gaps:
-                L = b_ - a_
-                if L < hmin:
-                    continue
-                # as many centres as the neighbouring disks' radii suggest (one
-                # when they are large: bisection), evenly over the gap, each on
-                # the lattice point nearest its place at the first level finer
-                # than a quarter of the spacing
-                ra = [c['rad'] for th, c in done.items() if c['rad'] > 0 and
-                      (abs(th + LINE_SHRINK * c['rad'] - a_) < 1e-12 or abs(th - LINE_SHRINK * c['rad'] - b_) < 1e-12)]
-                r_est = min(ra) if ra else L
-                nc = int(min(32, max(1, np.ceil(L / (2.0 * LINE_SHRINK * r_est)))))
-                sp = L / nc
-                lev = min(LINE_LMAX, int(np.ceil(np.log2(4.0 / sp))))
-                for j in range(nc):
-                    c = snap(a_ + (j + 0.5) * sp, lev)
-                    if c in done:
-                        # a centre whose eigensolve failed (no disk) sits there:
-                        # the quarter points, one level finer
-                        for c2 in (snap(c - 0.25 * sp, lev + 1), snap(c + 0.25 * sp, lev + 1)):
-                            if a_ < c2 < b_ and c2 not in done and lev + 1 <= LINE_LMAX:
-                                cent.append(c2)
-                    elif a_ < c < b_:
-                        cent.append(c)
-            cent = sorted(set(cent))
+            cent = self._fill(done, gaps, hmin)
             if self.verbose:
                 print(f"      line wave {waves}: {nshift} shifts so far, {len(gaps)} gap(s) "
                       f"({sum(b_ - a_ for a_, b_ in gaps):.3g} uncovered), {len(cent)} new centre(s)", flush=True)
@@ -795,6 +945,93 @@ class LatticeOracle:
             alpha = max(alpha, witness.real)
         return dict(clear=bool(clear), alpha=float(alpha), witness=witness, rows=rows, seen=seen,
                     nshift=nshift, waves=waves, uncovered=uncovered)
+
+    # --------------------------------------------------------------- level set
+    def level(self, z, gam, wlo, whi):
+        """Is sigma_1 < gam on all of [wlo, whi]?  The level-set certificate of
+        certify_sparse.certify_greater on the lattice (in-solve missed peaks;
+        user, 2026-10-09: the 321-point sweep saw a peak only where it rose above
+        a grid point).  Returns dict(clear, cross, shifts, waves, uncovered,
+        cg_max): cross lists (w, sigma_1) for each region above gam found (a top
+        estimate; empty when clear)."""
+        dz = z if isinstance(z, dict) else self.design(z)
+        lk = (dz['key'], float(gam), float(wlo), float(whi))
+        if lk in self._level_memo:
+            return self._level_memo[lk]                    # computed beside an evaluation (evaluate(level=...))
+        R = {}
+        done, _ = self._drive(dz, {0: self._level(*lk[1:], R)}, 'level', R)
+        return done[0]
+
+    def _level(self, gam, wlo, whi, R):
+        """The level set's waves, as the line's (_line): the centres that
+        covered the band at the last call (their factors held) or, at the first
+        call, the base grid (ranks/2 equispaced axis points), then centres in the
+        gaps, until the band
+        is covered -- sigma_1 < gam everywhere, since the band holds a point
+        below gam (every row is at most t < gam) and no disk holds a crossing --
+        or a centre has sigma_1 >= gam (a region above, found directly), or a
+        pencil eigenvalue lies on the axis.  Such a crossing (sigma_j = gam
+        at Im lambda) is confirmed by sigma_1 there (one wave, exact points); an
+        upward and the next downward crossing bracket one region above gam, whose
+        top the cubic Hermite fit on their values and slopes estimates.  An
+        unconfirmed one (an eigenvalue just off the axis) is passed over, its
+        neighbourhood then left to the finest level."""
+        hmin = 2.0 ** -LINE_LMAX
+        # the first wave: the last call's cover where there is one (86 centres
+        # on the central record: with the base grid as well, 130 tasks for 96
+        # ranks, two rounds of 5-8 s pencil disks), else the base grid
+        cent = sorted(c for c in self.level_prev if wlo - 1e-12 <= c <= whi + 1e-12) or self.base_grid(wlo, whi)
+        done = {}
+        waves = 0; nshift = 0; spurious = set(); cross = []
+        while cent and waves < LINE_WAVES:
+            waves += 1
+            reqs = [('level', float(th), gam) for th in cent]
+            yield reqs
+            for q in reqs:
+                done[q[1]] = R[q]
+            nshift += len(cent)
+            # a centre itself above gam: a region above, sigma_1 its own witness --
+            # one per run of consecutive centres above gam (the highest), not
+            # every centre of a wide region (the central record below its level:
+            # 15 centres above gam in 8 regions)
+            run = []
+            for th, c in sorted(done.items()) + [(None, None)]:
+                if c is not None and c['sigma'] >= gam:
+                    run.append((float(th), float(c['sigma'])))
+                elif run:
+                    cross.append(max(run, key=lambda q_: q_[1])); run = []
+            if cross:
+                break
+            on = sorted(set(round(float(l_.imag), 12) for c in done.values() for l_ in c['lams']
+                            if abs(l_.real) <= LEVEL_IMAG * max(1.0, abs(l_)) and wlo - 1e-12 <= l_.imag <= whi + 1e-12)
+                        - spurious)
+            if on:
+                yield [('slopex', w_) for w_ in on]
+                ok = [(w_, R[('slopex', w_)]) for w_ in on if R[('slopex', w_)]['sigma'] >= gam * (1.0 - LEVEL_CONFIRM)]
+                spurious |= set(w_ for w_ in on if w_ not in dict(ok))
+                j = 0
+                while j < len(ok):
+                    (wa, ea) = ok[j]
+                    if j + 1 < len(ok) and ea['gprime'] > 0.0 > ok[j + 1][1]['gprime']:
+                        wb, eb = ok[j + 1]
+                        wt, ft, _ = _hermite_top(wa, wb, ea['sigma'], eb['sigma'], ea['gprime'], eb['gprime'])
+                        cross.append((float(wt), float(max(ft, ea['sigma'], eb['sigma']))))
+                        j += 2
+                    else:
+                        cross.append((float(wa), float(ea['sigma'])))
+                        j += 1
+                if cross:
+                    break
+            cent = self._fill(done, self._gaps(done, wlo, whi), hmin)
+            if self.verbose:
+                print(f"      level wave {waves}: {nshift} shifts so far, {len(cent)} new centre(s)", flush=True)
+        gaps = self._gaps(done, wlo, whi)
+        uncovered = float(sum(b_ - a_ for a_, b_ in gaps))
+        if not cross:
+            self.level_prev = sorted(self._cover(done, wlo, whi))
+        return dict(clear=bool(not cross and uncovered <= 0.0), cross=cross, shifts=nshift, waves=waves,
+                    uncovered=uncovered, cg_max=max((c['cg_max'] for c in done.values()), default=0),
+                    pencil=int(sum(c['pencil'] for c in done.values())))
 
     # ------------------------------------------------------------------- strip
     def _strip(self, eps, wlo, whi, d, R):
@@ -943,6 +1180,42 @@ class LatticeOracle:
         return dict(lr, rows=rows, seen=seen, strip=st)
 
     @staticmethod
+    def _fill(done, gaps, hmin):
+        """The next centres in the gaps of a cover of an interval (the line's or
+        the level set's; done: centre -> result with its free radius 'rad')."""
+        cent = []
+        for a_, b_ in gaps:
+            L = b_ - a_
+            if L < hmin:
+                # a sliver between two disks that nearly touch (1.2e-6 wide on the
+                # central record's level set): the finest lattice points next to
+                # it, inside a neighbouring disk -- their own disks cover it
+                c, h = snap(0.5 * (a_ + b_), LINE_LMAX), 2.0 ** -LINE_LMAX
+                cent += [c2 for c2 in (c, c - h, c + h) if c2 not in done][:1]
+                continue
+            # as many centres as the neighbouring disks' radii suggest (one when
+            # they are large: bisection), evenly over the gap, each on the lattice
+            # point nearest its place at the first level finer than a quarter of
+            # the spacing
+            ra = [c['rad'] for th, c in done.items() if c['rad'] > 0 and
+                  (abs(th + LINE_SHRINK * c['rad'] - a_) < 1e-12 or abs(th - LINE_SHRINK * c['rad'] - b_) < 1e-12)]
+            r_est = min(ra) if ra else L
+            nc = int(min(32, max(1, np.ceil(L / (2.0 * LINE_SHRINK * r_est)))))
+            sp = L / nc
+            lev = min(LINE_LMAX, int(np.ceil(np.log2(4.0 / sp))))
+            for j in range(nc):
+                c = snap(a_ + (j + 0.5) * sp, lev)
+                if c in done:
+                    # a centre whose eigensolve failed (no disk) sits there: the
+                    # quarter points, one level finer
+                    for c2 in (snap(c - 0.25 * sp, lev + 1), snap(c + 0.25 * sp, lev + 1)):
+                        if a_ < c2 < b_ and c2 not in done and lev + 1 <= LINE_LMAX:
+                            cent.append(c2)
+                elif a_ < c < b_:
+                    cent.append(c)
+        return sorted(set(cent))
+
+    @staticmethod
     def _gaps(done, wlo, whi):
         iv = sorted((th - LINE_SHRINK * c['rad'], th + LINE_SHRINK * c['rad']) for th, c in done.items() if c['rad'] > 0)
         gaps, x = [], wlo
@@ -991,4 +1264,4 @@ class LatticeOracle:
 
     def drop(self):
         self._run(drop_task, {r: None for r in self._ranks()}, 'drop')
-        self.held.clear(); self.line_prev.clear(); self.strip_prev.clear(); self.tops.clear(); self._line_memo.clear()
+        self.held.clear(); self.line_prev.clear(); self.strip_prev.clear(); self.level_prev = []; self.tops.clear(); self._line_memo.clear(); self._level_memo.clear()

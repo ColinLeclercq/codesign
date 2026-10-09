@@ -14,6 +14,10 @@ Checks, at the record's design:
           serial certificate, stability_and_abscissa): the same clear / not clear,
           the same rightmost eigenvalue, and its gradient row against the one
           from the serial eigenvectors (eigvecs_at);
+  level   the level-set certificate (LatticeOracle.level, the in-solve missed
+          peaks) just above and just below the largest top found: clear above,
+          a region found below; --level-ref: the same decisions by the 2n
+          certificate (certify_sparse.certify_greater);
   strip   the strip [-eps - ROW_REACH, -eps] (evaluate): complete, and every
           eigenvalue an independent search finds in it (30 nearest eigenvalues
           at shifts every 0.5 along its middle) among the exhibited ones;
@@ -43,6 +47,8 @@ ap.add_argument('--out', default=None)
 ap.add_argument('--ref', default=None)
 ap.add_argument('--eps', type=float, default=0.05)
 ap.add_argument('--whi', type=float, default=10.0)
+ap.add_argument('--level-ref', dest='level_ref', action='store_true',
+                help='the level set also against the 2n certificate (certify_greater; minutes per decision)')
 a = ap.parse_args()
 
 z = np.load(a.record, allow_pickle=True)
@@ -134,6 +140,27 @@ t0 = time.perf_counter(); s3, _, _, _, info3, _ = lat.evaluate(z0, Wf, follow=fo
 print(f"follow again (same design, warm starts): {info3['nev']} evaluations in {info3['waves']} waves, {t1 - t0:.1f} s, rows' largest relative "
       f"difference {np.max(np.abs(s3 - s2) / s2):.1e}", flush=True)
 out['follow_s'] = s2
+
+# ---- level set: the in-solve missed-peak certificate against the 2n certificate
+tmax = float(max(np.max(s2), np.max(sv)))
+arow_, nvec_, K_, xa_, xs_, _, _ = pk.unpack(z0)
+b_, c_, pa_, ps_, na_, ns_ = D.bc(xa_, xs_)
+import certify_sparse as csp, controller as ctl
+Ac_ = ctl.A_of(*arow_[:3]); Bc_ = arow_[3] if a.mimo else ctl.Bc_of(arow_, R, D.mc)
+csp.DISK_STRICT = True; csp.NEAR_K = 4; csp.CERT_SPLIT = max(lat.size - 1, 1)
+for lab, gam in (('above the largest top found', tmax * (1.0 + 1e-4)), ('below it', tmax * (1.0 - 1e-3))):
+    t0 = time.perf_counter(); LV = lat.level(z0, gam, 0.0, a.whi); t1 = time.perf_counter()
+    print(f"level set at {gam:.6f} ({lab}): clear {LV['clear']}, regions above {[(round(w_, 5), round(v_, 5)) for w_, v_ in LV['cross']]}; "
+          f"{LV['shifts']} shifts in {LV['waves']} waves (cover kept: {len(lat.level_prev)}), inner CG up to {LV['cg_max']}, "
+          f"{t1 - t0:.1f} s", flush=True)
+    if a.level_ref:
+        t0 = time.perf_counter()
+        gt, nsh, wit = csp.certify_greater(D.A, D.M, b_, c_, Ac_, Bc_, nvec_, K_, gam,
+                                           lambda w_: direct(z0, w_)[0], 0.0, a.whi, k=4)
+        t1 = time.perf_counter()
+        print(f"  2n certificate (certify_sparse.certify_greater, k = 4): sigma_1 above somewhere {gt} "
+              f"(witness {wit:.5f}), {nsh} shifts, {t1 - t0:.1f} s; agree {bool(gt) == bool(LV['cross'])}", flush=True)
+    out[f"level_{'hi' if gam > tmax else 'lo'}"] = float(bool(LV['cross']))
 
 # ---- line
 t0 = time.perf_counter(); L = lat.line(z0, a.eps, 0.0, a.whi); t1 = time.perf_counter()
