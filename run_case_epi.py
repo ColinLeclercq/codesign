@@ -1732,9 +1732,9 @@ def main():
     ap.add_argument('--lattice-cap', dest='lattice_cap', type=int, default=24,
                     help='--oracle lattice: plant factorisations kept per rank (least recently used dropped); '
                          'test plant 133 MB each, full mesh ~1.05 GB')
-    ap.add_argument('--lattice-tol', dest='lattice_tol', type=float, default=1e-6,
-                    help='--oracle lattice: a followed peak\'s bracket is refined until the Hermite top is within '
-                         'this (relative) of the row')
+    ap.add_argument('--lattice-tol', dest='lattice_tol', type=float, default=1e-7,
+                    help='--oracle lattice: a followed peak\'s Newton stops at |sigma\'| <= this x sigma '
+                         '(lattice.FOLLOW_GTOL)')
     ap.add_argument('--lattice-sweep', dest='lattice_sweep', type=int, default=5,
                     help='--oracle lattice: missed peaks and the certificate\'s reference sweep on the lattice level '
                          '2^-N of the band (0: no in-solve sweep)')
@@ -2282,7 +2282,7 @@ def main():
         if a.plant != 'bfs':
             raise SystemExit("--oracle lattice: backward-facing step only (real plant, lattice.py)")
         import lattice as _lat_mod                # its settings go to the ranks with every context (mpipool)
-        _lat_mod.LU_CAP = int(a.lattice_cap); _lat_mod.FOLLOW_TOL = float(a.lattice_tol)
+        _lat_mod.LU_CAP = int(a.lattice_cap); _lat_mod.FOLLOW_GTOL = float(a.lattice_tol)
         _lat_mod.SWEEP_LEVEL = int(a.lattice_sweep); _lat_mod.ROW_REACH = float(a.lattice_reach)
         _lat_mod.LINE_K = int(a.lattice_k); _lat_mod.WARM_NCV = int(a.lattice_warm)
     _retire_frac = _retire_rounds = None
@@ -3376,9 +3376,10 @@ def main():
                                       use_driver=(a.lattice_driver == 'on'), real=True)
         certified_norm.lattice = _lat
         print(f"oracle: the full model on the lattice ({_lat.size} rank(s){', the driver included' if _lat.use_driver else ''}; "
-              f"{_lat_mod.LU_CAP} factors kept per rank, rows on 2^-{_lat_mod.ROW_LEVEL}, followed peaks to "
-              f"{_lat_mod.FOLLOW_TOL:g}, sweep on 2^-{_lat_mod.SWEEP_LEVEL}, stability rows within {_lat_mod.ROW_REACH:g} "
-              f"of the line, {_lat_mod.LINE_K} eigenvalues per disk)", flush=True)
+              f"{_lat_mod.LU_CAP} factors kept per rank, fixed rows on 2^-{_lat_mod.ROW_LEVEL}, followed peaks by Newton "
+              f"to |sigma'| <= {_lat_mod.FOLLOW_GTOL:g} sigma, sweep on 2^-{_lat_mod.SWEEP_LEVEL}; the line from "
+              f"{_lat.base_grid(0.0, 1.0).__len__()} equispaced centres, the strip [-eps - {_lat_mod.ROW_REACH:g}, -eps] "
+              f"covered and every eigenvalue in it a row; {_lat_mod.LINE_K} eigenvalue(s) per disk)", flush=True)
         # the ports' positions behind every (b, c) this process builds: the gates
         # call D.alpha_certified with b and c, and the ranks build them from the
         # positions
@@ -3733,9 +3734,11 @@ def main():
             _sqp_trust_prev = inner_stats.get('trust_final')
             if _lat is not None and inner_stats.get('lattice'):
                 _li = inner_stats['lattice']
-                print(f"    lattice: {_li['evaluations']} evaluations, {_li['gain_evals']} sigma evaluations, largest bracket "
-                      f"deficit {_li['deficit_max']:.1e}; line {_li['line_shifts']} shifts (at most {_li['line_waves_max']} waves, "
-                      f"{_li['line_not_clear']} not clear), up to {_li['stab_rows_max']} stability rows; "
+                print(f"    lattice: {_li['evaluations']} evaluations, {_li['gain_evals']} sigma evaluations (Newton: at "
+                      f"most {_li['newton_max']} per member); line {_li['line_shifts']} shifts (at most "
+                      f"{_li['line_waves_max']} waves, {_li['line_not_clear']} not clear); strip up to "
+                      f"{_li['strip_shifts_max']} shifts, {_li['strip_incomplete']} incomplete; up to {_li['stab_rows_max']} "
+                      f"stability rows; "
                       f"{_li['stab_cuts']} trial(s) cut back inside the line, {_li['stab_cuts_unseen']} of them by an "
                       f"eigenvalue without a row at the iterate", flush=True)
             # STALL RECOVERY (2026-09-25): a solve that ended on a collapsed radius
@@ -4651,10 +4654,9 @@ def main():
             # lattice; 2026-10-08), after an ACCEPTED round only (the followed
             # members sit on their tops at the candidate, which is then the
             # accepted design; a refused round leaves the streaks as they are):
-            # sigma_1 at every member's lattice point -- a followed member's top
-            # (its lattice point at the bracket's level, recovered on 2^-16 from
-            # the 1e-6 rounding), the others on 2^-10, all of them points the
-            # last SQP evaluation factored; a member below FRAC x gamma for
+            # sigma_1 at every member's lattice point on 2^-10 (a followed member
+            # sits on its exact top, within 2^-11 of that point); a member below
+            # FRAC x gamma for
             # ROUNDS consecutive accepted rounds leaves Omega.  The streak
             # follows a member that moved with its peak (the nearest member of
             # last round within half the follow radius).  Never retired: the
@@ -4664,8 +4666,7 @@ def main():
             # again is caught by the in-solve sweep and by the certificate, which
             # add it back.
             _Wr = sorted(Omega)
-            _sr = _lat.sigmas(zbest, [_lat_mod.snap(w_, _lat_mod.FOLLOW_LMAX if round(float(w_), 6) in _peakset
-                                                     else _lat_mod.ROW_LEVEL) for w_ in _Wr])
+            _sr = _lat.sigmas(zbest, [_lat_mod.snap(w_, _lat_mod.ROW_LEVEL) for w_ in _Wr])
             _prev = _retire_streak
             _retire_streak = {}
             for w_, s_ in zip(_Wr, _sr):

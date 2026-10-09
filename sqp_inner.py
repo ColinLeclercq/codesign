@@ -136,6 +136,7 @@ class Evaluator:
         self._E_ctrl = None       # dA_c/dz_j (A_c affine in z), for the exact block gradient
         self.force_full_alpha = False    # set when the reduced abscissa disagrees with the certified one at the start
         self.lattice = lattice               # lattice.LatticeOracle: the full model on cached factors (BFS.md 5)
+        self.lat_strip = True                # lattice: cover the strip (every eigenvalue near the line a row); off for trials
         self.lat_info, self.lat_line = [], []
 
     def _ctrl_dirs(self):
@@ -398,7 +399,7 @@ class Evaluator:
             s, Gs, blocks, _tops_l, _info_l, _lr_l = self.lattice.evaluate(
                 z, W, follow=self.follow, w_star=self.w_star, state=self.follow_state,
                 enroll=(self.enroll if self.kink_block else ()),
-                line=(self.eps, 0.0, float(getattr(D, 'stab_whi', 10.0))))
+                line=(self.eps, 0.0, float(getattr(D, 'stab_whi', 10.0))), strip=self.lat_strip)
             self.lat_info.append(_info_l)
         else:
             m = len(W)
@@ -612,7 +613,9 @@ class Evaluator:
             if not al_rows:
                 al_rows.append((al_line, np.zeros(NZ)))      # nothing within reach: alpha without a gradient
             self.n_alpha_rows.append(len(pairs))
-            self.lat_line.append(dict(nshift=lr['nshift'], waves=lr['waves'], clear=clr, rows=len(pairs)))
+            _st = lr.get('strip') or {}
+            self.lat_line.append(dict(nshift=lr['nshift'], waves=lr['waves'], clear=clr, rows=len(pairs),
+                                      strip_shifts=int(_st.get('shifts', 0)), strip_complete=bool(_st.get('complete', True))))
         elif self.oracle is not None and not self.force_full_alpha:
             pairs = cl.near_line_pairs(arow, nvec, K, self.eps, reach=self.reach,
                                        res_tol=self.res_tol, mc=D.mc)
@@ -771,7 +774,7 @@ class Evaluator:
                     pos_rows=pos_rows,
                     al=float(al), ga=ga, clr=bool(clr), al_rows=al_rows_qp, al_rows_all=al_rows,
                     al_ctrl=al_ctrl, al_ctrl_rest=al_ctrl_rest, ctrl_rows=ctrl_rows, lmi=lmi, hermite=hermite, pair=pair,
-                    hermite_cl=hermite_cl, lat_eigs=lat_eigs, z=z.copy())
+                    hermite_cl=hermite_cl, lat_eigs=lat_eigs, lat_strip=(self.lattice is None or self.lat_strip), z=z.copy())
 
     def _closed_loop_block(self, pr2, cl, clf, clg, arow, nvec, K, xa, xs, pa, ps, na, ns, flags, NZ):
         """Hermite data for the two rightmost near-line closed-loop eigenvalues.
@@ -1397,7 +1400,14 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                 # like the square root of the step, halving cannot bring it back --
                 # the merit decides, as before
             if en is None:
-                en = ev_fn(zn)
+                # a trial: the line's certificate decides its admissibility; the
+                # strip (the rows of every eigenvalue near the line) is built for
+                # the iterate only, once accepted (below)
+                ev_fn.lat_strip = False
+                try:
+                    en = ev_fn(zn)
+                finally:
+                    ev_fn.lat_strip = True
             if lattice is not None and admissible(e) and not admissible(en):
                 # THE FULL MODEL'S LINE IS EXACT (lattice oracle): every trial's
                 # stability is certified, so an admissible iterate is never left
@@ -1447,6 +1457,8 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             if Delta < 1e-10:
                 code = 6; break
             continue
+        if not en.get('lat_strip', True):
+            en = ev_fn(zn)                                # the accepted trial with its strip: the QP's rows
         # damped BFGS on the Lagrangian
         subn, _ = subproblem(en, tn, H, Delta, eps, ctrl_max, kink_block,
                              disp=((zn - z_start, float(max_disp)) if max_disp is not None else None), pen=nu / 100.0)
@@ -1603,7 +1615,9 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                  w_star=(_tops_at(best['z']) if (ev_fn.follow and best['z'] is not None) else {}),
                  n_blocks=len(e['blocks']), dedup=int(sum(ev_fn.n_dedup)), history=hist, path=path,
                  lattice=(dict(evaluations=len(ev_fn.lat_info), gain_evals=int(sum(i_['nev'] for i_ in ev_fn.lat_info)),
-                               deficit_max=float(max((i_['deficit'] for i_ in ev_fn.lat_info), default=0.0)),
+                               newton_max=int(max((i_['newton_max'] for i_ in ev_fn.lat_info), default=0)),
+                               strip_shifts_max=int(max((l_['strip_shifts'] for l_ in ev_fn.lat_line), default=0)),
+                               strip_incomplete=int(sum(not l_['strip_complete'] for l_ in ev_fn.lat_line)),
                                line_shifts=int(sum(l_['nshift'] for l_ in ev_fn.lat_line)),
                                line_waves_max=int(max((l_['waves'] for l_ in ev_fn.lat_line), default=0)),
                                line_not_clear=int(sum(not l_['clear'] for l_ in ev_fn.lat_line)),

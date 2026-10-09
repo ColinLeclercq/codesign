@@ -14,40 +14,36 @@ dropped beyond LU_CAP), and the driver sends every task to the rank that holds
 its point (`LatticeOracle`): a task is then a few tens of solves instead of a
 factorisation plus those solves.
 
-What runs on the lattice, per SQP evaluation -- rows and line TOGETHER, in
-waves (LatticeOracle.evaluate): each wave sends every outstanding request of
-every row and of the line at once, one batch per rank, the driver computing its
-own share; the first wave carries the fixed rows, the followed members' first
-points and the line's first centres, the later ones the members' walks and
-refinements beside the line's gap centres (2026-10-08: rows and line used to
-run one after the other, and each followed member's bisection on one rank):
-  rows      sigma_1 and its gradient at every member of Omega; a member that
-            follows its peak is placed by BRACKET AND REFINE on the lattice
-            (_follow, driven wave by wave from here): walk along the slope
-            (sigma' from the same solves) to a sign change, the cubic Hermite fit
-            on the bracket estimates how far the top lies above the better end
-            point and how fine a bracket must be, and the bracket is refined
-            (straight to that level, else by quarters) until that deficit is
-            below FOLLOW_TOL x sigma.  The row is an end point: an EXACT value and
-            gradient of sigma_1 at a lattice frequency (t >= sigma_1(w) holds at
-            any w), at most the deficit below the top; the fit never enters the
-            QP.  sigma_2 blocks likewise, at the point.
+What runs per SQP evaluation -- rows, line and strip TOGETHER, in waves
+(LatticeOracle.evaluate): each wave sends every outstanding request at once,
+one batch per rank, the driver computing its own share:
+  rows      sigma_1 and its gradient at every member of Omega.  A fixed member at
+            its lattice point on 2^-ROW_LEVEL (cached).  A member that follows
+            its peak by safeguarded NEWTON at exact frequencies (_newton: the
+            reduced path's peakfollow.follow on the full model, one member per
+            rank, a step and its halvings side by side): the row is the top's
+            exact value and gradient.  Its points are new at every evaluation, so
+            their factors stay out of the lattice cache (side cache, XCAP).
+            (2026-10-08/09: a bracket on the lattice left the row up to 1e-6 x
+            sigma below the top, the point jumping between lattice points from one
+            evaluation to the next -- noise in the SQP's merit.)  sigma_2 blocks
+            at the row point.
   line      the stability line Re = -eps, Im in [wlo, whi], covered by
             eigenvalue-free disks (the certificate of certify_sparse.
-            stability_and_abscissa) in WAVES: first every centre that covered
-            the line at the previous call (cached, in parallel), then one new
-            centre per remaining gap, on the lattice point nearest its middle at
-            the first level finer than a quarter of the gap -- until the line is
-            covered, an eigenvalue is found on or right of it (not clear), or a
-            gap is shorter than the finest level (inconclusive, never clear).
-            The proof is the cover; where the centres sit changes the cost, not
-            the rigour.  The LINE_K nearest eigenvalues at each centre are
-            verified by residual; those within ROW_REACH of the line come back
-            with their left eigenvectors' gradient rows (the SQP's stability
-            rows, exact), and the two rightmost with their vectors on request
-            (the closed-loop Hermite block).
-  sweep     sigma_1 values on a coarse level of the band (missed peaks, the
-            certificate's reference sweep).
+            stability_and_abscissa) in WAVES: the base grid (ranks/2 equispaced
+            centres) and every centre that covered the line at the previous call
+            (cached, in parallel), then new centres in the remaining gaps, on
+            lattice points, kept for the next calls -- until the line is covered,
+            an eigenvalue is found on or right of it (not clear), or a gap is
+            shorter than the finest level (inconclusive, never clear).  The proof
+            is the cover; where the centres sit changes the cost, not the rigour.
+  strip     the strip [-eps - ROW_REACH, -eps], covered by a quadtree of cells and
+            the disks of every shift of the evaluation (LatticeOracle._strip):
+            every eigenvalue in it is exhibited and gets its stability row (left
+            eigenvector on the same factor), exact.  The line alone saw only the
+            eigenvalues nearest to some point of it (2026-10-09).
+  sweep     sigma_1 and its slope on a coarse level of the band (missed peaks),
+            values for the certificate's reference sweep.
 
 Determinism: every eigensolve starts from the fixed ARPACK vector of the serial
 code, so a row or a disk does not depend on the rank that computed it.
@@ -67,35 +63,38 @@ import numpy as np
 LU_CAP = 24          # plant factorisations kept per rank (least recently used dropped; 133 MB each on the
                      # test plant: 24 x 96 ranks ~ 350 GB of a 450 GB allocation -- 8 on 192 GB nodes)
 ROW_LEVEL = 10       # a fixed member of Omega is evaluated at its lattice point on 2^-10
-FOLLOW_L0 = 6        # a followed peak's first bracket spacing 2^-6
-FOLLOW_LMAX = 16     # finest bracket 2^-16 (1.5e-5)
-FOLLOW_TOL = 1e-6    # bracket refined until the Hermite top is within this (relative) of the row
-FOLLOW_STEPS = 12    # walk points along the slope before the bracket search gives up (as at the window's edge)
-FOLLOW_WALK = 4      # walk points requested per wave (the walk's step doubles every second point)
-LINE_L0 = 1          # first call of a run: line centres on 2^-1, then the gaps' waves
+FOLLOW_GTOL = 1e-7   # a followed top: |sigma'| <= FOLLOW_GTOL x sigma (value error ~ sigma'^2 / 2|sigma''|, ~1e-15)
+FOLLOW_FD = 1e-5     # finite-difference step for sigma'' when no secant curvature is carried
+FOLLOW_ITMAX = 8     # Newton steps per evaluation
+FOLLOW_TRUST = 0.05  # largest Newton step (and the step when the curvature is not negative)
+FOLLOW_HALVE = 3     # a Newton step and its halvings evaluated side by side (one wave); twice before giving up
+XCAP = 4             # factors of the exact (off-lattice) points kept per rank, apart from the lattice cache
+LINE_BASE_MIN = 4    # the line's base grid: ranks/2 equispaced centres, at least this many
 LINE_LMAX = 17       # finest centre spacing 2^-17 (7.6e-6, the serial certificate's eps_int 1e-5)
 LINE_K = 1           # nearest eigenvalues per centre (k = 3 costs 2-4 x the applications; 2026-10-06, test plant)
 LINE_SHRINK = 0.9    # disk used = LINE_SHRINK x the distance to the nearest eigenvalue (serial code: 0.9)
 LINE_WAVES = 60      # waves before the sweep is declared inconclusive
 LINE_TOL = 1e-9      # ARPACK tolerance at a centre (the serial certificate's)
-ROW_REACH = 0.25     # stability rows for the eigenvalues within this of the line (to its left)
+ROW_REACH = 0.25     # the STRIP [-eps - ROW_REACH, -eps]: covered at every evaluation, every eigenvalue in it a row
+STRIP_RHO = 2.0 ** -6   # the cover may leave out a ball of this radius around each eigenvalue it exhibits
+STRIP_HMIN = 2.0 ** -10 # a cell this small and still uncovered: the strip is reported incomplete
+STRIP_SPLIT = 2      # geometric refinements of an uncovered cell per wave before new shifts are placed
+STRIP_WAVES = 30     # waves before the strip is reported incomplete
 WARM_NCV = 0         # > 0: sigma_1 restarted from the last vector at the same point with this subspace (4: 4-5
                      # applications instead of 9-17).  Off by default: where sigma_1 and sigma_2 swap between designs
                      # (kinks; the MIMO plateau) the restart vector lies along the new sigma_2 and a small subspace can
                      # converge there; cold, a row does not depend on its rank.  The line's disks are always cold.
 SWEEP_LEVEL = 5      # missed-peak sweep and the certificate's reference sweep on 2^-5
-TASK_COST = dict(row=1.0, value=1.0, slope=1.0, value2=2.0, block=2.0, centre=3.0)   # relative costs of the requests
+TASK_COST = dict(row=1.0, value=1.0, slope=1.0, value2=2.0, block=2.0, centre=3.0,
+                 rowx=1.0, slopex=1.0, blockx=2.0)   # relative costs of the requests
 LU_COST = 2.0        # ... and of a factorisation (balancing, LatticeOracle._assign)
 
 _CACHE = {}          # complex shift key (closedloop's: complex(omega)) -> factor, LRU order
 _DES = {}            # design key -> dict(b, c, pa, ps, na, ns, cl)
 _VEC = {}            # (design key, theta, rounded lambda) -> (v, u) of the last line tasks
 _V0 = {}             # point key -> the last right singular vector of sigma_1 there (warm starts)
+_XCACHE = {}         # the exact points' factors (XCAP, FIFO): kept out of the lattice cache
 STATS = dict(hit=0, miss=0)       # this process's cache accounting
-
-
-def level_of(h):
-    return int(round(-np.log2(h)))
 
 
 def snap(w, level):
@@ -158,6 +157,19 @@ def _gain(d, dz, w, vectors=True):
             for k_ in [k_ for k_ in _V0 if k_ not in _CACHE]:
                 _V0.pop(k_)
     return r
+
+
+def _exact(d, fn):
+    """fn() with the closed loop's factor cache switched to the exact points'
+    own (a Newton point is new at every evaluation: in the lattice cache it would
+    only push the lattice's factors out)."""
+    cl = d['cl']
+    saved = (cl.lu_cache, cl.lu_cache_max, cl.lu_lru)
+    cl.lu_cache, cl.lu_cache_max, cl.lu_lru = _XCACHE, int(XCAP), False
+    try:
+        return fn()
+    finally:
+        cl.lu_cache, cl.lu_cache_max, cl.lu_lru = saved
 
 
 def _hermite_top(x0, x1, f0, f1, d0, d1):
@@ -259,16 +271,16 @@ def _left(cl, s, lams):
     return out
 
 
-def _centre(d, dz, eps, th, reach):
-    """One disk centre on Re = -eps: the verified nearest eigenvalues, the free
-    radius, and the stability rows of those within `reach` of the line (left
-    eigenvectors on the same factor)."""
+def _centre(d, dz, sre, th, rlo):
+    """One disk centre s = sre + i th (on the line Re = -eps, or inside the
+    strip): the verified nearest eigenvalues, the free radius, and the stability
+    rows of those with Re >= rlo (left eigenvectors on the same factor)."""
     cl = d['cl']
-    s = complex(-eps, float(th))
+    s = complex(float(sre), float(th))
     _note(complex(-1j * s))
     lams, vs, rad = _nearest(cl, s, dz, LINE_K)
     rows = []
-    near = [j for j, l_ in enumerate(lams) if l_.real >= -eps - reach]
+    near = [j for j, l_ in enumerate(lams) if l_.real >= rlo]
     if near:
         us = _left(cl, s, [lams[j] for j in near])
         for j, u in zip(near, us):
@@ -280,8 +292,8 @@ def _centre(d, dz, eps, th, reach):
                 continue
             g = _grads(d, dz, v, u, eta=eta)
             rows.append(dict(lam=lams[j], g=g, eta=complex(eta)))
-            _VEC[(dz['key'], float(th), round(lams[j].real, 10), round(lams[j].imag, 10))] = (v, u, complex(eta))
-    return dict(theta=float(th), lams=lams, rad=rad, rows=rows)
+            _VEC[(dz['key'], float(sre), float(th), round(lams[j].real, 10), round(lams[j].imag, 10))] = (v, u, complex(eta))
+    return dict(sre=float(sre), theta=float(th), lams=lams, rad=rad, rows=rows)
 
 
 def eval_task(t):
@@ -289,7 +301,9 @@ def eval_task(t):
     Requests (LatticeOracle._drive): ('row', w) sigma_1, its slope and raw
     gradient; ('block', w) the sigma_2 block (and sigma_1's row); ('value', w)
     sigma_1 alone; ('slope', w) sigma_1 and its slope; ('value2', w) sigma_1
-    and sigma_2; ('centre', eps, theta, reach) a disk of the stability line."""
+    and sigma_2; ('rowx', w), ('slopex', w), ('blockx', w) the same at an exact
+    (off-lattice) point, factor in the side cache; ('centre', sre, theta, rlo)
+    a disk centred at sre + i theta, rows for its eigenvalues with Re >= rlo."""
     dz, reqs = t
     t0 = time.perf_counter()
     d = _design(dz)
@@ -306,6 +320,14 @@ def eval_task(t):
         elif kind == 'slope':
             r = _gain(d, dz, q[1])
             res = dict(sigma=r['sigma'], gprime=r['gprime'])
+        elif kind in ('rowx', 'slopex'):
+            w = float(q[1])
+            r = _exact(d, lambda: d['cl'].gain(w, dz['arow'], dz['nvec'], dz['K']))
+            res = dict(sigma=r['sigma'], gprime=r['gprime'])
+            if kind == 'rowx':
+                res['g'] = _grads(d, dz, r['x'], r['z'])
+        elif kind == 'blockx':
+            res = _exact(d, lambda: _block(d, dz, q[1]))
         elif kind == 'value2':
             _note(complex(q[1]))
             P = d['cl'].gain_k(float(q[1]), dz['arow'], dz['nvec'], dz['K'], k=2)
@@ -319,9 +341,9 @@ def eval_task(t):
 
 
 def vec_task(t):
-    """The (v, u, eta) a line task of this design kept, by (theta, lambda)."""
+    """The (v, u, eta) a centre task of this design kept, by (sre, theta, lambda)."""
     key, items = t
-    return dict(out=[_VEC.get((key, float(th), round(l_.real, 10), round(l_.imag, 10))) for th, l_ in items],
+    return dict(out=[_VEC.get((key, float(sr), float(th), round(l_.real, 10), round(l_.imag, 10))) for sr, th, l_ in items],
                 resident=_resident(), dt=0.0, hit=STATS['hit'], miss=STATS['miss'])
 
 
@@ -331,140 +353,80 @@ def stats_task(t):
 
 def drop_task(t):
     """Forget everything (a new plant order, a new run phase)."""
-    _CACHE.clear(); _DES.clear(); _VEC.clear(); _V0.clear()
+    _CACHE.clear(); _DES.clear(); _VEC.clear(); _V0.clear(); _XCACHE.clear()
     return dict(out=[], resident=[], dt=0.0, hit=STATS['hit'], miss=STATS['miss'])
 
 
 
 
 # --------------------------------------------------------------------- driver
-def _follow(w0, rad, hint, lvl, real, R):
-    """Bracket and refine one followed peak on the lattice, wave by wave: a
-    generator that yields the ('row', w) requests it needs and reads their
-    results from R once the driver has evaluated them (LatticeOracle._drive),
-    returning (w_row, w_top estimate, deficit, level, points requested).
+def _newton(w0, rad, hint, st, real, R):
+    """One followed peak by safeguarded Newton at EXACT frequencies (the reduced
+    path's peakfollow.follow, on the full model, wave by wave): a generator that
+    yields its requests and reads their results from R once the driver has
+    evaluated them (LatticeOracle._drive); returns (top, evaluations).
 
-      wave 1   the start point and its two neighbours at the member's level;
-      walk     FOLLOW_WALK points per wave along the slope, the step doubling
-               every second point (1, 1, 2, 2, 4, 4, ... x the level's spacing:
-               126 spacings in FOLLOW_STEPS = 12 points, against 12 at a constant
-               step -- a member's level comes from its last bracket, fine after
-               a sharp top, and its top drifts from one design to the next); the
-               bracket is the first sign change of sigma';
-      refine   the cubic Hermite fit on the bracket gives sigma'' at its top, so
-               the level whose bracket meets the tolerance (a quadratic top in a
-               bracket of width h lies at most |sigma''| h^2 / 8 above the
-               better end) is jumped to at once: its two lattice points around
-               the estimated top.  After a jump that missed
-               (a poor estimate), the bracket's quarter points (two levels per
-               wave).  The new bracket is the first sign change among the points
-               evaluated in the old one, so it shrinks at every wave.
-    Stops when the Hermite deficit is below FOLLOW_TOL x sigma or the bracket at
-    the finest level.  The row is an evaluated lattice point: exact, at most the
-    deficit below the top."""
-    lvl = min(max(int(lvl), 1), FOLLOW_LMAX)
+    The slope sigma' comes exactly from the gain's own solves; the curvature is
+    carried from the last evaluation (st['g2'], secant-updated at every step),
+    else taken by finite differences (two points, one wave).  A step and its
+    halvings are evaluated side by side (FOLLOW_HALVE points, one wave), and the
+    longest that does not lower sigma is taken; twice before giving up.  Stops
+    at |sigma'| <= FOLLOW_GTOL x sigma.  The row is the top's exact value and
+    gradient -- no lattice, so no grid noise in the SQP's merit (2026-10-09: the
+    bracket on the lattice left the row up to 1e-6 x sigma below the top, the
+    point jumping between lattice points from one evaluation to the next).  The
+    points' factors go to the side cache (eval_task, _exact)."""
     lo, hi = w0 - rad, w0 + rad
     if real:
         lo = max(lo, 0.0)
-    seen = set()
-
-    def need(xs):
-        xs = [float(x) for x in dict.fromkeys(xs)]
-        seen.update(xs)
-        return [('row', x) for x in xs]
-
-    def E(x):
-        return R[('row', float(x))]
-
-    h = 2.0 ** -lvl
-    a = snap(float(hint) if (hint is not None and lo <= float(hint) <= hi) else w0, lvl)
-    if a < lo:
-        a += h * np.ceil((lo - a) / h - 1e-12)
-    if a > hi:
-        a -= h * np.ceil((a - hi) / h - 1e-12)
-    nb = [x for x in (a - h, a + h) if lo <= x <= hi]
-    yield need([a] + nb)
-    ea = E(a)
-    gtol = 1e-12 * max(ea['sigma'], 1.0)
-
-    def sgn(e):
-        g = e['gprime']
-        return 0 if abs(g) <= gtol else (1 if g > 0 else -1)
-    s_a = sgn(ea)
-    if s_a == 0:
-        # a flat point (w = 0 by symmetry, or an exact top): a top if both
-        # neighbours are lower
-        up = [x for x in nb if E(x)['sigma'] > ea['sigma']]
-        if not up:
-            return a, a, 0.0, lvl, len(seen)
-        a = max(up, key=lambda x: E(x)['sigma']); s_a = sgn(E(a))
-        if s_a == 0:
-            return a, a, 0.0, lvl, len(seen)
-    walk, b = [], a
-    for k in range(FOLLOW_STEPS):
-        b = b + s_a * h * 2.0 ** (k // 2)
-        if b < lo - 1e-15 or b > hi + 1e-15:
-            break                                          # the top lies beyond the member's window
-        walk.append(b)
-    bracket, prev = None, a
-    for j, b in enumerate(walk):
-        if ('row', b) not in R:
-            yield need(walk[j:j + FOLLOW_WALK])
-        if sgn(E(b)) != s_a:
-            bracket = (prev, b) if prev < b else (b, prev)
+    x = float(hint) if (hint is not None and lo <= float(hint) <= hi) else float(w0)
+    yield [('rowx', x)]
+    e = R[('rowx', x)]; n = 1
+    g2 = st.get('g2')
+    carried = g2 is not None
+    trust = min(FOLLOW_TRUST, rad)
+    for _ in range(FOLLOW_ITMAX):
+        g1 = e['gprime']
+        if abs(g1) <= FOLLOW_GTOL * max(1.0, e['sigma']):
             break
-        prev = b
-    if bracket is None:
-        return prev, prev, float('nan'), lvl, len(seen)   # edge of the window or of the walk: the row at the last point
-    x0, x1 = bracket
-    jumped = False
-    while True:
-        e0, e1 = E(x0), E(x1)
-        wt, ft, curv = _hermite_top(x0, x1, e0['sigma'], e1['sigma'], e0['gprime'], e1['gprime'])
-        deficit = max(ft - max(e0['sigma'], e1['sigma']), 0.0)
-        width = x1 - x0
-        if deficit <= FOLLOW_TOL * max(ft, 1e-300) or width <= 2.0 ** -FOLLOW_LMAX * 1.0000001:
+        if g2 is None or not g2 < 0.0:
+            pts = [x + FOLLOW_FD, x - FOLLOW_FD]
+            yield [('slopex', p_) for p_ in pts]; n += 2
+            g2 = (R[('slopex', pts[0])]['gprime'] - R[('slopex', pts[1])]['gprime']) / (2.0 * FOLLOW_FD)
+            carried = False
+        stp = -g1 / g2 if (g2 < 0.0 and abs(g2) > 1e-16) else float(np.sign(g1)) * trust
+        stp = float(np.clip(stp, -trust, trust))
+        xt = None
+        for batch in range(2):
+            cands = [x + stp * 0.5 ** (k + batch * FOLLOW_HALVE) for k in range(FOLLOW_HALVE)]
+            cands = [c for c in cands if lo <= c <= hi and c != x]
+            if not cands:
+                continue
+            yield [('rowx', c) for c in cands]; n += len(cands)
+            ok = [c for c in cands if R[('rowx', c)]['sigma'] >= e['sigma']]
+            if ok:
+                xt = ok[0]
+                break
+        if xt is None:
+            if carried:
+                g2 = None; carried = False             # the carried curvature failed: one fresh FD attempt
+                continue
             break
-        lq = min(FOLLOW_LMAX, int(np.ceil(np.log2(4.0 / width) - 1e-9)))    # the quarter points' level
-        pts = []
-        if not jumped and np.isfinite(curv) and curv < 0.0:
-            lr = int(np.ceil(-np.log2(np.sqrt(8.0 * FOLLOW_TOL * max(ft, 1e-300) / -curv))))
-            if lr > lq:
-                hs = 2.0 ** -min(lr, FOLLOW_LMAX)
-                f = np.floor(wt / hs) * hs
-                pts = [f, f + hs]
-        jumped = bool(pts)
-        if not pts:
-            pts = [snap(x0 + q * width, lq) for q in (0.25, 0.5, 0.75)]
-        pts = sorted(set(float(x) for x in pts if x0 < x < x1))
-        yield need(pts)
-        xs = [x0] + pts + [x1]
-        flat = None
-        for j in range(1, len(xs) - 1):
-            sj = sgn(E(xs[j]))
-            if sj == 0:
-                flat = xs[j]; break
-            if sj < 0:
-                x0, x1 = xs[j - 1], xs[j]; break
-        else:
-            x0 = xs[-2]
-        if flat is not None:
-            x0 = x1 = flat
-            wt, ft, deficit = flat, E(flat)['sigma'], 0.0
-            break
-    wrow = max((x0, x1), key=lambda x: E(x)['sigma'])
-    # the level for the next evaluation: the bracket's -- never below FOLLOW_L0
-    # (a walk's bracket spans up to 32 spacings, and a level coarser than the
-    # window would put the walk outside it)
-    lvl_out = max(level_of(x1 - x0) if x1 > x0 else lvl, min(lvl, FOLLOW_L0))
-    if deficit < FOLLOW_TOL * max(ft, 1e-300) / 16.0 and lvl_out > FOLLOW_L0:
-        lvl_out -= 1                                       # well inside the tolerance: try a coarser bracket next time
-    return wrow, float(wt), float(deficit), int(lvl_out), len(seen)
+        et = R[('rowx', xt)]
+        dx = xt - x
+        if abs(dx) > 1e-12:
+            g2s = (et['gprime'] - g1) / dx             # secant update of the curvature
+            g2 = g2s if g2s < 0.0 else None
+        x, e = xt, et
+    if g2 is not None and g2 < 0.0:
+        st['g2'] = float(g2)
+    return x, n
 
 
 def _key(q):
-    """The cache key of a request's shift (closedloop's complex(omega))."""
-    return complex(q[2], q[1]) if q[0] == 'centre' else complex(q[1])
+    """The cache key of a request's shift (closedloop's complex(omega), omega =
+    -i s: a centre s = sre + i theta has the key theta - i sre)."""
+    return complex(q[2], -q[1]) if q[0] == 'centre' else complex(q[1])
 
 
 class LatticeOracle:
@@ -478,8 +440,9 @@ class LatticeOracle:
         self.use_driver = bool(use_driver) or self.size == 1
         self.real = bool(real)
         self.held = {}                   # rank -> the point keys whose factors it holds (its last report)
-        self.tops = {}                   # followed rows of the last evaluation: lattice point -> bracket level
+        self.tops = {}                   # the followed tops of the last evaluation
         self.line_prev = {}              # eps -> centres that covered the line at the last call
+        self.strip_prev = {}             # eps -> the strip's shifts (sre, theta) that served its last cover
         self.calls = {}                  # kind -> [calls, tasks, wall, critical path (longest rank), misses]
         self.verbose = False
         self._dkey = None; self._dz = None
@@ -616,15 +579,19 @@ class LatticeOracle:
         return sum(o['miss'] for o in res.values()), sum(o['hit'] for o in res.values())
 
     # -------------------------------------------------------------- evaluation
-    def evaluate(self, z, W, follow=None, w_star=None, state=None, enroll=(), line=None):
+    def evaluate(self, z, W, follow=None, w_star=None, state=None, enroll=(), line=None, strip=True):
         """sigma_1 rows at every member of W and, with line = (eps, wlo, whi),
-        the stability line -- in ONE sequence of waves: the first carries the
-        fixed rows, every followed member's first points and the line's first
-        centres, the later ones the members' walks and refinements beside the
-        line's gap centres.  follow: {member key: radius} (the followed peaks);
-        w_star / state: per member, the last row point and its bracket level
-        (updated here); enroll: the members whose sigma_2 block is built, at
-        the row point.  Returns (s, Gs, blocks, tops, info, line result or None)."""
+        the stability line and the strip -- in ONE sequence of waves: the first
+        carries the fixed rows, every followed member's first Newton point, the
+        line's and the strip's first centres; the later ones the Newton steps,
+        the line's gap centres and the strip's new shifts side by side.
+        follow: {member key: radius} (the followed peaks); w_star / state: per
+        member, the last top and the carried curvature (updated here); enroll:
+        the members whose sigma_2 block is built, at the row point.  Returns
+        (s, Gs, blocks, tops, info, line result or None); the line result's rows
+        are every eigenvalue the line and the strip exhibited in the strip.
+        strip = False: the line only (a line-search trial: its admissibility is
+        the line's certificate; the rows the QP reads come from the iterate)."""
         dz = self.design(z)
         follow = follow or {}
         w_star = {} if w_star is None else w_star
@@ -632,64 +599,65 @@ class LatticeOracle:
         enroll = set(int(i) for i in (enroll or ()))
         R = {}
 
-        def member(w, rad, hint, lvl, blk):
+        def member(w, rad, hint, st, blk):
             if rad:
-                out = yield from _follow(float(w), float(rad), hint, lvl, self.real, R)
-            else:
-                out = (snap(float(w), ROW_LEVEL), None, None, None, 1)
-                if not blk:
-                    yield [('row', out[0])]
-            if blk:
-                yield [('block', out[0])]
-            return out
+                x, nev = yield from _newton(float(w), float(rad), hint, st, self.real, R)
+                if blk:
+                    yield [('blockx', x)]
+                return x, ('blockx' if blk else 'rowx'), nev
+            x = snap(float(w), ROW_LEVEL)
+            yield [('block' if blk else 'row', x)]
+            return x, ('block' if blk else 'row'), 1
 
         agents = {}
         for i, w in enumerate(W):
             k6 = round(float(w), 6)
             rad = follow.get(k6)
-            hint = lvl = None
+            hint = st = None
             if rad:
                 st = state.setdefault(k6, {})
                 hint = w_star.get(k6)
                 if hint is None and self.tops:
                     # a member placed at a top of an earlier evaluation (the
-                    # round's end moves members there): start on that point
+                    # round's end moves members there): start on that top
                     q = min(self.tops, key=lambda x: abs(x - float(w)))
                     if abs(q - float(w)) <= 0.5 * float(rad):
-                        hint = q; st.setdefault('lvl', self.tops[q])
-                lvl = st.get('lvl', FOLLOW_L0)
-            agents[i] = member(w, rad, hint, lvl, i in enroll)
+                        hint = q
+            agents[i] = member(w, rad, hint, st, i in enroll)
         mk = lr = None
         if line is not None:
             eps, wlo, whi = (float(v) for v in line)
             mk = (dz['key'], round(eps, 12), wlo, whi, None)
             hit = self._line_memo.get(mk)
             if hit is not None and hit[0] >= ROW_REACH:
-                lr = hit[1]
+                lr = hit[1]                                # this design's line, swept already
             else:
                 agents['line'] = self._line(eps, wlo, whi, ROW_REACH, None, R)
+            if strip and (lr is None or 'strip' not in lr):
+                agents['strip'] = self._strip(eps, wlo, whi, ROW_REACH, R)
         done, waves = self._drive(dz, agents, 'eval', R)
         if 'line' in done:
             lr = done['line']
+        if 'strip' in done:
+            lr = self._merge(lr, done['strip'], R)
+        if 'line' in done or 'strip' in done:
             self._memo(mk, ROW_REACH, lr)
         m = len(W)
         if follow:
             self.tops = {}
         NZ = len(self.pk.z0())
         s = np.zeros(m); Gs = np.zeros((m, NZ)); blocks = {}; tops = {}
-        info = dict(nev=0, deficit=0.0, waves=waves)
+        info = dict(nev=0, newton_max=0, waves=waves)
         grad = lambda g_: np.asarray(self.pk.grad(g_), float)
         for i in range(m):
-            wrow, wt, df, lv, nev = done[i]
-            r = R[('block', wrow)] if i in enroll else R[('row', wrow)]
+            x, kind, nev = done[i]
+            r = R[(kind, x)]
             s[i] = r['sigma']; Gs[i] = grad(r['g']); info['nev'] += nev
-            if wt is not None:
+            if kind in ('rowx', 'blockx'):
                 k6 = round(float(W[i]), 6)
-                w_star[k6] = float(wrow); tops[k6] = float(wrow)
-                state.setdefault(k6, {})['lvl'] = lv
-                self.tops[float(wrow)] = int(lv)
-                if np.isfinite(df):
-                    info['deficit'] = max(info['deficit'], df / max(r['sigma'], 1e-300))
+                w_star[k6] = float(x); tops[k6] = float(x)
+                self.tops[float(x)] = None
+                info['newton_max'] = max(info['newton_max'], nev)
             if i in enroll:
                 B = r['block']
                 Gc = np.zeros((2, 2, NZ), complex)
@@ -744,21 +712,26 @@ class LatticeOracle:
         while len(self._line_memo) > 8:
             self._line_memo.pop(next(iter(self._line_memo)))
 
+    def base_grid(self, wlo, whi):
+        """The line's base grid: ranks/2 equispaced centres on [wlo, whi] (at
+        least LINE_BASE_MIN), each on its nearest point of 2^-LINE_LMAX -- one wave,
+        half the ranks, the other half free for the gaps (user, 2026-10-09)."""
+        n = max(self.size // 2, LINE_BASE_MIN)
+        return sorted(set(snap(wlo + j * (whi - wlo) / (n - 1), LINE_LMAX) for j in range(n)))
+
     def _line(self, eps, wlo, whi, reach, eps_int, R):
-        """The line's waves (module doc), a generator of ('centre', eps, theta,
-        reach) requests for _drive; returns the line's result."""
+        """The line's waves (module doc), a generator of ('centre', -eps,
+        theta, -eps - reach) requests for _drive; returns the line's result."""
         hmin = 2.0 ** -LINE_LMAX if eps_int is None else float(eps_int)
         key = round(float(eps), 12)
-        cent = sorted(c for c in self.line_prev.get(key, []) if wlo - 1e-12 <= c <= whi + 1e-12)
-        if not cent:
-            cent = list(self.grid(wlo, whi, LINE_L0))
-            if not cent or cent[0] > wlo:
-                cent = [snap(wlo, LINE_LMAX)] + cent
+        rlo = -eps - reach
+        cent = sorted(set(self.base_grid(wlo, whi)) |
+                      set(c for c in self.line_prev.get(key, []) if wlo - 1e-12 <= c <= whi + 1e-12))
         done = {}
         waves = 0; witness = None; nshift = 0
         while cent and waves < LINE_WAVES:
             waves += 1
-            reqs = [('centre', eps, float(th), reach) for th in cent]
+            reqs = [('centre', -eps, float(th), rlo) for th in cent]
             yield reqs
             for q in reqs:
                 done[q[2]] = R[q]
@@ -804,13 +777,9 @@ class LatticeOracle:
         uncovered = float(sum(b_ - a_ for a_, b_ in gaps))
         clear = witness is None and uncovered <= 0.0
         if witness is None:
-            # next call's first wave: a cover of the line, plus every centre whose
-            # nearest eigenvalue lies within ROW_REACH of it -- an eigenvalue near
-            # the line need not be the nearest to any centre of a cover (the
-            # plant's -0.1148 was not, at the zero start), and its row must not
-            # disappear from one evaluation to the next
-            keep = {th for th, c in done.items() if any(l_.real >= -eps - ROW_REACH for l_ in c['lams'])}
-            self.line_prev[key] = sorted(set(self._cover(done, wlo, whi)) | keep)
+            # next call's first wave: the base grid and a cover of the line (the
+            # rows of the eigenvalues near the line come from the strip)
+            self.line_prev[key] = sorted(self._cover(done, wlo, whi))
         seen, rows = [], []
         for th in sorted(done):
             c = done[th]
@@ -819,13 +788,146 @@ class LatticeOracle:
                     seen.append(l_)
             for rw in c['rows']:
                 if all(abs(rw['lam'] - q['lam']) > 1e-8 * max(1.0, abs(rw['lam'])) for q in rows):
-                    rows.append(dict(rw, theta=th, rank=c['rank']))
+                    rows.append(dict(rw, sre=c['sre'], theta=th, rank=c['rank']))
         rows.sort(key=lambda r_: -r_['lam'].real)
         alpha = max((l_.real for l_ in seen), default=-np.inf)
         if witness is not None:
             alpha = max(alpha, witness.real)
         return dict(clear=bool(clear), alpha=float(alpha), witness=witness, rows=rows, seen=seen,
                     nshift=nshift, waves=waves, uncovered=uncovered)
+
+    # ------------------------------------------------------------------- strip
+    def _strip(self, eps, wlo, whi, d, R):
+        """The strip [-eps - d, -eps] x [wlo, whi], COVERED AT EVERY EVALUATION
+        (user, 2026-10-09), a generator of ('centre', sre, theta, -eps - d)
+        requests for _drive beside the line's.  Every eigenvalue in the strip is
+        then exhibited, and each gets its stability row: the line's centres see
+        only the eigenvalues nearest to some point of the line, and one behind
+        another (-0.1444 behind -0.0723 on the central record 191.11) had no row,
+        so the QP could not see it coming.
+
+        The cover: a quadtree of cells over the strip (first cells d x d); a cell
+        is covered when it lies inside one eigenvalue-free disk of ANY shift of
+        this evaluation (line or strip; radius LINE_SHRINK x the distance to the
+        nearest eigenvalue, as on the line) or inside the ball of radius
+        STRIP_RHO around an exhibited eigenvalue.  An uncovered cell is refined
+        STRIP_SPLIT times on the disks at hand, and each sub-cell still uncovered
+        gets a shift at its centre (on a 2-D dyadic point: the factor serves the
+        next evaluations) in the next wave.  Complete when no cell is left; a
+        cell refined down to STRIP_HMIN, or STRIP_WAVES waves, leaves it
+        incomplete (reported).  What the cover proves: no eigenvalue in the strip
+        other than the exhibited ones, up to the STRIP_RHO balls around them.
+        Returns dict(complete, shifts, waves, holes)."""
+        key = round(float(eps), 12)
+        rlo = -eps - d
+        x0, x1 = -eps - d, -eps
+        h0 = 2.0 ** np.floor(np.log2(d))
+        nre = max(1, int(np.ceil((x1 - x0) / h0 - 1e-12)))
+        nim = max(1, int(np.ceil((whi - wlo) / h0 - 1e-12)))
+        cells = [(x0 + i * h0, min(x0 + (i + 1) * h0, x1), wlo + j * h0, min(wlo + (j + 1) * h0, whi))
+                 for i in range(nre) for j in range(nim)]
+        prev = self.strip_prev.get(key)
+        shifts = set(prev) if prev else {self._cshift(c) for c in cells}
+        asked, used, holes = set(), set(), []
+        waves = 0; complete = False
+        while True:
+            new = sorted(sh for sh in shifts if sh not in asked)
+            if new:
+                waves += 1
+                asked |= set(new)
+                yield [('centre', sr, th, rlo) for sr, th in new]
+            S, r, own, E = self._disks(R)
+            todo = []
+            for c in cells:
+                todo += self._resolve(c, S, r, own, E, STRIP_SPLIT, used)
+            small = [c for c in todo if max(c[1] - c[0], c[3] - c[2]) <= STRIP_HMIN]
+            holes += small
+            todo = [c for c in todo if max(c[1] - c[0], c[3] - c[2]) > STRIP_HMIN]
+            if not todo:
+                complete = not holes
+                break
+            if waves >= STRIP_WAVES:
+                holes += todo
+                break
+            # the uncovered cells' shifts; a cell whose shift was evaluated already
+            # is refined further on the disks at hand (no new wave for it)
+            shifts = {self._cshift(c) for c in todo}
+            cells = todo
+        # the next evaluation's first wave: the strip's shifts whose disks served
+        # the cover, and those that exhibited an eigenvalue in the strip (the
+        # line's centres come back with the line)
+        keep = set(sh for sh in used if sh[0] != -eps)
+        for q, o in R.items():
+            if q[0] == 'centre' and q[1] != -eps and any(l_.real >= rlo for l_ in o['lams']):
+                keep.add((q[1], q[2]))
+        self.strip_prev[key] = sorted(keep)
+        if self.verbose:
+            print(f"      strip: {len(asked)} shift(s) in {waves} wave(s), {'complete' if complete else 'INCOMPLETE'} "
+                  f"({len(holes)} hole(s)); {len(keep)} kept", flush=True)
+        return dict(complete=bool(complete), shifts=len(asked), waves=waves, holes=len(holes))
+
+    @staticmethod
+    def _cshift(c):
+        """A cell's shift: its centre on the dyadic point of the first level finer
+        than an eighth of the cell (inside the cell)."""
+        w_ = max(c[1] - c[0], c[3] - c[2])
+        lev = int(np.ceil(-np.log2(w_))) + 3
+        sr = min(max(snap(0.5 * (c[0] + c[1]), lev), c[0]), c[1])
+        th = min(max(snap(0.5 * (c[2] + c[3]), lev), c[2]), c[3])
+        return (float(sr), float(th))
+
+    @staticmethod
+    def _disks(R):
+        """The eigenvalue-free disks (centre, radius, (sre, theta)) and the
+        exhibited eigenvalues of every centre evaluated so far."""
+        S, r, own, E = [], [], [], []
+        for q in sorted(k for k in R if k[0] == 'centre'):
+            o = R[q]
+            if o['rad'] > 0:
+                S.append(complex(q[1], q[2])); r.append(LINE_SHRINK * o['rad']); own.append((q[1], q[2]))
+            for l_ in o['lams']:
+                if all(abs(l_ - e_) > 1e-8 * max(1.0, abs(l_)) for e_ in E):
+                    E.append(l_)
+        return np.array(S, complex), np.array(r, float), own, np.array(E, complex)
+
+    @classmethod
+    def _resolve(cls, c, S, r, own, E, depth, used):
+        """The sub-cells of the cell c left uncovered after `depth` refinements
+        (a rectangle lies in a disk iff its four corners do); records the disks
+        that served."""
+        corners = np.array([complex(c[0], c[2]), complex(c[0], c[3]), complex(c[1], c[2]), complex(c[1], c[3])])
+        if len(S):
+            j = np.flatnonzero(np.all(np.abs(corners[:, None] - S[None, :]) <= r[None, :], axis=0))
+            if len(j):
+                used.add(own[int(j[np.argmax(r[j])])])
+                return []
+        if len(E) and np.any(np.all(np.abs(corners[:, None] - E[None, :]) <= STRIP_RHO, axis=0)):
+            return []
+        if depth == 0 or max(c[1] - c[0], c[3] - c[2]) <= STRIP_HMIN:
+            return [c]
+        xm, ym = 0.5 * (c[0] + c[1]), 0.5 * (c[2] + c[3])
+        out = []
+        for ch in ((c[0], xm, c[2], ym), (xm, c[1], c[2], ym), (c[0], xm, ym, c[3]), (xm, c[1], ym, c[3])):
+            out += cls._resolve(ch, S, r, own, E, depth - 1, used)
+        return out
+
+    @staticmethod
+    def _merge(lr, st, R):
+        """The line's result with the rows and eigenvalues of every centre of the
+        evaluation (line and strip), and the strip's report."""
+        seen, rows = list(lr['seen']), list(lr['rows'])
+        for q in sorted(k for k in R if k[0] == 'centre'):
+            o = R[q]
+            for l_ in o['lams']:
+                if all(abs(l_ - e_) > 1e-8 * max(1.0, abs(l_)) for e_ in seen):
+                    seen.append(l_)
+            for rw in o['rows']:
+                if all(abs(rw['lam'] - x_['lam']) > 1e-8 * max(1.0, abs(rw['lam'])) for x_ in rows):
+                    rows.append(dict(rw, sre=o['sre'], theta=o['theta'], rank=o['rank']))
+        rows.sort(key=lambda r_: -r_['lam'].real)
+        # alpha stays the line's: a trial (line only) and its iterate (line and
+        # strip) must read the same value for the same design
+        return dict(lr, rows=rows, seen=seen, strip=st)
 
     @staticmethod
     def _gaps(done, wlo, whi):
@@ -865,15 +967,15 @@ class LatticeOracle:
         dz = z if isinstance(z, dict) else self.design(z)
         per = {}
         for j, rw in enumerate(rows):
-            per.setdefault(rw['rank'], []).append((j, rw['theta'], rw['lam']))
-        res = self._run(vec_task, {r: (dz['key'], [(th, l_) for _, th, l_ in v]) for r, v in per.items()}, 'vectors',
-                        ntask=len(rows))
+            per.setdefault(rw['rank'], []).append((j, rw['sre'], rw['theta'], rw['lam']))
+        res = self._run(vec_task, {r: (dz['key'], [(sr, th, l_) for _, sr, th, l_ in v]) for r, v in per.items()},
+                        'vectors', ntask=len(rows))
         out = [None] * len(rows)
         for r, v in per.items():
-            for (j, _, _), vec in zip(v, res[r]['out']):
+            for (j, _, _, _), vec in zip(v, res[r]['out']):
                 out[j] = vec
         return out
 
     def drop(self):
         self._run(drop_task, {r: None for r in self._ranks()}, 'drop')
-        self.held.clear(); self.line_prev.clear(); self.tops.clear(); self._line_memo.clear()
+        self.held.clear(); self.line_prev.clear(); self.strip_prev.clear(); self.tops.clear(); self._line_memo.clear()

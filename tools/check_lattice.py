@@ -7,13 +7,16 @@ model, on a record of the backward-facing step (BFS.md 8).
 Checks, at the record's design:
   rows    every fixed row (sigma_1 and its packed gradient) against cl.gain +
           D.grads on a fresh closed loop: identical;
-  follow  each local maximum of a sweep, placed by bracket and refine on the
-          lattice, against the exact top (peakfollow.follow, safeguarded Newton
-          on the full model): the row's deficit below the top <= FOLLOW_TOL;
+  follow  each local maximum of a sweep, followed by the lattice's parallel
+          Newton (exact frequencies), against the serial Newton of the reduced
+          path on the full model (peakfollow.follow): the same top;
   line    the stability line in waves against FECoDesign.alpha_certified (the
           serial certificate, stability_and_abscissa): the same clear / not clear,
           the same rightmost eigenvalue, and its gradient row against the one
           from the serial eigenvectors (eigvecs_at);
+  strip   the strip [-eps - ROW_REACH, -eps] (evaluate): complete, and every
+          eigenvalue an independent search finds in it (30 nearest eigenvalues
+          at shifts every 0.5 along its middle) among the exhibited ones;
   reuse   the same calls at a design moved by 1e-4 (the followed rows and the
           line in one evaluation, as the SQP calls them): waves, shifts,
           factorisations; the line again alone and from scratch.
@@ -123,11 +126,10 @@ _, _, cl = direct(z0, 0.5)
 for i, w in enumerate(Wf):
     wt, rt = newton_follow(cl, float(w), *pk.unpack(z0)[:3], 0.1, nscan=21)
     k6 = round(float(w), 6)
-    print(f"  follow {w:.4f}: lattice row at {w_star[k6]:.6f} (level {state[k6]['lvl']}) sigma {s2[i]:.9f}; "
-          f"Newton top {wt:.6f} sigma {rt['sigma']:.9f}; deficit {(rt['sigma'] - s2[i]) / rt['sigma']:.1e}", flush=True)
-print(f"follow: {len(Wf)} members, {info['nev']} evaluations in {info['waves']} waves, {t1 - t0:.1f} s; largest Hermite "
-      f"deficit {info['deficit']:.1e}",
-      flush=True)
+    print(f"  follow {w:.4f}: lattice Newton top {w_star[k6]:.8f} sigma {s2[i]:.12f}; serial Newton top {wt:.8f} "
+          f"sigma {rt['sigma']:.12f}; relative difference {(s2[i] - rt['sigma']) / rt['sigma']:+.1e}", flush=True)
+print(f"follow: {len(Wf)} members, {info['nev']} evaluations in {info['waves']} waves, {t1 - t0:.1f} s; Newton at most "
+      f"{info['newton_max']} evaluations per member", flush=True)
 t0 = time.perf_counter(); s3, _, _, _, info3, _ = lat.evaluate(z0, Wf, follow=fol, w_star=w_star, state=state); t1 = time.perf_counter()
 print(f"follow again (same design, warm starts): {info3['nev']} evaluations in {info3['waves']} waves, {t1 - t0:.1f} s, rows' largest relative "
       f"difference {np.max(np.abs(s3 - s2) / s2):.1e}", flush=True)
@@ -155,6 +157,24 @@ if L['rows'] and v is not None:
 vec = lat.vectors(z0, L['rows'][:2])
 print(f"  vectors of the two rightmost: {[None if q is None else q[0].shape for q in vec]}", flush=True)
 out['line_alpha'] = L['alpha']; out['line_clear'] = L['clear']
+
+# ---- strip: complete, and nothing an independent search finds missing from it
+t0 = time.perf_counter(); _, _, _, _, _, LS = lat.evaluate(z0, np.zeros(0), line=(a.eps, 0.0, a.whi)); t1 = time.perf_counter()
+st = LS['strip']
+inside = [l_ for l_ in LS['seen'] if -a.eps - lattice.ROW_REACH <= l_.real <= -a.eps]
+print(f"strip [{-a.eps - lattice.ROW_REACH:.3f}, {-a.eps:.3f}] x [0, {a.whi:g}]: {'complete' if st['complete'] else 'INCOMPLETE'}, "
+      f"{st['shifts']} shifts in {st['waves']} waves, {t1 - t0:.1f} s; {len(inside)} eigenvalues in it, {len(LS['rows'])} rows",
+      flush=True)
+dref = lattice._design(lat.design(z0))
+ref = []
+for th in np.arange(0.0, a.whi + 1e-9, 0.5):
+    lams_, _, _ = lattice._nearest(dref['cl'], complex(-a.eps - 0.5 * lattice.ROW_REACH, th), lat.design(z0), 30)
+    ref += [l_ for l_ in lams_ if -a.eps - lattice.ROW_REACH <= l_.real <= -a.eps and 0.0 <= l_.imag <= a.whi
+            and all(abs(l_ - q) > 1e-8 for q in ref)]
+miss = [l_ for l_ in ref if min((abs(l_ - q) for q in LS['seen']), default=np.inf) > lattice.STRIP_RHO]
+print(f"  independent search: {len(ref)} eigenvalues in the strip, {len(miss)} not exhibited by the cover"
+      + (f": {[f'{l_:.4f}' for l_ in miss]}" if miss else ''), flush=True)
+out['strip_n'] = len(inside); out['strip_miss'] = len(miss)
 
 # ---- reuse at a moved design
 rng = np.random.default_rng(0)
