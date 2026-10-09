@@ -301,7 +301,13 @@ class Evaluator:
             wg = self.lattice.grid(float(ws[0]), float(ws[-1]))
             P = self.lattice.sigmas(z, wg, slope=True)
             sv, sp = P[:, 0], P[:, 1]
-            near = list(self.W) + list(self.w_star.values())
+            # a top near a FIXED member is still new: the member's row sits on its
+            # own point and does not follow (central 2x2, 20261009b, round 2: the
+            # top at 0.0656 stood 5 % above t, 0.0008 from the fixed member 0.0664,
+            # and the round was refused); only followed members and their tops
+            # already watch a peak
+            near = [float(w_) for w_ in self.W if (self.follow or {}).get(round(float(w_), 6))] + \
+                list(self.w_star.values())
             lev = t * (1.0 + tol)
             free = lambda w_: all(abs(w_ - q) > 1e-3 for q in near)
             cand = {}
@@ -311,7 +317,7 @@ class Evaluator:
                 if sv[i] >= lo_ and sv[i] >= hi_ and sv[i] > lev and free(float(wg[i])):
                     cand[float(wg[i])] = float(sv[i])            # a grid point: evaluated already
             for i in range(len(wg) - 1):
-                if sp[i] > 0.0 > sp[i + 1]:
+                if sp[i] >= 0.0 > sp[i + 1]:                     # >= : the slope is 0 at w = 0 (a real plant)
                     wt_, ft_, _ = _lt._hermite_top(float(wg[i]), float(wg[i + 1]), sv[i], sv[i + 1], sp[i], sp[i + 1])
                     wr_ = _lt.snap(wt_, _lt.ROW_LEVEL)
                     if ft_ > lev and free(wr_) and wr_ not in cand:
