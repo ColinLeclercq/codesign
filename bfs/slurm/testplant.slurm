@@ -88,29 +88,42 @@ OPS=bfs/data/ops_coarse.npz
 echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none}  $(date -Is)  $KIND start $IDX, ${M}x${P} $([ "$MIMO" = 1 ] && echo "$STRUCT "), order $R, $OUTER rounds -> $OUT ==="
 python -c "import clarabel, qdldl, matplotlib" || { echo "*** clarabel / qdldl / matplotlib missing: run bash bfs/setup_cluster.sh on the login node"; exit 1; }
 # The plant's files are built once per code directory, by the first job that
-# needs them; the others WAIT on the lock (2026-10-08: jobs 765560-765562,
-# submitted together into a fresh directory, built bfs/data/coarse at the same
-# time and corrupted each other's mesh.h5 -- "file signature not found",
-# "Failed to read HDF5 data").  A half-written mesh from such a crash is
-# rebuilt: the mesh is trusted only when its two .h5 files open and its
-# baseflow.npz loads, the operators only when they load.
+# needs them; the others WAIT (2026-10-08: jobs 765560-765562, submitted
+# together into a fresh directory, built bfs/data/coarse at the same time and
+# corrupted each other's mesh.h5 -- "file signature not found").  The lock is a
+# DIRECTORY (mkdir is atomic on a shared file system, across nodes; flock was
+# node-local on sator and job 766730 hit the same error behind it), taken over
+# when older than 3 h (a job killed while holding it).  Each file is written
+# under a private name and renamed into place whole, so a reader never sees a
+# half-written mesh or operator file.
+export HDF5_USE_FILE_LOCKING=FALSE
 mkdir -p bfs/data
-exec 9>bfs/data/.build.lock
-flock 9
+LOCKD=bfs/data/.build.lockd
+until mkdir "$LOCKD" 2>/dev/null; do
+    if [ -n "$(find "$LOCKD" -maxdepth 0 -mmin +180 2>/dev/null)" ]; then
+        echo "=== stale build lock (older than 3 h) taken over ==="; rmdir "$LOCKD" 2>/dev/null || true; continue
+    fi
+    echo "=== waiting for another job to build the test plant's files ($(date -Is)) ==="; sleep 30
+done
+trap 'rmdir "$LOCKD" 2>/dev/null || true' EXIT
 if ! python -c "import numpy as np, sys; sys.exit(0 if 'shear_S_data' in np.load('$OPS').files else 1)" 2>/dev/null; then
     echo "=== test plant operators (missing or without the shear trace) ==="
     if ! python -c "import h5py, numpy as np; [h5py.File(f'bfs/data/coarse/{f}.h5', 'r') for f in ('mesh', 'facets')]; np.load('bfs/data/coarse/baseflow.npz')" 2>/dev/null; then
-        rm -rf bfs/data/coarse
-        python bfs/mesh_coarse.py
+        TMPD=bfs/data/.coarse.$$
+        rm -rf "$TMPD"
+        python bfs/mesh_coarse.py --out "$TMPD"
+        rm -rf bfs/data/coarse && mv "$TMPD" bfs/data/coarse
     fi
-    python bfs/ops_dolfinx.py --data bfs/data/coarse --baseflow baseflow.npz --out "$OPS"
+    python bfs/ops_dolfinx.py --data bfs/data/coarse --baseflow baseflow.npz --out "bfs/data/.ops.$$.npz"
+    mv "bfs/data/.ops.$$.npz" "$OPS"
     rm -f bfs/data/ops_coarse_range*.npz
 fi
 if [ ! -f bfs/data/ops_coarse_range.npz ]; then
     echo "=== the test plant's certified range and poles (bfs/plant_cert.py) ==="
     time $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/plant_cert.py --ops "$OPS"
 fi
-flock -u 9
+rmdir "$LOCKD" 2>/dev/null || true
+trap - EXIT
 # NEVER delete a run (2026-10-06: CONTINUE=1, codesign.slurm's word, was not
 # read here, and the directory of a 12.5 h run was started over): RESUME=1 or
 # CONTINUE=1 continues it; without them a directory holding a run is refused,
