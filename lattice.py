@@ -87,9 +87,11 @@ WARM_NCV = 0         # > 0: sigma_1 restarted from the last vector at the same p
 SWEEP_LEVEL = 5      # the certificate's reference sweep on 2^-5
 LEVEL_K = 2          # level-set disks: nearest eigenvalues of the even pencil per axis centre (a mirrored pair;
                      # k = 4 cost 2-10 x the applications: 35-357 against 21-39, central record 191.11)
-LEVEL_NCV = 24       # ... and their Krylov subspace (ncv 24: 25 applications where 20 needed 39 and 12 needed 33, w = 3)
-LEVEL_MAXIT = 8      # ... and their Arnoldi restarts at most (then the norm disk alone; far from the peaks the
-                     # pencil's Arnoldi needed 350-850 applications)
+LEVEL_ARNOLDI = ((24, 2), (100, 3))   # ... and their Arnoldi: (Krylov subspace, restarts) tried in turn.  Near a peak the
+                     # small subspace converges at once (21-39 applications, 5-8 s; central record 191.11); midway
+                     # between peaks and the far field the nearest eigenvalues are many at similar distances: ncv 24
+                     # failed in 8 restarts where ncv 100 converged in ~100 applications (zero start, w = 1.5: 23 s,
+                     # radius 0.49 against the norm disk's 0.0022); ncv 12-40 needed 350-850 at w = 6-10
 LEVEL_NORM_MIN = 2.0 ** -5   # a level-set centre whose norm disk is at least this needs no pencil eigenvalues
 LEVEL_CG_TOL = 1e-12 # the inner CG on the plant factor (_level_disk): relative residual in the M semi-norm
 LEVEL_CG_MAX = 200   # ... iterations at most
@@ -394,9 +396,10 @@ def _level_disk(d, dz, th, gam):
     the Euclidean product needed 350-730 there: central record 191.11, w = 0).
     Each iteration is one solve and one adjoint solve on the factor held;
     LEVEL_K = 2 nearest eigenvalues (they come in pairs mirrored across the
-    axis, at equal distance from it), Krylov subspace LEVEL_NCV, at most
-    LEVEL_MAXIT restarts: 21-39 applications, 5-8 s on the test plant near the
-    peaks (BFS.md 5).  The disk is the larger of the two."""
+    axis, at equal distance from it); Arnoldi with a small subspace first, a
+    large one if that does not converge in 2 restarts (LEVEL_ARNOLDI): 21-39
+    applications, 5-8 s on the test plant near the peaks, ~100 (20-25 s)
+    midway between them (BFS.md 5).  The disk is the larger of the two."""
     import scipy.sparse.linalg as spla
     from closedloop_sparse import _v0
     s1, rn = _norm_disk(d, dz, th, gam)
@@ -438,13 +441,16 @@ def _level_disk(d, dz, th, gam):
         return np.concatenate([x1, x2])
     O = spla.LinearOperator((2 * N, 2 * N), matvec=op, dtype=complex)
     s = 1j * float(th)
-    conv = True
-    try:
-        mu = spla.eigs(O, k=LEVEL_K, which='LM', tol=LINE_TOL, maxiter=LEVEL_MAXIT, v0=_v0(2 * N), ncv=LEVEL_NCV,
-                       return_eigenvectors=False)
-    except spla.ArpackNoConvergence as e:
-        conv = False
-        mu = e.eigenvalues if e.eigenvalues is not None else np.zeros(0, complex)
+    for ncv, mxit in LEVEL_ARNOLDI:
+        conv = True
+        try:
+            mu = spla.eigs(O, k=LEVEL_K, which='LM', tol=LINE_TOL, maxiter=mxit, v0=_v0(2 * N), ncv=ncv,
+                           return_eigenvectors=False)
+        except spla.ArpackNoConvergence as e:
+            conv = False
+            mu = e.eigenvalues if e.eigenvalues is not None else np.zeros(0, complex)
+        if conv:
+            break
     mu = np.asarray(mu)[np.abs(mu) > 1e-300]
     lam = s + 1.0 / mu
     # the pencil's disk only when the LEVEL_K nearest all converged (a partial
