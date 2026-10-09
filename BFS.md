@@ -168,7 +168,7 @@ pivots that moved the computed eigenvalues).
   - The slope sigma' comes exactly from the gain's own solves. The curvature is carried from the last evaluation and secant-updated at every step; without it, two finite-difference points in one wave.
   - A step and its two halvings are evaluated side by side, and the longest that does not lower sigma is taken; a second batch of three before giving up.
   - Stop at |sigma'| <= `--lattice-tol` (1e-7) x sigma. The row is the top's exact value and gradient, with no grid noise in the merit.
-  - The points are new at every evaluation, so their factors go to a small side cache (`XCAP` = 4 per rank) and never push the lattice's factors out.
+  - The points are new at every evaluation, so their factors go to a small side cache (`XCAP` = 2 per rank) and never push the lattice's factors out.
   - Checked against the serial Newton on the central record 191.11: the same tops, sigma within 2e-14. Cold, 4 members took 6 waves (at most 15 evaluations per member, counting the parallel halvings); on the same design again, 1 wave.
   - Replaced (2026-10-08): bracket and refine on the lattice, whose row was up to 1e-6 x sigma below the top and could jump between lattice points from one evaluation to the next.
   sigma_2 blocks at the row point.
@@ -658,6 +658,9 @@ smoke test, 96 ranks at once on one node):
 - Built (20261009a, user 2026-10-09): the base grid of ranks/2 line centres, the strip [-eps - 0.25, -eps] covered at every iterate the QP reads, followed peaks by exact Newton (section 3). Checks, sandbox, test plant:
   - `tools/check_lattice.py` on the central record 191.11 (serial): fixed rows and sigma_2 blocks identical to the serial construction (0.0). The lattice Newton tops agree with the serial Newton's to 1e-14 in sigma. The line gives the same clear and alpha as the serial certificate (-0.0722913502), gradient of the rightmost 1.3e-10. The strip is complete with 25 eigenvalues; the independent search's 17 are all exhibited.
   - GL frozen path bit-identical (10.23128516441147).
+  - k nearest eigenvalues per strip shift (central record, factor cached, serial; ncv 24): k = 1 2.35 s per shift, k = 2 11.0 s, 4 9.9 s, 6 10.2 s. The cover simulator with k nearest and a disk out to the k-th: 248, 176, 134, 104 shifts for k = 1, 2, 4, 6. Work: k = 1 583 shift-seconds, k = 4 1340, k = 6 1060, so k = 1 (user's guess).
+  - A greedy smallest set of kept shifts (each covered cell lists the disks containing it) changed little: the cover needs ~200-250 disks of k = 1 for d = 0.25, whatever is kept. A large SQP step moves the eigenvalues far enough that the kept disks no longer cover: 513 and 800 shifts at the first iterates of the zero start (sandbox), 220-230 for a move of 0.004.
+  - Smoke, central zero start, 2 ranks, cap 6, one SQP iteration then the round's end: certified 1446.392650 = the SQP's smax exactly (the exact Newton tops; the bracket left 1446.39 vs 1445.98 before); strip 513 shifts, complete, 26 stability rows; 5.5 GB on 7. With cap 8 and the side cache at 4 the sandbox ran out of memory at the round's end: the side cache is 2 (cluster: cap 24 + 2 = 26 factors a rank, ~3.5 GB on the test plant).
 - Can a cached factor serve a nearby frequency (2026-10-09, sandbox, test plant, MUMPS, one core)? The factor of i w M - A was used as GMRES preconditioner for i (w + dw) M - A, solved to 1e-12 at w = 0.25, 0.75, 1.6. Iterations, one factor solve each:
   - dw 2e-5: 3-4; 1e-4: 4; 1e-3: 5-6; 5e-3: 7-9; 2e-2: 9-12.
   - A factorisation costs 0.5 s here, about 32 solves (0.016 s each).

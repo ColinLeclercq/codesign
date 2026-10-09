@@ -68,7 +68,7 @@ FOLLOW_FD = 1e-5     # finite-difference step for sigma'' when no secant curvatu
 FOLLOW_ITMAX = 8     # Newton steps per evaluation
 FOLLOW_TRUST = 0.05  # largest Newton step (and the step when the curvature is not negative)
 FOLLOW_HALVE = 3     # a Newton step and its halvings evaluated side by side (one wave); twice before giving up
-XCAP = 4             # factors of the exact (off-lattice) points kept per rank, apart from the lattice cache
+XCAP = 2             # factors of the exact (off-lattice) points kept per rank, apart from the lattice cache
 LINE_BASE_MIN = 4    # the line's base grid: ranks/2 equispaced centres, at least this many
 LINE_LMAX = 17       # finest centre spacing 2^-17 (7.6e-6, the serial certificate's eps_int 1e-5)
 LINE_K = 1           # nearest eigenvalues per centre (k = 3 costs 2-4 x the applications; 2026-10-06, test plant)
@@ -828,7 +828,7 @@ class LatticeOracle:
                  for i in range(nre) for j in range(nim)]
         prev = self.strip_prev.get(key)
         shifts = set(prev) if prev else {self._cshift(c) for c in cells}
-        asked, used, holes = set(), set(), []
+        asked, used, holes = set(), [], []
         waves = 0; complete = False
         while True:
             new = sorted(sh for sh in shifts if sh not in asked)
@@ -853,10 +853,23 @@ class LatticeOracle:
             # is refined further on the disks at hand (no new wave for it)
             shifts = {self._cshift(c) for c in todo}
             cells = todo
-        # the next evaluation's first wave: the strip's shifts whose disks served
-        # the cover, and those that exhibited an eigenvalue in the strip (the
-        # line's centres come back with the line)
-        keep = set(sh for sh in used if sh[0] != -eps)
+        # the next evaluation's first wave: a small set of the strip's shifts
+        # whose disks cover every covered cell (greedy set cover: each cell lists
+        # the disks containing it), and those that exhibited an eigenvalue in the
+        # strip (the line's centres come back with the line); without the
+        # reduction the set grew with every move of the design (sandbox, central
+        # zero start: 800 shifts at the fourth iterate)
+        keep = set()
+        left = [set(o_) for o_ in used]
+        while left:
+            cnt = {}
+            for o_ in left:
+                for sh in o_:
+                    cnt[sh] = cnt.get(sh, 0) + 1
+            best = max(sorted(cnt), key=lambda sh: cnt[sh])
+            keep.add(best)
+            left = [o_ for o_ in left if best not in o_]
+        keep = set(sh for sh in keep if sh[0] != -eps)
         for q, o in R.items():
             if q[0] == 'centre' and q[1] != -eps and any(l_.real >= rlo for l_ in o['lams']):
                 keep.add((q[1], q[2]))
@@ -894,12 +907,12 @@ class LatticeOracle:
     def _resolve(cls, c, S, r, own, E, depth, used):
         """The sub-cells of the cell c left uncovered after `depth` refinements
         (a rectangle lies in a disk iff its four corners do); records the disks
-        that served."""
+        containing each covered cell."""
         corners = np.array([complex(c[0], c[2]), complex(c[0], c[3]), complex(c[1], c[2]), complex(c[1], c[3])])
         if len(S):
             j = np.flatnonzero(np.all(np.abs(corners[:, None] - S[None, :]) <= r[None, :], axis=0))
             if len(j):
-                used.add(own[int(j[np.argmax(r[j])])])
+                used.append(tuple(own[int(i_)] for i_ in j))
                 return []
         if len(E) and np.any(np.all(np.abs(corners[:, None] - E[None, :]) <= STRIP_RHO, axis=0)):
             return []
