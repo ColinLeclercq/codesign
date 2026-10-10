@@ -49,10 +49,15 @@ export PYTHONNOUSERSITE=1
 # dolfinx/ffcx compile forms into a JIT cache, ~/.cache/fenics by default --
 # shared by everything the user ever ran.  On 2026-10-10 the six test-plant
 # jobs 767360-767365 died building the operators: the cache held a module for
-# the same form compiled elsewhere with the Intel compiler, and loading it
-# needed libimf.so, which this environment does not have.  One cache per code
-# directory instead, filled by this environment's own compiler.
+# the same form compiled with the Intel compiler, and loading it needed
+# libimf.so, which this environment does not have.  One cache per code
+# directory instead, and the forms compiled with gcc: an Intel CC exported by
+# the submitting shell (sbatch passes its environment on) would build the same
+# unloadable module again.
 export XDG_CACHE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.cache"
+if command -v gcc >/dev/null 2>&1; then
+    export CC=gcc CXX=g++
+fi
 
 # Let the conda env's own libstdc++ win.
 #
