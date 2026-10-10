@@ -26,6 +26,8 @@
 #   LATTICE_K with ORACLE=lattice: eigenvalues per disk centre of the line, each with its
 #             stability row (--lattice-k; default 1)
 #   STRIP     with ORACLE=lattice: 0 = no strip (--lattice-strip off; default 1)
+#   CROSS     with ORACLE=lattice: cut = trials across the closed loop's line halved (--lattice-cross cut;
+#             default merit)
 #   RETIRE    with ORACLE=lattice: FRAC:ROUNDS, members of Omega below FRAC x gamma for ROUNDS
 #             rounds retire (--omega-retire, e.g. 0.95:3); unset = Omega only grows
 #
@@ -77,6 +79,9 @@ if [ "${ORACLE:-reduced}" = "lattice" ]; then
     # STRIP=0: no strip -- the stability rows are those of the eigenvalues the
     # line's disks see (as before 20261009a); the A/B of whether the strip pays
     ORC+=(--lattice-strip "$([ "${STRIP:-1}" = 0 ] && echo off || echo on)")
+    # CROSS=cut: a trial across the closed loop's line from an admissible iterate
+    # is halved (2026-10-06 to 20261010c); default merit (sqp_inner.LAT_CROSS)
+    ORC+=(--lattice-cross "${CROSS:-merit}")
 elif [ "${ORACLE:-reduced}" != "reduced" ]; then
     echo "run_bfs.sh: ORACLE must be reduced or lattice (got ${ORACLE})"; exit 2
 fi

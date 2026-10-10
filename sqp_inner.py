@@ -47,6 +47,16 @@ PARTIAL_SHRINK = False  # everywhere (not only on S): after a step accepted at a
 LAT_STRIP = True        # lattice: the strip [-eps - reach, -eps] covered at every iterate the QP reads, every eigenvalue in it
                         # a stability row (--lattice-strip; off: the rows of the eigenvalues the line's disks see, as before
                         # 20261009a -- the A/B of whether the strip pays, user 2026-10-09)
+LAT_CUSHION = 1.0       # lattice: the stability rows (and the closed-loop Hermite block) aim at -eps - (1 + this) mg, one mg inside
+                        # the admissibility line -eps - mg.  Aimed AT that line, every step that kept an active eigenvalue on its
+                        # linearised boundary landed on it to rounding, half the time just outside: the trial was cut, its halvings
+                        # too, and the solve stalled (20261010c, SISO and decentral: 26-77 such cuts a round, depth -5.00e-05 =
+                        # exactly -mg, the rows' prediction -5.00e-05).  The cushion absorbs the second-order error of the step.
+LAT_CROSS = 'merit'     # lattice: a trial that crosses the closed loop's line (an admissible iterate's step) -- 'cut': halved, as
+                        # 2026-10-06 to 20261010c; 'merit': weighed by the merit (sigma + nu x violation) as on the reduced path,
+                        # the iterate may then sit outside until the rows pull it back, and only admissible iterates become the
+                        # solve's result or points of the continuation gate's path (--lattice-cross; 20261010c central: 59-128 cuts
+                        # a round, the eigenvalue 0.13-0.15 past the line where its row predicted it on the boundary)
 PAIR_EXIT_TOL = 1e-2    # release S at an S-stationary point when the pair is inside and |mu_b| > this (duals of the rows sum to 1;
                         # 6.7e-4 released at ne=200 and 200 evaluations in the pole regime gained nothing)
 PEN_STEER = 6           # adaptive penalty: at most this many x10 steering increases per QP
@@ -783,7 +793,7 @@ class Evaluator:
         Gm = Yq.conj().T @ MX
         Yt = Yq @ np.linalg.inv(Gm).conj().T                 # Yt^H M_cl Xq = I
         B = Yt.conj().T @ AX
-        shift = self.eps + self.mg                           # the admissibility line of the rows
+        shift = self.eps + self.mg * (1.0 + (LAT_CUSHION if self.lattice is not None else 0.0))   # the rows' line
         Cg = lambda x_, z_: np.asarray(pk.grad(D.grads(clg, x_, z_, arow, nvec, K, xa, xs,
                                                         pa, ps, na, ns, flags)), float)
         dB = np.zeros((NZ, 2, 2), complex)
@@ -1052,6 +1062,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         raise RuntimeError("clarabel is not installed (pip install clarabel)")
     W = np.asarray(sorted(Omega), float)
     mg = sel_margin * eps
+    mg_row = mg * (1.0 + (LAT_CUSHION if lattice is not None else 0.0))   # the rows' target (LAT_CUSHION)
     ev_fn = Evaluator(D, pk, flags, W, eps, ctrl_max, enroll, kink_block, ctrl_lmi, mg,
                       oracle=oracle, reach=reach, res_tol=res_tol, ctrl_block=ctrl_block, follow=follow,
                       row_screen=row_screen, cl_block=cl_block, lattice=lattice)
@@ -1139,13 +1150,13 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         """The QP at (e_, t_) with the current nu; with pen_adapt, nu steered and
         updated (see above)."""
         nonlocal nu
-        sub_, st_ = subproblem(e_, t_, H_, D_, eps, ctrl_max, kink_block, mg_row=mg, disp=disp_, pen=nu / 100.0)
+        sub_, st_ = subproblem(e_, t_, H_, D_, eps, ctrl_max, kink_block, mg_row=mg_row, disp=disp_, pen=nu / 100.0)
         if not pen_adapt or sub_ is None:
             return sub_, st_
         for _ in range(PEN_STEER):
             if sub_['slack_max'] <= PEN_SLACK_TOL:
                 break
-            s2, st2 = subproblem(e_, t_, H_, D_, eps, ctrl_max, kink_block, mg_row=mg, disp=disp_, pen=10.0 * nu / 100.0)
+            s2, st2 = subproblem(e_, t_, H_, D_, eps, ctrl_max, kink_block, mg_row=mg_row, disp=disp_, pen=10.0 * nu / 100.0)
             if s2 is None:
                 break
             if s2['slack_max'] > 0.9 * sub_['slack_max']:
@@ -1414,12 +1425,12 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                 finally:
                     ev_fn.lat_strip = True
             if lattice is not None and admissible(e) and not admissible(en):
-                # THE FULL MODEL'S LINE IS EXACT (lattice oracle): every trial's
-                # stability is certified, so an admissible iterate is never left
-                # for an inadmissible one -- a shorter step instead (2026-10-06,
-                # test plant, MIMO central, zero start: a step took a closed-loop
-                # eigenvalue to -0.0496, across the line at -0.05, for a sigma
-                # decrease that outweighed the penalty)
+                # a trial across the closed loop's line from an admissible
+                # iterate (lattice: every trial's line is certified on the full
+                # model).  LAT_CROSS 'cut': a shorter step (2026-10-06, MIMO
+                # central zero start: a step took an eigenvalue to -0.0496 for a
+                # sigma decrease worth more than the penalty); 'merit': the merit
+                # test below decides, as on the reduced path
                 n_stab_cut[0] += 1
                 _w, _j = _offender(e, en)
                 if _w is not None and _j is None:
@@ -1432,8 +1443,18 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                     _al_j, _g_j = e['al_rows_all'][_j] if _j is not None else (None, None)
                     stab_cross.append(dict(depth=float(_w.real + eps), alpha=float(alpha),
                                            pred=(None if _j is None else float(_al_j + alpha * float(_g_j @ d) + eps))))
-                alpha *= 0.5
-                continue
+                    if len(stab_cross) <= 3:
+                        # the first few of each solve in full (in every log): which
+                        # eigenvalue, from where
+                        _q = (e['lat_eigs'][0][int(np.argmin([abs(_w - q_) for q_ in e['lat_eigs'][0]]))]
+                              if e['lat_eigs'][0] else None)
+                        print(f"      crossing (it {it}, alpha {alpha:g}, |step| {alpha * _tnorm(d):.2e}): {_w:.5f} at the "
+                              f"trial; nearest row eigenvalue at the iterate {_q if _q is None else f'{_q:.5f}'}"
+                              + (f", its row predicted Re {stab_cross[-1]['pred'] - eps:+.6f}" if _j is not None else
+                                 " (no row within 0.05)"), flush=True)
+                if LAT_CROSS == 'cut':
+                    alpha *= 0.5
+                    continue
             if DEBUG_LS:
                 # the row attaining the trial's max: actual value vs its linear model
                 _i = int(np.argmax(en['s']))
@@ -1492,7 +1513,8 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             r_ = theta * yv + (1 - theta) * (H @ sv)
             H = H - np.outer(H @ sv, H @ sv) / sHs + np.outer(r_, r_) / max(float(sv @ r_), 1e-16)
         z, t, e = zn, tn, en
-        path.append(z.copy())
+        if lattice is None or admissible(e):
+            path.append(z.copy())     # the gate's path: admissible iterates only (LAT_CROSS 'merit' may accept others)
         if _pair_ok and not ev_fn.pair_mode and not any(p_.get('event') == 'exit' for p_ in pair_log):
             # entry DURING the solve too (2026-09-26): the ne=100 pair closed from
             # 0.078 to 0.047 over rounds 12-15 and was let onto its face only at
@@ -1500,8 +1522,9 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             _zp = _try_enter(z, f'it {it}')
             if _zp is not None:
                 ev_fn.pair_mode = True; z = _zp
-                path.append(z.copy())
                 e = ev_fn(z); t = max(t, e['smax']); _alpha_prev = 1.0
+                if lattice is None or admissible(e):
+                    path.append(z.copy())
         if (PARTIAL_SHRINK or (PAIR_BALL and ev_fn.pair_mode)) and alpha < 1.0:
             # the line search found where the model holds: a radius of twice the
             # accepted step (2 alpha failed), so the next QP picks its direction
@@ -1652,6 +1675,6 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                                level_not_clear=int(sum(not l_['clear'] and not l_['cross'] for l_ in ev_fn.level_log)),
                                level_cg_max=int(max((l_['cg_max'] for l_ in ev_fn.level_log), default=0)),
                                level_pencil_max=int(max((l_['pencil'] for l_ in ev_fn.level_log), default=0)),
-                               strip=bool(LAT_STRIP))
+                               strip=bool(LAT_STRIP), cross_policy=LAT_CROSS)
                           if lattice is not None else None))
     return best, ev_fn.ncalls, H, stats

@@ -1737,6 +1737,10 @@ def main():
     ap.add_argument('--lattice-sweep', dest='lattice_sweep', type=int, default=5,
                     help='--oracle lattice: the certificate\'s reference sweep on the lattice level 2^-N of the band '
                          '(the in-solve missed peaks are the level-set certificate, lattice.LatticeOracle.level)')
+    ap.add_argument('--lattice-cross', dest='lattice_cross', choices=['merit', 'cut'], default='merit',
+                    help='--oracle lattice: a trial across the closed loop\'s line from an admissible iterate is weighed by '
+                         'the merit (merit; only admissible iterates become the result) or halved (cut, as 2026-10-06 to '
+                         '20261010c) (sqp_inner.LAT_CROSS)')
     ap.add_argument('--lattice-strip', dest='lattice_strip', choices=['on', 'off'], default='on',
                     help='--oracle lattice: on = the strip [-eps - reach, -eps] covered at every iterate the QP reads, '
                          'every eigenvalue in it a stability row; off = the rows of the eigenvalues the line\'s disks see '
@@ -2301,7 +2305,7 @@ def main():
     REDUCED_CERT = a.reduced_cert
     import sqp_inner as _sqi; _sqi.REDUCED_CERT = a.reduced_cert; _sqi.FOLLOW_SCAN = a.follow_scan; _sqi.PAIR_MANIFOLD = (a.sqp_pair_manifold == 'on'); _sqi.FIELD_KMAX2 = (a.field_kmax ** 2 if a.field_kmax else None); _sqi.FIELD_ORDER = a.field_order
     _sqi.PARTIAL_SHRINK = (a.sqp_partial_shrink == 'on')
-    _sqi.LAT_STRIP = (a.lattice_strip == 'on')
+    _sqi.LAT_STRIP = (a.lattice_strip == 'on'); _sqi.LAT_CROSS = a.lattice_cross
     certified_norm.enroll_rel = float(a.enroll_rel)
     if a.ctrl_line == 'eps':
         # Re <= -eps everywhere: the gate's allowance and every consumer of ctrl_max
@@ -3386,6 +3390,8 @@ def main():
               f"{_lat.base_grid(0.0, 1.0).__len__()} equispaced centres, "
               + (f"the strip [-eps - {_lat_mod.ROW_REACH:g}, -eps] covered and every eigenvalue in it a row"
                  if _sqi.LAT_STRIP else "NO strip (the rows of the eigenvalues the line's disks see)")
+              + f"; rows aimed {1 + _sqi.LAT_CUSHION:g} mg inside the line, trials across it "
+              + ("cut back" if _sqi.LAT_CROSS == 'cut' else "weighed by the merit")
               + f"; {_lat_mod.LINE_K} eigenvalue(s) per disk)", flush=True)
         # the ports' positions behind every (b, c) this process builds: the gates
         # call D.alpha_certified with b and c, and the ranks build them from the
@@ -3746,8 +3752,9 @@ def main():
                       f"{_li['line_waves_max']} waves, {_li['line_not_clear']} not clear); strip up to "
                       f"{_li['strip_shifts_max']} shifts, {_li['strip_incomplete']} incomplete; up to {_li['stab_rows_max']} "
                       f"stability rows; "
-                      f"{_li['stab_cuts']} trial(s) cut back inside the line, {_li['stab_cuts_unseen']} of them by an "
-                      f"eigenvalue without a row at the iterate", flush=True)
+                      f"{_li['stab_cuts']} trial(s) across the line from an admissible iterate ("
+                      + ("cut back" if _li.get('cross_policy') == 'cut' else "weighed by the merit")
+                      + f"), {_li['stab_cuts_unseen']} of them by an eigenvalue without a row at the iterate", flush=True)
                 _cr = _li.get('cross')
                 if _cr:
                     print(f"    lattice: crossings: past the line by up to {_cr['depth_max']:.2e} (median "

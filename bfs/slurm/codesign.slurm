@@ -36,6 +36,10 @@
 #        (no strip, --lattice-strip off: the stability rows are those of the
 #         eigenvalues the line's disks see -- the A/B of whether the strip pays;
 #         the directories get _nostrip)
+#   ORACLE=lattice CROSS=cut ... sbatch ...
+#        (a trial across the closed loop's line from an admissible iterate is
+#         halved, as up to 20261010c, instead of weighed by the merit; the
+#         directories get _cut)
 #   ORACLE=lattice SHRINK=1 ... sbatch ...
 #        (trust radius 2 alpha |d| after a partial step, --sqp-partial-shrink on;
 #         off by default since 20261008c; the directories get _shr)
@@ -88,7 +92,8 @@ if [ "${ORACLE:-reduced}" = lattice ] && [ -n "${RETIRE:-}" ]; then SUF="${SUF}_
 if [ "${ORACLE:-reduced}" = lattice ] && [ "${SHRINK:-0}" = 1 ]; then SUF="${SUF}_shr"; fi
 if [ "${ORACLE:-reduced}" = lattice ] && [ "${LATTICE_K:-1}" != 1 ]; then SUF="${SUF}_k${LATTICE_K}"; fi
 if [ "${ORACLE:-reduced}" = lattice ] && [ "${STRIP:-1}" = 0 ]; then SUF="${SUF}_nostrip"; fi
-export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-16} RETIRE=${RETIRE:-} SHRINK=${SHRINK:-0} LATTICE_K=${LATTICE_K:-1} STRIP=${STRIP:-1}
+if [ "${ORACLE:-reduced}" = lattice ] && [ "${CROSS:-merit}" = cut ]; then SUF="${SUF}_cut"; fi
+export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-16} RETIRE=${RETIRE:-} SHRINK=${SHRINK:-0} LATTICE_K=${LATTICE_K:-1} STRIP=${STRIP:-1} CROSS=${CROSS:-merit}
 TAG=K_B_C_s0_bfs                                       # the driver's record name
 if [ "$MIMO" = 1 ]; then TAG=K_B_C_s0_bfs_mimo${M}x${P}_${STRUCT}; fi
 NAME=$(printf "%s_%03d" "$KIND" "$IDX")
