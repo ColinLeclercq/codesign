@@ -1,4 +1,5 @@
 #!/bin/bash
+#SBATCH --comment=36973004F
 #SBATCH --job-name=bfs-plantcert
 #SBATCH --partition=intel
 #SBATCH --nodes=1

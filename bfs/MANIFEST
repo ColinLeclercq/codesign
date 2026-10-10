@@ -1,4 +1,4 @@
-# version 20261010b
+# version 20261010c
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  bfs/__init__.py
 f71b21367a9fe092471691eb0e55a291e0a78aee752e0fe5bdb8727388e3afd3  bfs/archive_dsr/baseflow_newton.py
 dbcfa87954568ac01ced337898716d70df4e1ee16948d577bc663e3b8f09884b  bfs/archive_dsr/classify.py

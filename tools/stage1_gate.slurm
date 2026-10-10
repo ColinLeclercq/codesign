@@ -1,4 +1,5 @@
 #!/bin/bash
+#SBATCH --comment=36973004F
 #SBATCH --job-name=gl-stage1gate
 #SBATCH --partition=intel
 #SBATCH --nodes=1
