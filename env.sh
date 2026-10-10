@@ -46,6 +46,14 @@ fi
 # stop ~/.local (python3.8 site-packages) from shadowing the conda env
 export PYTHONNOUSERSITE=1
 
+# dolfinx/ffcx compile forms into a JIT cache, ~/.cache/fenics by default --
+# shared by everything the user ever ran.  On 2026-10-10 the six test-plant
+# jobs 767360-767365 died building the operators: the cache held a module for
+# the same form compiled elsewhere with the Intel compiler, and loading it
+# needed libimf.so, which this environment does not have.  One cache per code
+# directory instead, filled by this environment's own compiler.
+export XDG_CACHE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.cache"
+
 # Let the conda env's own libstdc++ win.
 #
 # numpy's C extension needs GLIBCXX_3.4.29.  On the login node something in the
