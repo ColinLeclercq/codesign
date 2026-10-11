@@ -1008,9 +1008,14 @@ class LatticeOracle:
                     cross.append(max(run, key=lambda q_: q_[1])); run = []
             if cross:
                 break
-            on = sorted(set(round(float(l_.imag), 12) for c in done.values() for l_ in c['lams']
-                            if abs(l_.real) <= LEVEL_IMAG * max(1.0, abs(l_)) and wlo - 1e-12 <= l_.imag <= whi + 1e-12)
-                        - spurious)
+            on = []
+            for w_ in sorted(float(l_.imag) for c in done.values() for l_ in c['lams']
+                             if abs(l_.real) <= LEVEL_IMAG * max(1.0, abs(l_)) and wlo - 1e-12 <= l_.imag <= whi + 1e-12):
+                # one crossing seen from several centres: its Im agrees to ~1e-10, not to
+                # the digit (the SISO record 641.71 gave the region at 1.581 three times)
+                if (not on or w_ - on[-1] > 1e-8 * max(1.0, abs(w_))) and \
+                        all(abs(w_ - q_) > 1e-8 * max(1.0, abs(w_)) for q_ in spurious):
+                    on.append(w_)
             if on:
                 yield [('slopex', w_) for w_ in on]
                 ok = [(w_, R[('slopex', w_)]) for w_ in on if R[('slopex', w_)]['sigma'] >= gam * (1.0 - LEVEL_CONFIRM)]
@@ -1031,6 +1036,13 @@ class LatticeOracle:
             cent = self._fill(done, self._gaps(done, wlo, whi), hmin)
             if self.verbose:
                 print(f"      level wave {waves}: {nshift} shifts so far, {len(cent)} new centre(s)", flush=True)
+        # one top per region: estimates within 1e-3 of a higher one are the same
+        # region (the members' own spacing in missed_peaks)
+        kept = []
+        for w_, v_ in sorted(cross, key=lambda q_: -q_[1]):
+            if all(abs(w_ - k_[0]) > 1e-3 for k_ in kept):
+                kept.append((w_, v_))
+        cross = kept
         gaps = self._gaps(done, wlo, whi)
         uncovered = float(sum(b_ - a_ for a_, b_ in gaps))
         if not cross:
