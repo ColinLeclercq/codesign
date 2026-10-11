@@ -1737,6 +1737,9 @@ def main():
     ap.add_argument('--lattice-sweep', dest='lattice_sweep', type=int, default=5,
                     help='--oracle lattice: the certificate\'s reference sweep on the lattice level 2^-N of the band '
                          '(the in-solve missed peaks are the level-set certificate, lattice.LatticeOracle.level)')
+    ap.add_argument('--sqp-debug-ls', dest='sqp_debug_ls', choices=['on', 'off'], default='off',
+                    help='print every line-search trial (merit components, the max row against its model) '
+                         '(sqp_inner.DEBUG_LS; diagnostics)')
     ap.add_argument('--lattice-cross', dest='lattice_cross', choices=['merit', 'cut'], default='merit',
                     help='--oracle lattice: a trial across the closed loop\'s line from an admissible iterate is weighed by '
                          'the merit (merit; only admissible iterates become the result) or halved (cut, as 2026-10-06 to '
@@ -2305,7 +2308,7 @@ def main():
     REDUCED_CERT = a.reduced_cert
     import sqp_inner as _sqi; _sqi.REDUCED_CERT = a.reduced_cert; _sqi.FOLLOW_SCAN = a.follow_scan; _sqi.PAIR_MANIFOLD = (a.sqp_pair_manifold == 'on'); _sqi.FIELD_KMAX2 = (a.field_kmax ** 2 if a.field_kmax else None); _sqi.FIELD_ORDER = a.field_order
     _sqi.PARTIAL_SHRINK = (a.sqp_partial_shrink == 'on')
-    _sqi.LAT_STRIP = (a.lattice_strip == 'on'); _sqi.LAT_CROSS = a.lattice_cross
+    _sqi.LAT_STRIP = (a.lattice_strip == 'on'); _sqi.LAT_CROSS = a.lattice_cross; _sqi.DEBUG_LS = (a.sqp_debug_ls == 'on')
     certified_norm.enroll_rel = float(a.enroll_rel)
     if a.ctrl_line == 'eps':
         # Re <= -eps everywhere: the gate's allowance and every consumer of ctrl_max

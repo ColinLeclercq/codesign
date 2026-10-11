@@ -660,6 +660,7 @@ class Evaluator:
         # the first step (measured: +0.043 after a 2e-3 step, predicted 0).
         # The controller is r x r dense, so all r rows cost nothing.
         ctrl_rows = []              # list of (al_k, g_k)
+        ctrl_lam = []               # their poles (complex), in the same order: the block and the face remove theirs by value
         if flags['K'] and flags.get('ctrl_mode', 'full') in ('full', 'sp'):
             Acm = self.ctl.A_of(*arow); rr = Acm.shape[0]
             try:
@@ -677,8 +678,10 @@ class Evaluator:
                               e=np.array([Gm[i, i + 1] for i in range(rr - 1)]),
                               f=np.array([Gm[i + 1, i] for i in range(rr - 1)]))
                     ctrl_rows.append((float(w_[k].real), np.real(np.asarray(pk.grad(gc), float))))
+                    ctrl_lam.append(complex(w_[k]))
             except Exception:
                 ctrl_rows.append((float(np.max(np.linalg.eigvals(Acm).real)), np.zeros(NZ)))
+                ctrl_lam.append(complex(np.nan))
         al_ctrl = max((r_[0] for r_ in ctrl_rows), default=-np.inf)
         # ---- compensator constraint in Burke-Overton's coordinates (TRACKER H):
         # the two rightmost poles compressed to a 2x2 block with biorthogonal
@@ -694,8 +697,8 @@ class Evaluator:
             # ON the double-pole manifold: the pair enters as three equality rows
             # (pair_data), the Hermite block is not built
             pair = self.pair_data(z)
-            ctrl_rows = [(al_k, g_k) for (al_k, g_k) in ctrl_rows
-                         if not any(abs(al_k - l.real) < 1e-6 for l in pair['lam'])]
+            _cx = _cluster_idx(ctrl_lam, pair['lam'])
+            ctrl_rows = [r_ for i_, r_ in enumerate(ctrl_rows) if i_ not in _cx]
             al_ctrl_rest = max((r_[0] for r_ in ctrl_rows), default=-np.inf)
         elif self.ctrl_block and flags['K'] and flags.get('ctrl_mode', 'full') in ('full', 'sp'):
             try:
@@ -733,9 +736,14 @@ class Evaluator:
                 dH = [g / sc for g in dHl]
                 H0 = H0
                 hermite = dict(H0=H0 / sc, dH=dH, cluster=lam2, rho=rho, shift=-lim_c, sc=sc)
-                # the cluster's poles leave the per-pole rows (the block covers them)
-                ctrl_rows = [(al_k, g_k) for (al_k, g_k) in ctrl_rows
-                             if not any(abs(al_k - l.real) < 1e-9 for l in lam2)]
+                # the cluster's poles leave the per-pole rows (the block covers
+                # them) -- exactly two of them (_cluster_idx): matched by real part,
+                # a third pole on the line left with them and had no row at all (20261010c
+                # SISO record 641.71: the block took -0.05 +- 2.454i, the real
+                # pole -0.05 lost its row, every step pushed it 4.6e-3 across
+                # at first order and the correction back cost sigma 0.7)
+                _cx = _cluster_idx(ctrl_lam, lam2)
+                ctrl_rows = [r_ for i_, r_ in enumerate(ctrl_rows) if i_ not in _cx]
                 al_ctrl_rest = max((r_[0] for r_ in ctrl_rows), default=-np.inf)
             except Exception as _e:
                 hermite = None
@@ -1034,6 +1042,19 @@ def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, di
 
 
 # ---------------------------------------------------------------------- SQP
+def _cluster_idx(lams, cluster):
+    """The indices of lams that ARE the cluster's poles: for each cluster pole the
+    nearest one not taken yet -- one index per pole, so a pole equal in value or
+    in real part to a cluster's (a third pole on the line, a triple pole) keeps
+    its own row."""
+    taken = set()
+    for q in cluster:
+        free = [i for i in range(len(lams)) if i not in taken and np.isfinite(lams[i])]
+        if free:
+            taken.add(min(free, key=lambda i: abs(lams[i] - q)))
+    return taken
+
+
 def _cross_stats(cr):
     """Summary of the trials cut back inside the closed loop's line: how far past
     the line the offending eigenvalue went (depth = Re lambda + eps, a lower bound:
@@ -1231,7 +1252,8 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         lam_ = np.linalg.eigvals(ev_fn.ctl.A_of(*pk.unpack(zn_)[0]))
         if ev_fn.pair_mode:
             pl_ = ev_fn.pair_data(zn_)['lam']
-            lam_ = np.array([l_ for l_ in lam_ if not any(abs(l_.real - q.real) < 1e-6 for q in pl_)])
+            _cx = _cluster_idx(list(lam_), pl_)
+            lam_ = np.array([l_ for i_, l_ in enumerate(lam_) if i_ not in _cx])
         return float(np.max(lam_.real)) if lam_.size else -np.inf
 
     def viol(e_, t_):
@@ -1390,6 +1412,13 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         _shrinking = (PAIR_BALL and ev_fn.pair_mode) or PARTIAL_SHRINK
         alpha, accepted = (min(1.0, 2.0 * _alpha_prev) if (ALPHA_WARM and not _shrinking) else 1.0), False
         _a0 = alpha
+        if DEBUG_LS:
+            # the QP's own view: elastic slacks, nu, and its compensator rows' prediction
+            _cr = [al_k + float(g_k @ d) for al_k, g_k in e['ctrl_rows']]
+            print(f"      qp it {it}: slack max {sub.get('slack_max', 0.0):.2e}, nu {nu:.3g}, dt {dt:+.3e}, |d| {_tnorm(d):.2e}; "
+                  f"compensator rows {len(_cr)} predicted max {max(_cr) if _cr else float('nan'):+.8f} (line {lim:+.5f}), "
+                  f"at z + d {_alc_cheap(z + d):+.8f}; hermite blocks {[k_ for k_ in ('hermite', 'hermite_cl') if e.get(k_) is not None]}",
+                  flush=True)
         for _ls in range(8):
             zn = z + alpha * d; tn = t + alpha * dt
             if ev_fn.pair_mode:
@@ -1405,7 +1434,11 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                 # order 10, round 1: a step of 2.2 in z took a pole to +0.17 for 87
                 # of sigma against a penalty of 22, and the solve sat on
                 # inadmissible iterates from there)
-                _rc = _ctrl_restore(zn, None)
+                ev_fn.lat_strip = False           # a trial: the line only (strip and level set once accepted, below)
+                try:
+                    _rc = _ctrl_restore(zn, None)
+                finally:
+                    ev_fn.lat_strip = True
                 if _rc is not None:
                     zn, en = _rc; n_soc[0] += 1
                 elif not _close_at_line(zn):
