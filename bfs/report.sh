@@ -42,7 +42,7 @@ done
         echo "================ $f ($(stat -c %y "$f" | cut -c1-19))"
         # the job's own output: slurm appends the script itself after "Command=",
         # whose echo lines would match too; its State / wall lines are kept
-        awk '/^Command=/{s=1} !s || /^State:|^Job Wall-clock/' "$f" | grep -E "^=== host|^record |^  outer [0-9]+:|^    lattice:|refusal:|^(rows|sigma_2 blocks|sweep|follow|level set|  2n certificate|line|strip|moved design)|Traceback|Error|\*\*\* |^State:|^Job Wall-clock|best gamma after each round|final gamma|=== done" \
+        awk '/^Command=/{s=1} !s || /^State:|^Job Wall-clock/' "$f" | grep -E "^=== host|^record |^  outer [0-9]+:|^    lattice:|refusal:|QP failed|crossing \(it|^(rows|sigma_2 blocks|sweep|follow|level set|  2n certificate|line|strip|moved design)|Traceback|Error|\*\*\* |^State:|^Job Wall-clock|best gamma after each round|final gamma|=== done" \
             | grep -v "^#" | cut -c1-400 || true
     done
 } > "$OUTD/SUMMARY.txt"

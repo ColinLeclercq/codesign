@@ -52,6 +52,8 @@ LAT_CUSHION = 1.0       # lattice: the stability rows (and the closed-loop Hermi
                         # linearised boundary landed on it to rounding, half the time just outside: the trial was cut, its halvings
                         # too, and the solve stalled (20261010c, SISO and decentral: 26-77 such cuts a round, depth -5.00e-05 =
                         # exactly -mg, the rows' prediction -5.00e-05).  The cushion absorbs the second-order error of the step.
+LAT_BACK = 3            # lattice, LAT_CROSS 'merit': iterations outside the closed loop's line before the solve returns to its
+                        # last admissible iterate (radius / 4)
 LAT_CROSS = 'merit'     # lattice: a trial that crosses the closed loop's line (an admissible iterate's step) -- 'cut': halved, as
                         # 2026-10-06 to 20261010c; 'merit': weighed by the merit (sigma + nu x violation) as on the reduced path,
                         # the iterate may then sit outside until the rows pull it back, and only admissible iterates become the
@@ -1014,7 +1016,13 @@ def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, di
     sol = clarabel.DefaultSolver(P, q, A, bvec, cones, st).solve()
     status = str(sol.status)
     if 'Solved' not in status:
-        return None, status
+        # what the failing problem looked like (the round's report prints it)
+        _An = np.abs(A).max(axis=1).toarray().ravel() if A.shape[0] else np.zeros(1)
+        _gs = [float(np.linalg.norm(g_j)) for _, g_j in ev['al_rows']]
+        return None, (f"{status} [{A.shape[0]} constraints, row max |a| {_An.min():.1e}..{_An.max():.1e}, "
+                      f"{len(ev['al_rows'])} stability rows |g| up to {max(_gs, default=0.0):.1e}, "
+                      f"{len(ev['ctrl_rows'])} compensator rows, hermite {len(herm_list)}, blocks {len(blk_idx)}, "
+                      f"Delta {Delta:.1e}]")
     x = np.asarray(sol.x); zdual = np.asarray(sol.z)
     n_soc = 4 * len(blk_idx)
     out = dict(d=x[:NZ], dt=float(x[NZ]), lin=zdual[:n_lin], soc=zdual[n_lin:n_lin + n_soc],
@@ -1193,6 +1201,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
     _Ec = [None]; n_soc = [0]; n_ctrl_cut = [0]; n_stab_cut = [0]
     n_stab_unseen = [0]                # of those: the crossing eigenvalue had no stability row at the iterate
     stab_cross = []                    # of those: how far past the line, and the iterate's linearised prediction (_offender)
+    _last_adm = [None]; _n_out = [0]; n_back = [0]    # LAT_CROSS 'merit': the last admissible iterate, iterations outside, returns
     def _ctrl_restore(zn_, en_):
         """SECOND-ORDER CORRECTION on the compensator (pen_adapt; 2026-10-05): a
         step along the linearised boundary Re lambda(A_c) = lim leaves it at
@@ -1381,6 +1390,8 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
     _note(e, t)
     if admissible(e) and e['smax'] < best['g']:
         best.update(g=e['smax'], z=z.copy(), al=e['al'], t=t, clr=e['clr'], w=_argw(e))
+    if admissible(e):
+        _last_adm[0] = (z.copy(), t)
     for it in range(int(maxit)):
         _disp = (z - z_start, float(max_disp)) if max_disp is not None else None
         sub, status = _sub(e, t, H, Delta, _disp)
@@ -1586,6 +1597,25 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         _note(e, t)
         if admissible(e) and e['smax'] < best['g']:
             best.update(g=e['smax'], z=z.copy(), al=e['al'], t=t, clr=e['clr'], w=_argw(e))
+        if lattice is not None and LAT_CROSS == 'merit':
+            # BACK TO ADMISSIBILITY: an iterate the merit let outside the closed
+            # loop's line is pulled back by its rows -- or not, where the
+            # eigenvalue moves far from its linearisation (20261010d SISO, rounds
+            # 8-10: after one accepted crossing, 247 of 251 evaluations not clear,
+            # no admissible iterate again).  LAT_BACK iterations outside: back to
+            # the last admissible iterate, with a quarter of the radius
+            if admissible(e):
+                _last_adm[0] = (z.copy(), t); _n_out[0] = 0
+            else:
+                _n_out[0] += 1
+                if _n_out[0] >= LAT_BACK and _last_adm[0] is not None:
+                    z, t0_ = _last_adm[0][0].copy(), _last_adm[0][1]
+                    e = ev_fn(z); t = max(t0_, e['smax'])
+                    Delta = max(0.25 * Delta, 1e-10); _n_out[0] = 0; n_back[0] += 1
+                    if verbose:
+                        print(f"    sqp: {LAT_BACK} iterations outside the line -- back to the last admissible iterate "
+                              f"(smax {e['smax']:.6f}), radius {Delta:.2e}", flush=True)
+                    continue
         if alpha == 1.0 and _tnorm(d) > 0.9 * Delta:
             Delta *= 2.0
         _v = max(e['smax'] - t, 0.0) + max(e['al'] + eps, 0.0)
@@ -1708,6 +1738,6 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                                level_not_clear=int(sum(not l_['clear'] and not l_['cross'] for l_ in ev_fn.level_log)),
                                level_cg_max=int(max((l_['cg_max'] for l_ in ev_fn.level_log), default=0)),
                                level_pencil_max=int(max((l_['pencil'] for l_ in ev_fn.level_log), default=0)),
-                               strip=bool(LAT_STRIP), cross_policy=LAT_CROSS)
+                               strip=bool(LAT_STRIP), cross_policy=LAT_CROSS, back=int(n_back[0]))
                           if lattice is not None else None))
     return best, ev_fn.ncalls, H, stats

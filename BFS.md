@@ -730,6 +730,24 @@ For comparison: the reduced path's cold central went to 191 in 44 rounds (Octobe
 - The level set returned the region at 1.581 three times (one crossing seen from three centres, Im equal to 1e-10, not to the digit); crossings are now merged within 1e-8 and the tops within 1e-3.
 - Strip A/B: undecided, both arms stalled by the same rule (SISO 641.71 with, 873.10 without; central 697.64 / 679.76; decentral 560.19 / 552.10). Without the strip a round costs about half (no second evaluation of the accepted iterate, no strip waves). To redo with 20261010d.
 
+*20261010d on the cluster (cold zero starts, 96 ranks; read 2026-10-11 20:45)*
+
+| run | rounds (certified) | rounds / wall | end |
+|---|---|---|---|
+| SISO, strip | 1062.85, 729.95, 675.97, 656.10, 649.40, 644.80, 641.18, 641.03 x 4 | 11 / 8.5 h | codes 12, 6, 6, 6 from round 7 |
+| central, strip | 1042.66, 769.32, 672.77, 634.58, 634.27, 634.27, 634.26, 634.26, 634.26 | 9 / 7.8 h | code 12 in rounds 3, 5-7 |
+| decentral, strip | 820.72, 617.25, 597.34, 597.34, 590.45, 573.60 x 5 | 10 / 6.1 h | code 12 at iteration 3 of every round from 6 |
+| SISO, no strip | 1084.43, 853.62, 850.09, 849.47 x 3 | 6 / 3.5 h | |
+| central, no strip | 1043.19, 939.85, 655.57, 654.33, 563.48, 414.67, 404.70, 389.15, 373.66, 370.44, 365.28, 364.92, **364.64** x 4 | 16 / 10.2 h | code 12 at iteration 1 of rounds 13-15 |
+| decentral, no strip | 793.33, 609.84, 573.62, 554.31 x 4 | 7 / 3.9 h | |
+
+- The compensator fix and the cushion took the stalls of 20261010c away (SISO kept descending to round 7, 641.03 against 641.71; central no strip went to 364.64, the best cold lattice result so far), but every run stops again, now on three things:
+  - **QP failures** (termination code 12: the subproblem failed twice, the second time after a quasi-Newton reset), from round 3-7 on in four runs; deterministic (the same iteration every round). The statuses were not printed; since 20261010e each failure is, with the problem's size and coefficient range.
+  - **Hypersensitive closed-loop eigenvalues near the line.** Crossings of 0.03-0.35 for box steps of 1e-3-1e-2 (central: 0.0693 + 1.302i at a trial 2.5e-3 from an iterate whose nearest row eigenvalue was -0.266 + 1.210i; SISO: the row predicted -0.0813, the trial had -0.0490). Random design perturbations of 2-norm 5e-3 at the decentral record move its rightmost eigenvalue by 0.035 (-0.0553 + 1.893i -> -0.0692 + 1.926i). The linearised rows then mislead the QP by more than any cushion of the order of mg.
+  - **Leaving the line under the merit rule:** SISO round 7 accepted a crossing (6e-4 past), and in rounds 8-10 247 of 251 evaluations were not clear -- the solve never came back to an admissible iterate. Since 20261010e it returns to the last admissible iterate after `LAT_BACK` = 3 iterations outside, with a quarter of the radius.
+- **The compensator's own poles coalesce on its line.** The records' compensators: central no strip (364.64) and SISO no strip (849.47) have a TRIPLE real pole at -0.05 (computed -0.05 +- 6e-5 i, -0.050002); central with strip (634.26) a double one; SISO with strip (641.03) a conjugate pair and a real pole on the line. At a triple pole the poles move like the cube root of a step: a perturbation of 1e-6 of the tridiagonal entries moved them 0.015-0.035, 1e-3 up to 0.13 across (measured on the central record's A_c). No per-pole linearisation and no 2 x 2 block (Hermite or the face S) describes that: replayed from the central no-strip record (`--continue-record`, `--sqp-debug-ls on`), the QP's compensator rows predicted -0.05000012 and the step put the abscissa at +0.0902; all eight halvings were cut, iteration after iteration. A 3 x 3 Hermite block on the cluster (tried in the sandbox, not kept) is hopeless there too: the block's eigenvalues are ~1e-4 in size, its scaling blows up, and the first-order model is wrong at a perturbation of 1e-6. A design question for the user: how the compensator's stability is to be constrained (or parametrised) so that coalescing poles stay smooth.
+- Strip A/B, now with the stall rules gone: central 364.64 without against 634.26 with; decentral 554.31 against 573.60; SISO 849.47 against 641.03. Without the strip a round costs 40-60 % (no second evaluation, no strip waves). With the strip the QP carries 40-55 stability rows, among them the hypersensitive eigenvalues deeper in the strip, whose huge gradients box the step in.
+
 ## 9. Open items
 
 - **Starts below the open loop:** the zero-controller start works (test plant, cluster: 0.826 x the open-loop peak in 3 rounds, section 8). The certified prefix (section 5) is to be seen on the cluster rerun.

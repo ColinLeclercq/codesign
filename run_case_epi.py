@@ -3757,7 +3757,8 @@ def main():
                       f"stability rows; "
                       f"{_li['stab_cuts']} trial(s) across the line from an admissible iterate ("
                       + ("cut back" if _li.get('cross_policy') == 'cut' else "weighed by the merit")
-                      + f"), {_li['stab_cuts_unseen']} of them by an eigenvalue without a row at the iterate", flush=True)
+                      + f"), {_li['stab_cuts_unseen']} of them by an eigenvalue without a row at the iterate"
+                      + (f"; {_li['back']} return(s) to the last admissible iterate" if _li.get('back') else ''), flush=True)
                 _cr = _li.get('cross')
                 if _cr:
                     print(f"    lattice: crossings: past the line by up to {_cr['depth_max']:.2e} (median "
@@ -3774,6 +3775,9 @@ def main():
             # 7.770563 for four rounds (codes 6, subproblem failures) while the same
             # design with H = I and the default radius went to 7.665533 in 25
             # iterations offline.
+            if inner_stats.get('sub_failures'):
+                for _sf in inner_stats['sub_failures'][:4]:
+                    print(f"    QP failed: {_sf}", flush=True)
             if inner_stats.get('termination_code') in (6, 12) or inner_stats.get('sub_failures'):
                 _reset_carry = True
             else:
