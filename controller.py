@@ -120,3 +120,85 @@ def Bc_of(arow, r, mc=1.0):
     if len(arow) > 3 and arow[3] is not None:
         return np.asarray(arow[3], complex).reshape(r, -1)
     return np.full(r, mc, complex)
+
+
+# ---------------------------------------------------------------- modal form
+# (20261010e, user: the compensator in real 2 x 2 diagonal blocks.)  A_c =
+# blockdiag(M_1, ..., M_k) per loop, M_j = [[a, b], [c, g]] a general real 2 x 2
+# block (the tridiagonal with e = f = 0 between blocks; one 1 x 1 block closes a
+# loop of odd order).  The block's poles are left of the line L iff
+#     tr(M - L I) <= 0  and  det(M - L I) >= 0        (Routh-Hurwitz, degree 2)
+# -- polynomial in the parameters, smooth everywhere, also where poles merge
+# within a block or across blocks: in the tridiagonal form a double or triple
+# pole on the line moved like a square or cube root of a step and froze the SQP
+# (BFS.md 5).  A 2 x 2 block carries a complex pair or two real poles and moves
+# continuously between the two.
+
+def modal_blocks(orders):
+    """The blocks' state indices, loop by loop: [(i, i + 1), ..., (j,)]."""
+    out, s0 = [], 0
+    for ok in orders:
+        for j in range(ok // 2):
+            out.append((s0 + 2 * j, s0 + 2 * j + 1))
+        if ok % 2:
+            out.append((s0 + ok - 1,))
+        s0 += ok
+    return out
+
+
+def modal_cut(orders):
+    """The tridiagonal off-diagonal positions i (between states i and i + 1)
+    that join two blocks: e[i] = f[i] = 0 there."""
+    inside = set(b[0] for b in modal_blocks(orders) if len(b) == 2)
+    return [i for i in range(sum(orders) - 1) if i not in inside]
+
+
+def modal_form(d, e, f, orders):
+    """A tridiagonal (d, e, f) in modal 2 x 2 blocks with the same poles, loop
+    by loop (a loop's tridiagonal block must not be coupled to the next: e = f
+    = 0 at the loop boundaries).  The input and output matrices are NOT
+    transformed: exact for the zero controller (C_c = D_c = 0) only -- the
+    caller checks.  Complex pairs a +- i b fill [[a, b], [-b, a]]; the real poles,
+    in decreasing order, the remaining 2 x 2 blocks two by two (diagonal) and
+    the closing 1 x 1 block of an odd loop."""
+    A = A_of(np.real(d), np.real(e), np.real(f)).real
+    dd, ee, ff = np.zeros(len(d)), np.zeros(len(d) - 1), np.zeros(len(d) - 1)
+    s0 = 0
+    for ok in orders:
+        w = np.linalg.eigvals(A[s0:s0 + ok, s0:s0 + ok])
+        pairs = sorted([x for x in w if x.imag > 1e-12], key=lambda x: -x.real)
+        reals = sorted([x.real for x in w if abs(x.imag) <= 1e-12], reverse=True)
+        slots = modal_blocks([ok])
+        k = 0
+        for b in slots:
+            i = s0 + b[0]
+            if len(b) == 2 and k < len(pairs):
+                dd[i] = dd[i + 1] = pairs[k].real; ee[i] = pairs[k].imag; ff[i] = -pairs[k].imag; k += 1
+            elif len(b) == 2:
+                dd[i], dd[i + 1] = reals.pop(0), reals.pop(0)
+            else:
+                dd[i] = reals.pop(0)
+        s0 += ok
+    return dd.astype(complex), ee.astype(complex), ff.astype(complex)
+
+
+def modal_rows(blocks, d, e, f, L):
+    """The modal compensator constraints in the form of the SQP's compensator
+    rows, value v <= L (v a pole's real part in the per-pole form): per 2 x 2
+    block v1 = tr(M) / 2 and v2 = L - det(M - L I) / s (s = |a - L| + |g - L|,
+    at least 1e-3: v2 in the units of a real part near the line), per 1 x 1
+    block its entry.  Returns [(v, {'d': {i: dv/dd_i}, 'e': {...}, 'f': {...}})]."""
+    d, e, f = (np.real(np.asarray(x)) for x in (d, e, f))
+    out = []
+    for b in blocks:
+        if len(b) == 1:
+            i = b[0]
+            out.append((float(d[i]), dict(d={i: 1.0}, e={}, f={})))
+            continue
+        i, j = b
+        a, g, bb, cc = d[i], d[j], e[i], f[i]
+        out.append((float(0.5 * (a + g)), dict(d={i: 0.5, j: 0.5}, e={}, f={})))
+        s = max(abs(a - L) + abs(g - L), 1e-3)
+        det = (a - L) * (g - L) - bb * cc
+        out.append((float(L - det / s), dict(d={i: -(g - L) / s, j: -(a - L) / s}, e={i: cc / s}, f={i: bb / s})))
+    return out

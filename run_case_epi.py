@@ -1737,6 +1737,10 @@ def main():
     ap.add_argument('--lattice-sweep', dest='lattice_sweep', type=int, default=5,
                     help='--oracle lattice: the certificate\'s reference sweep on the lattice level 2^-N of the band '
                          '(the in-solve missed peaks are the level-set certificate, lattice.LatticeOracle.level)')
+    ap.add_argument('--ctrl-modal', dest='ctrl_modal', choices=['on', 'off'], default='off',
+                    help='the compensator in real 2 x 2 diagonal blocks (controller.modal_*), its stability as two '
+                         'smooth exact rows per block (trace, determinant) -- merging poles stay smooth (BFS.md 5); '
+                         'off: the tridiagonal form (GL, older records)')
     ap.add_argument('--sqp-debug-ls', dest='sqp_debug_ls', choices=['on', 'off'], default='off',
                     help='print every line-search trial (merit components, the max row against its model) '
                          '(sqp_inner.DEBUG_LS; diagnostics)')
@@ -2528,6 +2532,7 @@ def main():
         # order-r controller, the actuator centre (x, y) and the sensor window
         # start x_s; no seed catalogue, no rescaling
         flags['real_ctrl'] = True
+        flags['ctrl_modal'] = (a.ctrl_modal == 'on')
         if MIMO:
             # MIMO (BFS.md 5): the start record (--mimo-start, bfs/hifoo_init.py --m --p),
             # read once here so the BFS start checks below see its m x p design
@@ -2845,6 +2850,24 @@ def main():
                 if _wo['ok'] and _wo['count'] > 0:
                     print("FATAL: the count contradicts the continuation chain (BFS.md 6)", flush=True)
                     return
+    if flags.get('ctrl_modal') and flags.get('K'):
+        # MODAL COMPENSATOR (--ctrl-modal; 20261010e, controller.modal_*): A_c in
+        # real 2 x 2 diagonal blocks.  A start already in that form (a modal run's
+        # record or checkpoint) is kept; the zero controller (C_c = D_c = 0: no
+        # transfer function to keep) is brought to it with the same poles; any
+        # other start is refused (its B_c / C_c would have to follow the similarity)
+        import controller as _ctl_m
+        _ord = ([int(v) for v in flags['loop_orders']] if (MIMO and flags.get('struct') == 'decentral')
+                else [len(np.atleast_1d(arow0[0]))])
+        _cut = _ctl_m.modal_cut(_ord)
+        if any(np.asarray(arow0[1])[i] != 0 or np.asarray(arow0[2])[i] != 0 for i in _cut):
+            if np.any(np.asarray(nvec0)) or np.any(np.asarray(K0)):
+                raise SystemExit("--ctrl-modal on: the start's compensator is neither in modal 2 x 2 blocks nor the "
+                                 "zero controller (resume a tridiagonal run with --ctrl-modal off, MODAL=0)")
+            _mf = _ctl_m.modal_form(arow0[0], arow0[1], arow0[2], _ord)
+            print(f"modal compensator: the zero controller's poles in 2 x 2 blocks (loops {_ord}); "
+                  f"abscissa {float(np.max(np.linalg.eigvals(_ctl_m.A_of(*_mf)).real)):+.6f}", flush=True)
+            arow0 = tuple(_mf) + tuple(arow0[3:])
     pk_args = (arow0, nvec0, K0, xa0, xs0, va0, vs0)
     if a.field_basis != 'none' and (flags.get('FB') or flags.get('FC')):
         # FREE FIELDS ON A TRUNCATED BASIS (STAGE5 6): va = Phi_a beta_a,

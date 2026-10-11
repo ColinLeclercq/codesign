@@ -663,7 +663,24 @@ class Evaluator:
         # The controller is r x r dense, so all r rows cost nothing.
         ctrl_rows = []              # list of (al_k, g_k)
         ctrl_lam = []               # their poles (complex), in the same order: the block and the face remove theirs by value
-        if flags['K'] and flags.get('ctrl_mode', 'full') in ('full', 'sp'):
+        if flags['K'] and flags.get('ctrl_mode', 'full') in ('full', 'sp') and getattr(pk, 'modal', None):
+            # MODAL compensator (controller.modal_rows): two smooth rows per 2 x 2
+            # block, exact (Routh-Hurwitz), also where poles merge
+            Acm = self.ctl.A_of(*arow)
+            for v_, gd_ in self.ctl.modal_rows(pk.modal, arow[0], arow[1], arow[2], max(-self.eps, self.ctrl_max)):
+                gc = pk.zero_grad() if (getattr(pk, 'mimo', False) or getattr(pk, 'vec_pos', False)) \
+                    else dict(n=np.zeros(Acm.shape[0], complex), K=0j, xa=0.0, xs=0.0)
+                gd = np.zeros(Acm.shape[0], complex); ge = np.zeros(max(Acm.shape[0] - 1, 0), complex); gf = ge.copy()
+                for i_, x_ in gd_['d'].items():
+                    gd[i_] = x_
+                for i_, x_ in gd_['e'].items():
+                    ge[i_] = x_
+                for i_, x_ in gd_['f'].items():
+                    gf[i_] = x_
+                gc.update(d=gd, e=ge, f=gf)
+                ctrl_rows.append((v_, np.real(np.asarray(pk.grad(gc), float))))
+                ctrl_lam.append(complex(np.nan))
+        elif flags['K'] and flags.get('ctrl_mode', 'full') in ('full', 'sp'):
             Acm = self.ctl.A_of(*arow); rr = Acm.shape[0]
             try:
                 w_, VL, VR = _seig(Acm, left=True, right=True)
@@ -685,6 +702,8 @@ class Evaluator:
                 ctrl_rows.append((float(np.max(np.linalg.eigvals(Acm).real)), np.zeros(NZ)))
                 ctrl_lam.append(complex(np.nan))
         al_ctrl = max((r_[0] for r_ in ctrl_rows), default=-np.inf)
+        if ctrl_rows and getattr(pk, 'modal', None):
+            al_ctrl = float(np.max(np.linalg.eigvals(Acm).real))     # the abscissa itself (the rows are not real parts)
         # ---- compensator constraint in Burke-Overton's coordinates (TRACKER H):
         # the two rightmost poles compressed to a 2x2 block with biorthogonal
         # bases; Hermite's criterion on the block's shifted polynomial is a
@@ -1092,6 +1111,9 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
     W = np.asarray(sorted(Omega), float)
     mg = sel_margin * eps
     mg_row = mg * (1.0 + (LAT_CUSHION if lattice is not None else 0.0))   # the rows' target (LAT_CUSHION)
+    _modal = getattr(pk, 'modal', None) is not None
+    if _modal:
+        ctrl_block = False          # modal compensator: smooth exact rows, no 2 x 2 Hermite block, no double-pole face
     ev_fn = Evaluator(D, pk, flags, W, eps, ctrl_max, enroll, kink_block, ctrl_lmi, mg,
                       oracle=oracle, reach=reach, res_tol=res_tol, ctrl_block=ctrl_block, follow=follow,
                       row_screen=row_screen, cl_block=cl_block, lattice=lattice)
@@ -1211,6 +1233,8 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         compensator's coordinates -- A_c is affine in z, the 10 x 10 eigenproblem
         is exact and cheap.  Skipped (None) where two of them nearly coincide
         (their gradients blow up: the double-pole face S handles that case)."""
+        if _modal:
+            return _ctrl_restore_modal(zn_)
         Am = ev_fn.ctl.A_of(*pk.unpack(zn_)[0])
         if _Ec[0] is None:
             A00 = ev_fn.ctl.A_of(*pk.unpack(np.zeros(NZ))[0])
@@ -1247,9 +1271,52 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         key_ = 'al_ctrl_rest' if ev_fn.pair_mode else 'al_ctrl'
         return (zc_, ec_) if ec_[key_] <= lim + 1e-8 else None
 
+    def _modal_h(zz_):
+        """The modal compensator's constraints at zz_ as h <= 0 (controller.
+        modal_rows minus the line) and their packed gradients."""
+        ar_ = pk.unpack(zz_)[0]; rr_ = len(ar_[0])
+        H_, G_ = [], []
+        for v_, gd_ in ev_fn.ctl.modal_rows(pk.modal, ar_[0], ar_[1], ar_[2], lim):
+            gc = pk.zero_grad() if (getattr(pk, 'mimo', False) or getattr(pk, 'vec_pos', False)) \
+                else dict(n=np.zeros(rr_, complex), K=0j, xa=0.0, xs=0.0)
+            gd = np.zeros(rr_, complex); ge = np.zeros(max(rr_ - 1, 0), complex); gf = ge.copy()
+            for i_, x_ in gd_['d'].items():
+                gd[i_] = x_
+            for i_, x_ in gd_['e'].items():
+                ge[i_] = x_
+            for i_, x_ in gd_['f'].items():
+                gf[i_] = x_
+            gc.update(d=gd, e=ge, f=gf)
+            H_.append(v_ - lim); G_.append(np.real(np.asarray(pk.grad(gc), float)))
+        return np.array(H_), np.array(G_)
+
+    def _ctrl_restore_modal(zn_):
+        """The second-order correction for the modal compensator: Newton's
+        least-norm steps on the violated block constraints (a trace is linear in
+        z, a determinant quadratic: two or three steps), to 1e-7 inside the line;
+        None when that is not a small correction of the step."""
+        zc_ = np.asarray(zn_, float).copy()
+        for _ in range(4):
+            H_, G_ = _modal_h(zc_)
+            bad = np.flatnonzero(H_ > -1e-9)
+            if not len(bad):
+                break
+            Gb = G_[bad]
+            try:
+                zc_ = zc_ + Gb.T @ np.linalg.solve(Gb @ Gb.T, -1e-7 - H_[bad])
+            except np.linalg.LinAlgError:
+                return None
+        if not np.all(np.isfinite(zc_)) or np.linalg.norm(zc_ - zn_) > 0.5 * max(np.linalg.norm(zn_ - z), 1e-12) \
+                or _alc_cheap(zc_) > lim + 1e-8:
+            return None
+        ec_ = ev_fn(zc_)
+        return (zc_, ec_) if ec_['al_ctrl'] <= lim + 1e-8 else None
+
     def _close_at_line(zn_):
         """Two compensator poles within 1e-3 of each other at or over the line
         (the case _ctrl_restore leaves to the face S)."""
+        if _modal:
+            return False          # the modal rows are smooth there: halve the step
         lam_ = np.linalg.eigvals(ev_fn.ctl.A_of(*pk.unpack(zn_)[0]))
         act_ = [l_ for l_ in lam_ if l_.real > lim - 1e-6]
         return any(abs(p_ - q_) < 1e-3 for p_ in act_ for q_ in lam_ if q_ is not p_ and abs(p_ - q_) > 0)

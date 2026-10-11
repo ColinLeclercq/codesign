@@ -46,6 +46,19 @@ class Packer:
         self.sK = max(abs(self.K0), 1.0)   # static-gain scale
         self.sx = 0.30          # placement scale
         self.nth = len(th)
+        # MODAL compensator (flags['ctrl_modal'], 20261010e; controller.modal_*):
+        # e = f = 0 between the 2 x 2 blocks, those entries out of z
+        self.modal = self.cmask = None
+        if flags.get('ctrl_modal'):
+            import controller as _ctl
+            r_ = len(self.d0)
+            self.modal = _ctl.modal_blocks([r_])
+            self.cmask = np.ones(self.nth, bool)
+            for i_ in _ctl.modal_cut([r_]):
+                if self.e0[i_] != 0 or self.f0[i_] != 0:
+                    raise ValueError('ctrl_modal: the start compensator is not in modal 2 x 2 blocks')
+                self.cmask[r_ + i_] = False; self.cmask[2 * r_ - 1 + i_] = False
+            self.th0 = th
         # backward-facing step (BFS.md 2): a REAL controller (only the real
         # parts are design variables) and vector placements (D.pos_dims: the
         # actuator centre (x, y), the sensor window start x_s); scalar (GL) else
@@ -61,7 +74,11 @@ class Packer:
             th = np.concatenate([self.d0, self.e0, self.f0,
                                  self.nvec0, [self.K0]])
             k = self.nth if m == 'full' else self.nth - 1   # drop Dc if s.proper
-            z += [th[:k].real / self.sc[:k]] + ([] if self.real_ctrl else [th[:k].imag / self.sc[:k]])
+            if self.cmask is not None:
+                sel = self.cmask[:k]
+                z += [th[:k][sel].real / self.sc[:k][sel]] + ([] if self.real_ctrl else [th[:k][sel].imag / self.sc[:k][sel]])
+            else:
+                z += [th[:k].real / self.sc[:k]] + ([] if self.real_ctrl else [th[:k].imag / self.sc[:k]])
         elif self.f['K'] and m == 'gain':          # static complex gain
             z += [np.array([self.K0.real / self.sK, self.K0.imag / self.sK])]
         elif self.f['K'] and m == 'gainr':         # static real gain
@@ -90,7 +107,14 @@ class Packer:
         m = self.f.get('ctrl_mode', 'full')
         if self.f['K'] and m in ('full', 'sp'):
             k = self.nth if m == 'full' else self.nth - 1
-            if self.real_ctrl:
+            if self.cmask is not None:
+                sel = self.cmask[:k]; kk = int(sel.sum())
+                th = self.th0[:k].copy()
+                if self.real_ctrl:
+                    th[sel] = z[i:i+kk] * self.sc[:k][sel] + 0j; i += kk
+                else:
+                    th[sel] = (z[i:i+kk] + 1j*z[i+kk:i+2*kk]) * self.sc[:k][sel]; i += 2*kk
+            elif self.real_ctrl:
                 th = z[i:i+k] * self.sc[:k] + 0j; i += k
             else:
                 th = (z[i:i+k] + 1j*z[i+k:i+2*k]) * self.sc[:k]; i += 2*k
@@ -166,7 +190,11 @@ class Packer:
         if self.f['K'] and m in ('full', 'sp'):
             gc = np.concatenate([g['d'], g['e'], g['f'], g['n'], [g['K']]])
             k = self.nth if m == 'full' else self.nth - 1
-            out += [np.real(gc[:k])*self.sc[:k]] + ([] if self.real_ctrl else [-np.imag(gc[:k])*self.sc[:k]])
+            if self.cmask is not None:
+                sel = self.cmask[:k]
+                out += [np.real(gc[:k][sel])*self.sc[:k][sel]] + ([] if self.real_ctrl else [-np.imag(gc[:k][sel])*self.sc[:k][sel]])
+            else:
+                out += [np.real(gc[:k])*self.sc[:k]] + ([] if self.real_ctrl else [-np.imag(gc[:k])*self.sc[:k]])
         elif self.f['K'] and m == 'gain':
             out += [np.array([np.real(g['K'])*self.sK, -np.imag(g['K'])*self.sK])]
         elif self.f['K'] and m == 'gainr':
@@ -315,6 +343,7 @@ class PackerMIMO:
         # free mask
         mode = flags.get('ctrl_mode', 'full')
         free = np.zeros(len(self.th0), bool)
+        self.modal = None
         if flags['K']:
             if mode in ('full', 'sp'):
                 free[:] = True
@@ -337,6 +366,17 @@ class PackerMIMO:
                     for k_, ok_ in enumerate(orders):
                         Cm[k_, s0:s0 + ok_] = True; Km[k_, k_] = True; s0 += ok_
                     free[slice(*self.off['n'])] = Cm.ravel(); free[slice(*self.off['K'])] = Km.ravel()
+                if flags.get('ctrl_modal'):
+                    # MODAL compensator (controller.modal_*): e = f = 0 between the
+                    # 2 x 2 blocks of each loop
+                    import controller as _ctl
+                    orders_ = list(flags.get('loop_orders') or [r // m] * m) \
+                        if flags.get('struct', 'central') == 'decentral' else [r]
+                    for i_ in _ctl.modal_cut(orders_):
+                        if self.th0[self.off['e'][0] + i_] != 0 or self.th0[self.off['f'][0] + i_] != 0:
+                            raise ValueError('ctrl_modal: the start compensator is not in modal 2 x 2 blocks')
+                        free[self.off['e'][0] + i_] = False; free[self.off['f'][0] + i_] = False
+                    self.modal = _ctl.modal_blocks(orders_)
                 if mode == 'sp':
                     free[slice(*self.off['K'])] = False
             elif mode in ('gain',):

@@ -28,6 +28,8 @@
 #   STRIP     with ORACLE=lattice: 0 = no strip (--lattice-strip off; default 1)
 #   CROSS     with ORACLE=lattice: cut = trials across the closed loop's line halved (--lattice-cross cut;
 #             default merit)
+#   MODAL     0 = the tridiagonal compensator (--ctrl-modal off: a run made before 20261010e); default 1,
+#             the modal 2 x 2 blocks
 #   RETIRE    with ORACLE=lattice: FRAC:ROUNDS, members of Omega below FRAC x gamma for ROUNDS
 #             rounds retire (--omega-retire, e.g. 0.95:3); unset = Omega only grows
 #
@@ -89,6 +91,9 @@ MIMOF=()
 if [ "${M:-1}" != 1 ] || [ "${P:-1}" != 1 ]; then
     MIMOF=(--n-act "$M" --n-sens "$P" --ctrl-struct "${STRUCT:-central}" --mimo-start "$init")
 fi
+# MODAL=0: the tridiagonal compensator (older records, a resume of a run made
+# before 20261010e); default the modal 2 x 2 blocks (--ctrl-modal, BFS.md 5)
+MODF=(--ctrl-modal "$([ "${MODAL:-1}" = 0 ] && echo off || echo on)")
 exec ${LAUNCH} ${PY:-python} -u run_case_epi.py --plant bfs --ops "${OPS:-bfs/data/ops_fx.npz}" --lu-order mumps \
     --init "$init" --cold --case K+B+C --r "${R:-5}" --eps 0.05 --start 0 --nproc 1 --cert_nseg "${CERT_NSEG:-16}" --cert-split "${CERT_SPLIT:-23}" --wlo 0 --whi 10 \
     --outer "${OUTER:-40}" --deadline "${DEADLINE:-0}" --wall "${WALL:-54000}" "${STAB[@]}" \
@@ -97,4 +102,4 @@ exec ${LAUNCH} ${PY:-python} -u run_case_epi.py --plant bfs --ops "${OPS:-bfs/da
     --gate-prefix 1 --post 1 --sqp-pen adaptive --cert-disk strict --cert-near-k 4 --cert-climb slope --wind-ctrl exact --cert-rtol 1e-6 --alpha-argmax on \
     --enroll-rel 0.05 --peak-follow on --row-screen 0.05 --converge --inner sqp --sqp-carry --sqp-trust 0.01 \
     --sqp-ctrl block --sqp-row-res-tol 1e-5 --sqp-refine 1e-4 --sqp-clblock on --sigma2-active-gap 0.15 \
-    --follow-scan 0 --stop-progress 3:0.0015 --wind-accept off --dense_check 0 --outdir "$out" "${MIMOF[@]}" "$@"
+    --follow-scan 0 --stop-progress 3:0.0015 --wind-accept off --dense_check 0 --outdir "$out" "${MIMOF[@]}" "${MODF[@]}" "$@"
