@@ -2313,6 +2313,8 @@ def main():
     import sqp_inner as _sqi; _sqi.REDUCED_CERT = a.reduced_cert; _sqi.FOLLOW_SCAN = a.follow_scan; _sqi.PAIR_MANIFOLD = (a.sqp_pair_manifold == 'on'); _sqi.FIELD_KMAX2 = (a.field_kmax ** 2 if a.field_kmax else None); _sqi.FIELD_ORDER = a.field_order
     _sqi.PARTIAL_SHRINK = (a.sqp_partial_shrink == 'on')
     _sqi.LAT_STRIP = (a.lattice_strip == 'on'); _sqi.LAT_CROSS = a.lattice_cross; _sqi.DEBUG_LS = (a.sqp_debug_ls == 'on')
+    if a.oracle == 'lattice':
+        _sqi.QP_DUMP = a.outdir
     certified_norm.enroll_rel = float(a.enroll_rel)
     if a.ctrl_line == 'eps':
         # Re <= -eps everywhere: the gate's allowance and every consumer of ctrl_max

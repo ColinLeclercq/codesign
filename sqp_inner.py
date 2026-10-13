@@ -52,6 +52,8 @@ LAT_CUSHION = 1.0       # lattice: the stability rows (and the closed-loop Hermi
                         # linearised boundary landed on it to rounding, half the time just outside: the trial was cut, its halvings
                         # too, and the solve stalled (20261010c, SISO and decentral: 26-77 such cuts a round, depth -5.00e-05 =
                         # exactly -mg, the rows' prediction -5.00e-05).  The cushion absorbs the second-order error of the step.
+QP_DUMP = None          # a directory: the first three failing QPs saved there (run_case_epi sets the run's own)
+_QP_DUMPED = [0]
 LAT_BACK = 3            # lattice, LAT_CROSS 'merit': iterations outside the closed loop's line before the solve returns to its
                         # last admissible iterate (radius / 4)
 LAT_CROSS = 'merit'     # lattice: a trial that crosses the closed loop's line (an admissible iterate's step) -- 'cut': halved, as
@@ -841,7 +843,7 @@ class Evaluator:
 
 
 # ----------------------------------------------------------------- subproblem
-def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, disp=None, pen=1.0):
+def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, disp=None, pen=1.0, relax=False):
     """min dt + 0.5 d'Hd (+ nu_s s)  s.t. linearised rows, block SOCs, abscissa
     rows, box, and -- when ev['lmi'] is set -- the linearised compensator
     Lyapunov LMI with an elastic slack s.  Variables x = [d (NZ), dt, q (r^2
@@ -1034,7 +1036,26 @@ def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, di
     st.max_threads = 1
     sol = clarabel.DefaultSolver(P, q, A, bvec, cones, st).solve()
     status = str(sol.status)
+    if relax and 'Solved' not in status:
+        # LOOSER TOLERANCES before giving up (lattice, 20261010f): the cluster runs
+        # of 20261010e ended on NumericalError / InsufficientProgress at the
+        # tolerances 1e-10 (rows with coefficients from 1 to 1e5: sigma rows ~1e4,
+        # box rows 1), where a solution to 1e-8 is all a step needs
+        for tol_ in (1e-8, 1e-6):
+            st.tol_gap_abs = st.tol_gap_rel = st.tol_feas = tol_; st.max_iter = 400
+            sol = clarabel.DefaultSolver(P, q, A, bvec, cones, st).solve()
+            status = f"{status} -> {sol.status} at {tol_:g}"
+            if 'Solved' in str(sol.status):
+                status = str(sol.status)
+                break
     if 'Solved' not in status:
+        if QP_DUMP and _QP_DUMPED[0] < 3:
+            # the failing QP itself, for an offline replay (bfs/report.sh collects it)
+            import os as _os
+            _QP_DUMPED[0] += 1
+            np.savez(_os.path.join(QP_DUMP, f'qp_fail_{_QP_DUMPED[0]}.npz'), P=P.toarray(), q=q, A=A.toarray(), b=bvec,
+                     cones=np.array([f"{type(c_).__name__}:{getattr(c_, 'dim', '')}" for c_ in cones]),
+                     status=status, Delta=Delta, n_lin=n_lin)
         # what the failing problem looked like (the round's report prints it)
         _An = np.abs(A).max(axis=1).toarray().ravel() if A.shape[0] else np.zeros(1)
         _gs = [float(np.linalg.norm(g_j)) for _, g_j in ev['al_rows']]
@@ -1201,13 +1222,15 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         """The QP at (e_, t_) with the current nu; with pen_adapt, nu steered and
         updated (see above)."""
         nonlocal nu
-        sub_, st_ = subproblem(e_, t_, H_, D_, eps, ctrl_max, kink_block, mg_row=mg_row, disp=disp_, pen=nu / 100.0)
+        sub_, st_ = subproblem(e_, t_, H_, D_, eps, ctrl_max, kink_block, mg_row=mg_row, disp=disp_, pen=nu / 100.0,
+                               relax=lattice is not None)
         if not pen_adapt or sub_ is None:
             return sub_, st_
         for _ in range(PEN_STEER):
             if sub_['slack_max'] <= PEN_SLACK_TOL:
                 break
-            s2, st2 = subproblem(e_, t_, H_, D_, eps, ctrl_max, kink_block, mg_row=mg_row, disp=disp_, pen=10.0 * nu / 100.0)
+            s2, st2 = subproblem(e_, t_, H_, D_, eps, ctrl_max, kink_block, mg_row=mg_row, disp=disp_, pen=10.0 * nu / 100.0,
+                                 relax=lattice is not None)
             if s2 is None:
                 break
             if s2['slack_max'] > 0.9 * sub_['slack_max']:
@@ -1615,7 +1638,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                 ev_fn.level_req = None
         # damped BFGS on the Lagrangian
         subn, _ = subproblem(en, tn, H, Delta, eps, ctrl_max, kink_block,
-                             disp=((zn - z_start, float(max_disp)) if max_disp is not None else None), pen=nu / 100.0)
+                             disp=((zn - z_start, float(max_disp)) if max_disp is not None else None), pen=nu / 100.0, relax=lattice is not None)
         gLn = grad_L(en, subn) if subn is not None else gL
         sv = zn - z; yv = gLn - gL
         sHs = float(sv @ H @ sv); sy = float(sv @ yv)

@@ -749,6 +749,21 @@ For comparison: the reduced path's cold central went to 191 in 44 rounds (Octobe
 - **The compensator's own poles coalesce on its line.** The records' compensators: central no strip (364.64) and SISO no strip (849.47) have a TRIPLE real pole at -0.05 (computed -0.05 +- 6e-5 i, -0.050002); central with strip (634.26) a double one; SISO with strip (641.03) a conjugate pair and a real pole on the line. At a triple pole the poles move like the cube root of a step: a perturbation of 1e-6 of the tridiagonal entries moved them 0.015-0.035, 1e-3 up to 0.13 across (measured on the central record's A_c). No per-pole linearisation and no 2 x 2 block (Hermite or the face S) describes that: replayed from the central no-strip record (`--continue-record`, `--sqp-debug-ls on`), the QP's compensator rows predicted -0.05000012 and the step put the abscissa at +0.0902; all eight halvings were cut, iteration after iteration. A 3 x 3 Hermite block on the cluster (tried in the sandbox, not kept) is hopeless there too: the block's eigenvalues are ~1e-4 in size, its scaling blows up, and the first-order model is wrong at a perturbation of 1e-6. A design question for the user: how the compensator's stability is to be constrained (or parametrised) so that coalescing poles stay smooth.
 - Strip A/B, now with the stall rules gone: central 364.64 without against 634.26 with; decentral 554.31 against 573.60; SISO 849.47 against 641.03. Without the strip a round costs 40-60 % (no second evaluation, no strip waves). With the strip the QP carries 40-55 stability rows, among them the hypersensitive eigenvalues deeper in the strip, whose huge gradients box the step in.
 
+*20261010e on the cluster (modal compensator, cold zero starts, 96 ranks; read 2026-10-13)*
+
+| run | certified after rounds | rounds / wall | end |
+|---|---|---|---|
+| SISO, strip | 1104.25, 756.96, 607.13, then 606.8 ... 590.04, 577.58, 576.85, **572.09** | 19 / 6.2 h | QP NumericalError from round 13, fixed point |
+| central, strip | 821.30, 491.87, 474.71, 450.49, 391.38, 391.38, 379.72, 346.76, 299.55, 296.44, 285.59, 285.41, **284.96** | 13 / 13.2 h | progress rule |
+| decentral, strip | 1203.01, 730.15, 702.60, 544.31, 540.10, 538.47, 535.63, ..., **532.29** | 16 / 5.2 h | QP NumericalError / InsufficientProgress in every round from 1 |
+| SISO, no strip | 1140.85, 761.94, 686.48, ..., 662.85, **649.82** | 23 / 4.1 h | QP InsufficientProgress from round 18 |
+| central, no strip | 820.73, 578.19, 432.81, 402.18, 394.51, ..., **387.06** | 13 / 8.0 h | progress rule |
+| decentral, no strip | 1203.30, 606.61 (refused), 680.27, 595.54, ..., 539.996, 534.35, **533.66** | 19 / 11.2 h | QP NumericalError from round 13 |
+
+- The modal compensator took the merging-pole stalls away: every run went further than with 20261010d (SISO 572.09 against 641.03, decentral 532.29 against 554.31 and below the October 6 code's 547.3, central 284.96 against 364.64 -- the best cold lattice result so far, the reduced path's cold central went to 191 in 44 rounds). Crossings are rare now (9-44 printed in a whole run).
+- **What stops them now: the QP solver.** Clarabel's NumericalError / InsufficientProgress at the tolerances 1e-10, on 770-900 constraints whose rows range from 1 (box) to 1e4-1e5 (sigma rows), with or without the closed-loop Hermite block; deterministic (the same QP at every round once it fails). Since 20261010f a failing QP is solved again at 1e-8, then 1e-6 (lattice only), and the first three failing QPs of a run are saved in the run's directory (`qp_fail_k.npz`: P, q, A, b, the cones) for an offline replay.
+- Strip A/B: with the strip SISO 572.09 / 649.82 without, central 284.96 / 387.06, decentral 532.29 / 533.66: the strip pays in all three now, at roughly 1.5 x the wall per round.
+
 ## 9. Open items
 
 - **Starts below the open loop:** the zero-controller start works (test plant, cluster: 0.826 x the open-loop peak in 3 rounds, section 8). The certified prefix (section 5) is to be seen on the cluster rerun.
