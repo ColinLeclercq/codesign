@@ -775,8 +775,15 @@ class Evaluator:
         # P_k solves the Lyapunov equation for A0 at a slightly smaller margin than
         # eps, so it exists even when poles sit ON the margin (as at the frozen
         # K+B+C, where two do).  Both are 8 x 8 for any plant size.
+        # NOT for the modal compensator (20261010g): its rows are exact, and the LMI
+        # took their place in the QP (the rows enter only without it).  In the
+        # 20261010e runs every failing QP held it: with poles ON the line and
+        # others far left, P's eigenvalues spread 1.3e-5 .. 5 and the trust-region
+        # cones rho P +- dP sit on their boundary; the dumped QP (decentral strip,
+        # NumericalError at 1e-10, 1e-8, 1e-6) solves in 28 iterations without it
         lmi = None
-        if self.ctrl_lmi and hermite is None and pair is None and flags['K'] and flags.get('ctrl_mode', 'full') in ('full', 'sp'):
+        if self.ctrl_lmi and hermite is None and pair is None and flags['K'] and flags.get('ctrl_mode', 'full') in ('full', 'sp') \
+                and not getattr(pk, 'modal', None):
             from scipy.linalg import solve_continuous_lyapunov
             A0 = self.ctl.A_of(*arow); rr = A0.shape[0]
             if self._E is None:

@@ -1934,7 +1934,8 @@ def main():
     ap.add_argument('--sqp-reach', dest='sqp_reach', type=float, default=1.0,
                     help='item 2: closed-loop eigenvalues with Re >= -eps - reach get their own row in the SQP (reduced pencil)')
     ap.add_argument('--sqp-lmi', dest='sqp_lmi', choices=['on', 'off'], default='on',
-                    help='compensator stability as a Lyapunov LMI in the SQP subproblem (r x r, any plant size); off = one row per pole')
+                    help='compensator stability as a Lyapunov LMI in the SQP subproblem (r x r, any plant size); off = one row per pole; '
+                         'never with --ctrl-modal (its two exact rows per block)')
     ap.add_argument('--sqp-partial-shrink', dest='sqp_partial_shrink', choices=['on', 'off'], default='off',
                     help='after a step accepted at alpha < 1 the trust radius becomes 2 alpha |d| (sqp_inner.'
                          'PARTIAL_SHRINK; off = the frozen path, where only the double-pole face does this)')

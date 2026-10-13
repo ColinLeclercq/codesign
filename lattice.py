@@ -695,11 +695,12 @@ class LatticeOracle:
                 res[r] = fn(a)
         for r, o in res.items():
             self.held[r] = set(complex(k) for k in o['resident'])
-        c = self.calls.setdefault(kind, [0, 0, 0.0, 0.0, 0])
+        c = self.calls.setdefault(kind, [0, 0, 0.0, 0.0, 0, 0.0])
         c[0] += 1; c[1] += int(ntask if ntask is not None else len(per_rank))
         c[2] += time.perf_counter() - t0
         c[3] += max((o['dt'] for o in res.values()), default=0.0)
         c[4] = sum(o['miss'] for o in res.values())
+        c[5] += sum(o['dt'] for o in res.values())       # busy time summed over the ranks (utilisation)
         return res
 
     def _drive(self, dz, agents, kind, R):
@@ -739,7 +740,9 @@ class LatticeOracle:
         """One line for the ledger: calls (waves), tasks, wall and critical path
         by kind, and the factors held."""
         held = sum(len(v) for v in self.held.values())
-        parts = [f"{k} {c[0]} waves / {c[1]} tasks, {c[2]:.0f} s wall (longest rank {c[3]:.0f} s)"
+        nr = len(self._ranks())
+        parts = [f"{k} {c[0]} waves / {c[1]} tasks, {c[2]:.0f} s wall (longest rank {c[3]:.0f} s, ranks busy "
+                 f"{100.0 * c[5] / max(nr * c[2], 1e-300):.0f} %)"
                  for k, c in sorted(self.calls.items())]
         return f"lattice ({self.size} ranks): " + "; ".join(parts) + f"; {held} factors held"
 
