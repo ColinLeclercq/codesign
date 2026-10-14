@@ -28,13 +28,19 @@ _count = itertools.count()
 _PETSc = None
 # this process's MUMPS work, for the run-time estimate (BFS.md 7): factorisations
 # and single-RHS solves with their seconds, split by whether they ran inside a
-# full-model pool task (fullpar.IN_TASK) or in the driver itself
-STATS = {k: [0, 0.0] for k in ('factor_driver', 'factor_task', 'solve_driver', 'solve_task')}
+# full-model pool task (fullpar.IN_TASK), inside a lattice wave as rank 0's own
+# share (IN_WAVE, set by lattice.LatticeOracle._run; 20261010j stage C, driver-
+# serial.md P1: 'driver' was rank 0 in any context, its share of the waves --
+# 0.51-1.85x an average rank's work, run beside the workers -- read as serial
+# work), or in the driver itself: 'driver' is now the truly serial work
+STATS = {k: [0, 0.0] for k in ('factor_driver', 'factor_task', 'solve_driver', 'solve_task',
+                               'factor_wave', 'solve_wave')}
+IN_WAVE = False
 
 
 def _account(kind, dt):
     import fullpar
-    e = STATS[kind + ('_task' if fullpar.IN_TASK else '_driver')]
+    e = STATS[kind + ('_wave' if IN_WAVE else ('_task' if fullpar.IN_TASK else '_driver'))]
     e[0] += 1; e[1] += dt
 
 

@@ -329,7 +329,7 @@ class Evaluator:
             oc = L.get('outcome', 'region' if L['cross'] else ('clear' if L['clear'] else 'inconclusive'))
             self.level_log.append(dict(shifts=L['shifts'], waves=L['waves'], clear=L['clear'], cross=len(L['cross']),
                                        cg_max=L['cg_max'], pencil=L['pencil'], outcome=oc,
-                                       watched=len(L.get('watched') or [])))
+                                       watched=len(L.get('watched') or []), disks=L.get('disks')))
             # the decision, kept for the round's history (20261010j, P7: the round-11
             # sequence of 770632 could only be inferred by elimination and replay)
             self.refine_log.append(dict(t=float(t), gam=float(gam), outcome=oc, ok=bool(L['clear'] or L['cross']),
@@ -634,7 +634,8 @@ class Evaluator:
             self.n_alpha_rows.append(len(pairs))
             _st = lr.get('strip') or {}
             self.lat_line.append(dict(nshift=lr['nshift'], waves=lr['waves'], clear=clr, rows=len(pairs),
-                                      strip_shifts=int(_st.get('shifts', 0)), strip_complete=bool(_st.get('complete', True))))
+                                      strip_shifts=int(_st.get('shifts', 0)), strip_complete=bool(_st.get('complete', True)),
+                                      rows_dup=int(lr.get('rows_dup', 0))))
         elif self.oracle is not None and not self.force_full_alpha:
             pairs = cl.near_line_pairs(arow, nvec, K, self.eps, reach=self.reach,
                                        res_tol=self.res_tol, mc=D.mc)
@@ -1102,6 +1103,23 @@ def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, di
     _sl = list(x[iel:iel + n_el]) + [x[ih + kh] for kh in range(len(herm_list))] + ([x[is_]] if use_lmi else [])
     out['slack_max'] = float(max(_sl)) if _sl else 0.0
     out['stab_dual'] = float(max((abs(zdual[i_]) for i_ in stab_rows), default=0.0))
+    # THE STABILITY ROWS AT THE SOLUTION (20261010j stage C, strip-ab.md AB4: the
+    # 'boxing' hypothesis of BFS.md 8, hypersensitive eigenvalues deep in the strip
+    # whose huge gradients box the step in, was never measured): per row of
+    # ev['al_rows'] its value Re lambda, active (no slack left, or a multiplier),
+    # given up (its elastic slack used), |g|_inf, and the trust radius at which it
+    # can first bind, b / ||g||_1 for the box (b / ||g||_2 for the ball; 0 when
+    # violated already).  Reads the solution only: the step is the same
+    _ad = []
+    for k_, (al_j, g_j) in enumerate(ev['al_rows']):
+        b_j = -(al_j + eps + mg_row)
+        el_j = float(x[iel + k_])
+        s_j = b_j - (float(g_j @ x[:NZ]) - el_j)
+        gn = float(np.linalg.norm(g_j) if use_ball else np.sum(np.abs(g_j)))
+        _ad.append((float(al_j), bool(s_j <= 1e-9 + 1e-7 * abs(b_j) or abs(zdual[stab_rows[k_]]) > 1e-8),
+                    bool(el_j > PEN_SLACK_TOL), float(np.max(np.abs(g_j))) if len(g_j) else 0.0,
+                    (b_j / gn if gn > 0.0 else np.inf) if b_j > 0.0 else 0.0))
+    out['al_diag'] = _ad
     if use_h:
         hd = zdual[len(zdual) - n_pair - n_h: len(zdual) - n_pair]; off = 0; duals = []
         for nh_ in n_h_list:
@@ -1146,6 +1164,71 @@ def _cross_stats(cr):
                 with_row=int(len(pr)), pred_med=(float(np.median(pr)) if len(pr) else None),
                 pred_pos=int(np.sum(pr > 0.0)),
                 full_step=int(sum(c['alpha'] >= 1.0 for c in cr)))
+
+
+def _member_stats(infos):
+    """The round's per-member counts (lattice.evaluate's info['members'], summed
+    over the evaluations; 20261010j stage C, omega-growth.md P1): members, points
+    asked for and tasks caused per kind (fixed, followed) and by s / smax, the
+    followed members that caused no task, and how often each agent set the last
+    wave."""
+    ms = [i_['members'] for i_ in infos if i_.get('members')]
+    if not ms:
+        return None
+    out = dict(evals=len(ms), n=[0, 0], pts=[0, 0], own=[0, 0], none=0, bn=None, bpts=None, bown=None, last={})
+    for m_ in ms:
+        for k_ in ('n', 'pts', 'own'):
+            out[k_] = [a_ + b_ for a_, b_ in zip(out[k_], m_[k_])]
+        out['none'] += int(m_['none'])
+        for k_ in ('bn', 'bpts', 'bown'):
+            out[k_] = list(m_[k_]) if out[k_] is None else [a_ + b_ for a_, b_ in zip(out[k_], m_[k_])]
+        for c_ in m_.get('last', ()):
+            out['last'][c_] = out['last'].get(c_, 0) + 1
+    return out
+
+
+def _disk_stats(level_log):
+    """The round's level-set disks (lattice._disk_log of every call, summed;
+    20261010j stage C, level-set-waves.md LS1): per path [disks, s, longest], the
+    applications and CG iterations, critical path against work, the three slowest."""
+    ds = [l_['disks'] for l_ in level_log if l_.get('disks')]
+    if not ds:
+        return None
+    paths, slow = {}, []
+    out = dict(calls=len(ds), app_max=0, cg_sum=0, cg_n=0, cg_max=0, crit=0.0, work=0.0)
+    for d_ in ds:
+        for p_, a_ in d_['paths'].items():
+            b_ = paths.setdefault(p_, [0, 0.0, 0.0])
+            b_[0] += a_[0]; b_[1] += a_[1]; b_[2] = max(b_[2], a_[2])
+        for k_ in ('cg_sum', 'cg_n', 'crit', 'work'):
+            out[k_] += d_[k_]
+        out['app_max'] = max(out['app_max'], d_['app_max']); out['cg_max'] = max(out['cg_max'], d_['cg_max'])
+        slow = sorted(slow + list(d_.get('slow') or []), key=lambda q_: -q_[1])[:3]
+    out.update(paths=paths, slow=slow)
+    return out
+
+
+def _box_stats(box_log):
+    """The round's stability rows at the QP solutions (20261010j stage C, strip-
+    ab.md AB4): QPs with an active row, the median and largest number active, the
+    rows given up, the deepest active row's Re lambda and the largest |g|_inf of
+    an active row, the median radius at which the active rows bind against the
+    median trust radius, the steps on the trust region's boundary, the accepted
+    alphas and steps."""
+    if not box_log:
+        return None
+    act = [b_ for b_ in box_log if b_['act']]
+    med = lambda v_: float(np.median(v_)) if len(v_) else None
+    acc = [b_ for b_ in box_log if b_['alpha'] is not None]
+    return dict(qps=len(box_log), with_act=len(act), act_med=med([b_['act'] for b_ in box_log]),
+                act_max=int(max(b_['act'] for b_ in box_log)), rows_max=int(max(b_['n'] for b_ in box_log)),
+                given_up=int(sum(b_['el'] for b_ in box_log)),
+                deep=min((b_['deep'] for b_ in act), default=None), gact=float(max((b_['gact'] for b_ in act), default=0.0)),
+                rb_act_med=med([b_['rb_act'] for b_ in act if b_['rb_act'] is not None]),
+                in_box_med=med([b_['n_in'] for b_ in box_log]),
+                Delta_med=med([b_['Delta'] for b_ in box_log]), on_box=int(sum(b_['on_box'] for b_ in box_log)),
+                herm=int(sum(b_['herm'] > 0 for b_ in box_log)),
+                alpha_med=med([b_['alpha'] for b_ in acc]), step_med=med([b_['step'] for b_ in acc]))
 
 
 def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
@@ -1283,6 +1366,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
 
     _Ec = [None]; n_soc = [0]; n_ctrl_cut = [0]; n_stab_cut = [0]
     n_stab_unseen = [0]                # of those: the crossing eigenvalue had no stability row at the iterate
+    box_log = []                       # lattice: the stability rows at each QP's solution (AB4, _box_stats)
     stab_cross = []                    # of those: how far past the line, and the iterate's linearised prediction (_offender)
     _last_adm = [None]; _n_out = [0]; n_back = [0]    # LAT_CROSS 'merit': the last admissible iterate, iterations outside, returns
     def _ctrl_restore(zn_, en_):
@@ -1560,6 +1644,19 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         if ev_fn.pair_mode and sub.get('pair_dual') is not None:
             _last_pair_mu = sub['pair_dual']
         d, dt = sub['d'], sub['dt']
+        if lattice is not None:
+            # which stability rows bind at this QP's solution, and at what radius
+            # (20261010j stage C, strip-ab.md AB4; the round's line, _box_stats)
+            _ad = sub.get('al_diag') or []
+            _act = [q_ for q_ in _ad if q_[1]]
+            box_log.append(dict(n=len(_ad), act=len(_act), el=int(sum(q_[2] for q_ in _ad)),
+                                deep=min((q_[0] for q_ in _act), default=None),
+                                gact=max((q_[3] for q_ in _act), default=0.0),
+                                rb_act=min((q_[4] for q_ in _act), default=None),
+                                n_in=int(sum(q_[4] <= Delta for q_ in _ad)), Delta=float(Delta),
+                                on_box=bool(_tnorm(d) >= 0.999 * Delta),
+                                herm=int(sum(float(np.linalg.norm(h_)) > 1e-8 for h_ in (sub.get('hermite_duals') or []))),
+                                alpha=None, step=None))
         gL = grad_L(e, sub)
         stat = float(np.linalg.norm(gL))
         pred = merit(e, t) - (t + dt)                   # model merit at the QP step: t + dt (rows and stability rows linearly satisfied)
@@ -1675,6 +1772,8 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                 print(f"        row {_i} w={_k:+.4f}: recorded {e['s'][_i]:.7f} at {e['tops'].get(_k, _k):+.6f}, "
                       f"re-evaluated {_er['s'][_i]:.7f} at {_er['tops'].get(_k, _k):+.6f}", flush=True)
         _alpha_prev = alpha if accepted else 1.0
+        if lattice is not None and accepted and box_log:
+            box_log[-1].update(alpha=float(alpha), step=float(_tnorm(alpha * d)))
         hist.append(dict(it=it, t=t, smax=e['smax'], al=e['al'], stat=stat,
                          step=float(np.linalg.norm(alpha * d)), alpha=alpha,
                          Delta=Delta, accepted=accepted, nblk=len(e['blocks'])))
@@ -1936,6 +2035,11 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                                follow_ext=int(sum(i_.get('ext', 0) for i_ in ev_fn.lat_info)),
                                level_cg_max=int(max((l_['cg_max'] for l_ in ev_fn.level_log), default=0)),
                                level_pencil_max=int(max((l_['pencil'] for l_ in ev_fn.level_log), default=0)),
-                               strip=bool(LAT_STRIP), cross_policy=LAT_CROSS, back=int(n_back[0]))
+                               strip=bool(LAT_STRIP), cross_policy=LAT_CROSS, back=int(n_back[0]),
+                               # 20261010j stage C: copies merged into a row (AB3), the members' counts (omega P1),
+                               # the level set's disks (LS1), the rows at the QP solutions (AB4)
+                               rows_dup_max=int(max((l_.get('rows_dup', 0) for l_ in ev_fn.lat_line), default=0)),
+                               members=_member_stats(ev_fn.lat_info), level_disks=_disk_stats(ev_fn.level_log),
+                               box=_box_stats(box_log))
                           if lattice is not None else None))
     return best, ev_fn.ncalls, H, stats

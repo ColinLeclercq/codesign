@@ -49,6 +49,12 @@ ap.add_argument('--eps', type=float, default=0.05)
 ap.add_argument('--whi', type=float, default=10.0)
 ap.add_argument('--level-ref', dest='level_ref', action='store_true',
                 help='the level set also against the 2n certificate (certify_greater; minutes per decision)')
+# 20261010j stage C: the run's settings (run_case_epi --lattice-base / -costs / -memo / -row-merge); --base 4
+# --row-merge 0 is the code before it on 4 ranks (base grid ranks/2 = 4, rows merged within 1e-8)
+ap.add_argument('--base', type=int, default=None, help='lattice.LINE_BASE (default: its value, 48)')
+ap.add_argument('--costs', choices=['measured', 'static'], default=None, help='lattice.TASK_COSTS')
+ap.add_argument('--memo', type=int, default=None, help='lattice.REQ_MEMO')
+ap.add_argument('--row-merge', dest='row_merge', type=float, default=None, help='lattice.ROW_MERGE')
 a = ap.parse_args()
 
 z = np.load(a.record, allow_pickle=True)
@@ -71,11 +77,16 @@ else:
     pk = Packer(D, flags, arow, nvec, K, xa, xs, None, None)
 z0 = pk.z0()
 lattice.LU_CAP = a.cap
+for k_, v_ in (('LINE_BASE', a.base), ('TASK_COSTS', a.costs), ('REQ_MEMO', a.memo), ('ROW_MERGE', a.row_merge)):
+    if v_ is not None:
+        setattr(lattice, k_, v_)
 fullpar.start(1, D=D)                      # the context (the plant); under MPI the ranks get it too
 pool = fullpar.POOL if mpipool.active() else None
 lat = lattice.LatticeOracle(D, pk, flags, pool=pool)
 lat.verbose = True
-print(f"record {a.record}: order {R}, {'MIMO ' + str(a.mimo) if a.mimo else 'SISO'}; ranks {lat.size}, cap {a.cap}", flush=True)
+print(f"record {a.record}: order {R}, {'MIMO ' + str(a.mimo) if a.mimo else 'SISO'}; ranks {lat.size}, cap {a.cap}; "
+      f"base grid {len(lat.base_grid(0.0, a.whi))}, costs {lattice.TASK_COSTS}, memo {lattice.REQ_MEMO}, "
+      f"row merge {lattice.ROW_MERGE:g}", flush=True)
 out = {}
 
 
@@ -153,6 +164,12 @@ for lab, gam in (('above the largest top found', tmax * (1.0 + 1e-4)), ('below i
     print(f"level set at {gam:.6f} ({lab}): clear {LV['clear']}, regions above {[(round(w_, 5), round(v_, 5)) for w_, v_ in LV['cross']]}; "
           f"{LV['shifts']} shifts in {LV['waves']} waves (cover kept: {len(lat.level_prev)}), inner CG up to {LV['cg_max']}, "
           f"{t1 - t0:.1f} s", flush=True)
+    dk = LV.get('disks')
+    if dk:
+        print("  disks: " + ", ".join(f"{p_} {v_[0]} ({v_[1]:.1f} s, up to {v_[2]:.1f})" for p_, v_ in sorted(dk['paths'].items()))
+              + f"; applications up to {dk['app_max']}, CG {dk['cg_sum'] / max(dk['cg_n'], 1):.1f} per solve; critical path "
+              f"{dk['crit']:.1f} s of {dk['work']:.1f} s; slowest {[(round(q_[0], 5), round(q_[1], 1), q_[2], q_[3]) for q_ in dk['slow']]}",
+              flush=True)
     if a.level_ref:
         t0 = time.perf_counter()
         gt, nsh, wit = csp.certify_greater(D.A, D.M, b_, c_, Ac_, Bc_, nvec_, K_, gam,
@@ -166,8 +183,8 @@ for lab, gam in (('above the largest top found', tmax * (1.0 + 1e-4)), ('below i
 t0 = time.perf_counter(); L = lat.line(z0, a.eps, 0.0, a.whi); t1 = time.perf_counter()
 print(f"line (lattice): clear {L['clear']}, alpha {L['alpha']:+.10f}, {L['nshift']} shifts in {L['waves']} waves "
       f"(cover kept: {len(lat.line_prev.get(round(a.eps, 12), []))} centres), "
-      f"{t1 - t0:.1f} s; {len(L['rows'])} rows within {lattice.ROW_REACH} of the line, rightmost "
-      f"{L['rows'][0]['lam'] if L['rows'] else None}", flush=True)
+      f"{t1 - t0:.1f} s; {len(L['rows'])} rows within {lattice.ROW_REACH} of the line ({L.get('rows_dup', 0)} copies "
+      f"merged beyond 1e-8), rightmost {L['rows'][0]['lam'] if L['rows'] else None}", flush=True)
 arow_, nvec_, K_, xa_, xs_, _, _ = pk.unpack(z0)
 b_, c_, pa_, ps_, na_, ns_ = D.bc(xa_, xs_)
 t0 = time.perf_counter()
@@ -190,8 +207,8 @@ t0 = time.perf_counter(); _, _, _, _, _, LS = lat.evaluate(z0, np.zeros(0), line
 st = LS['strip']
 inside = [l_ for l_ in LS['seen'] if -a.eps - lattice.ROW_REACH <= l_.real <= -a.eps]
 print(f"strip [{-a.eps - lattice.ROW_REACH:.3f}, {-a.eps:.3f}] x [0, {a.whi:g}]: {'complete' if st['complete'] else 'INCOMPLETE'}, "
-      f"{st['shifts']} shifts in {st['waves']} waves, {t1 - t0:.1f} s; {len(inside)} eigenvalues in it, {len(LS['rows'])} rows",
-      flush=True)
+      f"{st['shifts']} shifts in {st['waves']} waves, {t1 - t0:.1f} s; {len(inside)} eigenvalues in it, {len(LS['rows'])} rows "
+      f"({LS.get('rows_dup', 0)} copies merged beyond 1e-8)", flush=True)
 dref = lattice._design(lat.design(z0))
 ref = []
 for th in np.arange(0.0, a.whi + 1e-9, 0.5):
@@ -223,6 +240,8 @@ L2 = lat.line(lat.design_raw(*pk.unpack(z1)[:5]), a.eps, 0.0, a.whi, eps_int=1e-
 print(f"moved design, line alone from scratch: clear {L2['clear']}, alpha {L2['alpha']:+.10f}, {L2['nshift']} shifts in "
       f"{L2['waves']} waves", flush=True)
 print(lat.report(), flush=True)
+for l_ in lat.report_lines():
+    print(l_, flush=True)
 out['moved_alpha'] = L1['alpha']
 if a.out:
     np.savez(a.out, **out)

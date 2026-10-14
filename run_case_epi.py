@@ -1185,6 +1185,55 @@ def _input_fingerprint(ne: int, init_path: str | None) -> dict:
     return out
 
 
+def _round_lattice_lines(li):
+    """The round's lattice measurements (20261010j stage C), three lines after the
+    round's 'lattice:' lines: the members' points and tasks per kind and by s /
+    smax, and the agents that set the last wave (omega-growth.md P1, strip-ab.md
+    AB4); the level set's disks by path, their applications, CG and critical path
+    (level-set-waves.md LS1); the stability rows at the QP solutions -- which
+    bind, how deep, at what radius against the box (strip-ab.md AB4, the
+    'boxing' hypothesis of BFS.md 8)."""
+    import lattice as _lm
+    m = li.get('members')
+    if m and m['evals']:
+        E = float(m['evals'])
+        pc = lambda v_, t_: '/'.join(f"{100.0 * x_ / max(t_, 1):.0f}" for x_ in v_)
+        bb = list(_lm.MEMBER_BINS)
+        bl = '/'.join([f"<{bb[0]:g}"] + [f"{a_:g}-{b_:g}" for a_, b_ in zip(bb[:-1], bb[1:])] + [f">={bb[-1]:g}"])
+        print(f"    lattice: members per evaluation (mean of {m['evals']}): fixed {m['n'][0] / E:.0f} "
+              f"({m['pts'][0] / E:.0f} points, {m['own'][0] / E:.0f} tasks), followed {m['n'][1] / E:.0f} "
+              f"({m['pts'][1] / E:.0f} points, {m['own'][1] / E:.0f} tasks; {m['none'] / E:.1f} caused none); by s/smax "
+              f"{bl}: members {'/'.join(f'{x_ / E:.0f}' for x_ in m['bn'])}, "
+              f"points {pc(m['bpts'], sum(m['bpts']))} %, tasks {pc(m['bown'], sum(m['bown']))} %; the last wave set by "
+              + (", ".join(f"{k_} {v_}" for k_, v_ in sorted(m['last'].items(), key=lambda kv: -kv[1])) or 'nothing')
+              + f" (of {m['evals']} evaluations)", flush=True)
+    d = li.get('level_disks')
+    if d:
+        def lab(p_):
+            if p_.startswith('tier '):
+                j_ = int(p_.split()[1])
+                return f"ncv {_lm.LEVEL_ARNOLDI[j_][0]}" if j_ < len(_lm.LEVEL_ARNOLDI) else p_
+            return p_
+        ps = sorted(d['paths'].items(), key=lambda kv: (kv[0] != 'norm', kv[0]))
+        sl = d.get('slow')
+        print(f"    lattice: level disks of {d['calls']} call(s): "
+              + ", ".join(f"{lab(p_)} {a_[0]} ({a_[1] / max(a_[0], 1):.1f} s each, up to {a_[2]:.1f})" for p_, a_ in ps)
+              + f"; applications up to {d['app_max']}, CG {d['cg_sum'] / max(d['cg_n'], 1):.1f} per solve (up to "
+              f"{d['cg_max']}); critical path {d['crit']:.0f} s of {d['work']:.0f} s of disks"
+              + ("; the slowest at " + ", ".join(f"{q_[0]:.4f} ({lab(q_[2])}, {q_[1]:.1f} s, {q_[3]} applications)"
+                                                  for q_ in sl) if sl else ''),
+              flush=True)
+    b = li.get('box')
+    if b:
+        f_ = lambda v_, fm: ('-' if v_ is None else format(v_, fm))
+        print(f"    lattice: QP stability rows: active in {b['with_act']} of {b['qps']} QPs (median {f_(b['act_med'], 'g')}, "
+              f"up to {b['act_max']} of {b['rows_max']}; {b['given_up']} given up), the deepest active Re "
+              f"{f_(b['deep'], '+.4f')} (|g| up to {b['gact']:.1e}); the active rows bind at radius {f_(b['rb_act_med'], '.1e')} "
+              f"(median) against the trust radius {f_(b['Delta_med'], '.1e')} ({f_(b['in_box_med'], 'g')} rows could bind inside it), "
+              f"{b['on_box']} steps on its boundary, a Hermite block active in {b['herm']}; accepted alpha "
+              f"{f_(b['alpha_med'], 'g')}, step {f_(b['step_med'], '.1e')} (medians)", flush=True)
+
+
 _CODE_VERSION = []
 
 
@@ -2068,6 +2117,22 @@ def main():
                          'start can land on sigma_2 where the two swap')
     ap.add_argument('--lattice-driver', dest='lattice_driver', choices=['on', 'off'], default='on',
                     help='--oracle lattice: the driver (rank 0) computes a share of every batch')
+    # 20261010j stage C (eval-waves.md P1, P7, P8; packing.md P2; strip-ab.md AB3)
+    ap.add_argument('--lattice-base', dest='lattice_base', type=int, default=48,
+                    help='--oracle lattice: the line\'s and the level set\'s base grid, this many equispaced centres '
+                         'whatever the number of ranks (lattice.LINE_BASE; the same as ranks/2 at 96 ranks); 0 = ranks/2 '
+                         '(the rule of 2026-10-09: 24 centres at 48 ranks)')
+    ap.add_argument('--lattice-costs', dest='lattice_costs', choices=['measured', 'static'], default='measured',
+                    help='--oracle lattice: the batches balanced on the seconds each kind of request took, longest first '
+                         '(measured), or on the static units in request order as before (lattice.TASK_COSTS); placement '
+                         'only')
+    ap.add_argument('--lattice-memo', dest='lattice_memo', type=int, default=2,
+                    help='--oracle lattice: designs whose row requests are kept for the next evaluation of the same design '
+                         '(the strip arm\'s accepted trial, the refine\'s re-evaluation; lattice.REQ_MEMO); 0 = off')
+    ap.add_argument('--lattice-row-merge', dest='lattice_row_merge', type=float, default=1e-6,
+                    help='--oracle lattice: stability rows whose eigenvalues agree within this x max(1, |lambda|) are one '
+                         'row, the copy from the nearest shift kept (lattice.ROW_MERGE); <= 1e-8: 1e-8 and the first copy, '
+                         'as before (changes the QP\'s rows, hence the path)')
     ap.add_argument('--oracle-nvec', dest='oracle_nvec', type=int, default=3,
                     help='singular pairs per anchor')
     ap.add_argument('--oracle-tol', dest='oracle_tol', type=float, default=1e-3,
@@ -2606,6 +2671,8 @@ def main():
         _lat_mod.LU_CAP = int(a.lattice_cap); _lat_mod.FOLLOW_GTOL = float(a.lattice_tol)
         _lat_mod.SWEEP_LEVEL = int(a.lattice_sweep); _lat_mod.ROW_REACH = float(a.lattice_reach)
         _lat_mod.LINE_K = int(a.lattice_k); _lat_mod.WARM_NCV = int(a.lattice_warm)
+        _lat_mod.LINE_BASE = int(a.lattice_base); _lat_mod.TASK_COSTS = a.lattice_costs
+        _lat_mod.REQ_MEMO = max(int(a.lattice_memo), 0); _lat_mod.ROW_MERGE = float(a.lattice_row_merge)
     _retire_frac = _retire_rounds = None
     if a.omega_retire:
         if a.oracle != 'lattice':
@@ -3833,7 +3900,10 @@ def main():
                  if _sqi.LAT_STRIP else "NO strip (the rows of the eigenvalues the line's disks see)")
               + f"; rows aimed {1 + _sqi.LAT_CUSHION:g} mg inside the line, trials across it "
               + ("cut back" if _sqi.LAT_CROSS == 'cut' else "weighed by the merit")
-              + f"; {_lat_mod.LINE_K} eigenvalue(s) per disk)", flush=True)
+              + f"; {_lat_mod.LINE_K} eigenvalue(s) per disk; batches by "
+              + ("measured costs, longest first" if _lat_mod.TASK_COSTS == 'measured' else "static costs")
+              + (f", row requests kept for {_lat_mod.REQ_MEMO} design(s)" if _lat_mod.REQ_MEMO > 0 else ", no request memo")
+              + f"; rows merged within {max(_lat_mod.ROW_MERGE, 1e-8):g})", flush=True)
         # the ports' positions behind every (b, c) this process builds: the gates
         # call D.alpha_certified with b and c, and the ranks build them from the
         # positions
@@ -4116,6 +4186,8 @@ def main():
             print(f"  [ledger] pool by task (cumulative): {fullpar.by_task(95)}", flush=True)
             if _lat is not None:
                 print(f"  [ledger] {_lat.report()}", flush=True)
+                for _ll in _lat.report_lines():        # rank 0, request kinds, factors, projection (20261010j stage C)
+                    print(f"  [ledger] {_ll}", flush=True)
         if a.deadline > 0:
             # stop BEFORE a round that would not finish: the job's time limit
             # then never cuts a round (or the final save) in half (BFS.md 7)
@@ -4321,7 +4393,7 @@ def main():
                       f"most {_li['newton_max']} per member); line {_li['line_shifts']} shifts (at most "
                       f"{_li['line_waves_max']} waves, {_li['line_not_clear']} not clear); strip up to "
                       f"{_li['strip_shifts_max']} shifts, {_li['strip_incomplete']} incomplete; up to {_li['stab_rows_max']} "
-                      f"stability rows; "
+                      f"stability rows (up to {_li.get('rows_dup_max', 0)} copies merged beyond 1e-8); "
                       f"{_li['stab_cuts']} trial(s) across the line from an admissible iterate ("
                       + ("cut back" if _li.get('cross_policy') == 'cut' else "weighed by the merit")
                       + f"), {_li['stab_cuts_unseen']} of them by an eigenvalue without a row at the iterate"
@@ -4342,6 +4414,7 @@ def main():
                       f"{_li.get('follow_edge', 0)} stop(s) on a window's edge after them "
                       f"({_li.get('follow_edge_last', 0)} at the last evaluation); "
                       f"{inner_stats.get('dedup', 0)} restart(s) from their own base (shared tops)", flush=True)
+                _round_lattice_lines(_li)                  # members, level-set disks, QP rows (20261010j stage C)
             # STALL RECOVERY (2026-09-25): a solve that ended on a collapsed radius
             # (code 6) or with failed subproblems hands its quasi-Newton matrix and
             # radius to the next round no more.  The ne=100 K+B+C run sat at
@@ -5990,6 +6063,12 @@ def main():
         print(f"full-model pool by task: {fullpar.by_task(95)}", flush=True)
         from bfs import mumps_lu as _ml
         print(_ml.report(), flush=True)
+        if _lat is not None:
+            # the lattice's ledger at the end too: the last round was unledgered
+            # (770628; 20261010j stage C)
+            print(f"  [ledger] {_lat.report()} (at the end, {time.time() - t_start:.0f} s)", flush=True)
+            for _ll in _lat.report_lines():
+                print(f"  [ledger] {_ll}", flush=True)
         if _ro is not None and _red_mod.ROW_MPI:
             print(_red_mod.rows_report(), flush=True)
     if BFS and a.post:

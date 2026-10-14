@@ -30,9 +30,10 @@ one batch per rank, the driver computing its own share:
             at the row point.
   line      the stability line Re = -eps, Im in [wlo, whi], covered by
             eigenvalue-free disks (the certificate of certify_sparse.
-            stability_and_abscissa) in WAVES: the base grid (ranks/2 equispaced
-            centres) and every centre that covered the line at the previous call
-            (cached, in parallel), then new centres in the remaining gaps, on
+            stability_and_abscissa) in WAVES: the base grid (LINE_BASE = 48
+            equispaced centres, ranks/2 before 20261010j stage C) and every
+            centre that covered the line at the previous call (cached, in
+            parallel), then new centres in the remaining gaps, on
             lattice points, kept for the next calls -- until the line is covered,
             an eigenvalue is found on or right of it (not clear), or a gap is
             shorter than the finest level (inconclusive, never clear).  The proof
@@ -75,7 +76,14 @@ FOLLOW_EXTEND = 2    # a Newton stopped at its window's edge, the slope still po
                      # window stays within the base +- (1 + FOLLOW_EXTEND) x radius, from a hint too (the review of
                      # stage A: unclipped, the row alternated between edge and top at one design; _newton)
 XCAP = 2             # factors of the exact (off-lattice) points kept per rank, apart from the lattice cache
-LINE_BASE_MIN = 4    # the line's base grid: ranks/2 equispaced centres, at least this many
+LINE_BASE = 48       # the line's and the level set's base grid: this many equispaced centres WHATEVER THE NUMBER OF
+                     # RANKS (--lattice-base; 20261010j stage C, eval-waves.md P1 / packing.md P2).  It was ranks/2 (user,
+                     # 2026-10-09: 'the other half of the ranks fills the gaps in the same time'): 48 at 96 ranks, so the
+                     # 96-rank runs are unchanged, but 24 at 48 ranks -- other line covers, other no-strip rows, other
+                     # paths than the 96-rank parents, and the next batch runs at 48 ranks, two per node (user,
+                     # 2026-10-14).  Cross-rank checks were only ever made at 1-3 ranks, where both rules give 4.
+                     # 0: ranks/2 again
+LINE_BASE_MIN = 4    # ... at least this many
 LINE_LMAX = 17       # finest centre spacing 2^-17 (7.6e-6, the serial certificate's eps_int 1e-5)
 LINE_K = 1           # nearest eigenvalues per centre (k = 3 costs 2-4 x the applications; 2026-10-06, test plant)
 LINE_SHRINK = 0.9    # disk used = LINE_SHRINK x the distance to the nearest eigenvalue (serial code: 0.9)
@@ -108,19 +116,91 @@ LEVEL_WATCH_PAD = 1e-3  # a region a followed row watches is left out of the cov
 TASK_COST = dict(row=1.0, value=1.0, slope=1.0, value2=2.0, block=2.0, centre=3.0,
                  rowx=1.0, slopex=1.0, blockx=2.0, level=10.0)   # relative costs of the requests
 LU_COST = 2.0        # ... and of a factorisation (balancing, LatticeOracle._assign)
+TASK_COSTS = 'measured'  # 'measured' (20261010j stage C, eval-waves.md P7; --lattice-costs): _assign balances on the
+                     # seconds each kind of request took (running means, the factorisation apart; a level-set disk at a
+                     # centre of an earlier call: that disk's own time), longest first; 'static': the units above in
+                     # request order, as since 2026-10-08.  The static units were never measured: a cluster LU (0.46-0.49
+                     # s) costs about one row, not two, and a level disk 1-2 s (norm) or 5-210 s (pencil), not 10 rows --
+                     # two slow disks could share a rank while another had none (at 48 ranks every no-strip level wave
+                     # holds more disks, 62-111, than ranks; packing.md P4).  Placement only: the same tasks and values
+                     # wherever they run, as long as a task's result does not depend on its rank (LESSONS 19.3)
+COST_UNIT = 0.5      # seconds per static unit before a kind has been measured (a cluster row: 18-34 solves x 17-21 ms)
+COST_EMA = 0.02      # the running means' weight once a kind has more than 1 / COST_EMA samples (drift: the level
+                     # set's disks got 6x dearer over 770632's 12 rounds)
+REQ_MEMO = 2         # designs whose row requests (row, block, rowx, slopex, blockx) evaluate() keeps for the next
+                     # evaluation of the SAME design (--lattice-memo; 20261010j stage C, eval-waves.md P8): the strip arm
+                     # re-evaluates every accepted trial with its strip, and the refine every iterate it adds members
+                     # at, and both recomputed every fixed row and every first Newton point.  The line's centres are
+                     # memoised apart (_line_memo), the strip's never (it reads every centre of the evaluation, R).
+                     # 0: off
+ROW_MERGE = 1e-6     # stability rows whose eigenvalues agree within this x max(1, |lambda|) are ONE row, the copy from
+                     # the nearest shift kept (--lattice-row-merge; 20261010j stage C, strip-ab.md AB3): one eigenvalue
+                     # seen from several shifts comes back 2e-8 .. 1.5e-7 apart (the probe at 151.48: 30 strip rows, 19
+                     # eigenvalues, up to 6 copies), above the 1e-8 that merged them, and each copy got its own elastic
+                     # slack and a share of the multiplier the penalty update reads.  The strip exhibits one eigenvalue
+                     # per ball of STRIP_RHO = 2^-6 anyway; 'seen' (alpha, admissibility) keeps 1e-8.  <= 1e-8: the rule
+                     # before (1e-8, the first copy in centre order)
+MEMBER_BINS = (0.5, 0.8, 0.95, 0.99)    # the per-member counts by s_i / smax (omega-growth.md P1)
+PROJ_RANKS = (48, 32)    # the ledger's projection: every wave's measured requests replayed longest first on this many
+                     # ranks (packing.md P3; no factor moves with them, so the misses of a smaller cache are not in it)
 
 _CACHE = {}          # complex shift key (closedloop's: complex(omega)) -> factor, LRU order
 _DES = {}            # design key -> dict(b, c, pa, ps, na, ns, cl)
 _VEC = {}            # (design key, theta, rounded lambda) -> (v, u) of the last line tasks
 _V0 = {}             # point key -> the last right singular vector of sigma_1 there (warm starts)
 _XCACHE = {}         # the exact points' factors (XCAP, FIFO): kept out of the lattice cache
-STATS = dict(hit=0, miss=0)       # this process's cache accounting
+STATS = dict(hit=0, miss=0, xhit=0, xmiss=0)       # this process's cache accounting: lattice points (_note) and,
+                     # 20261010j stage C, the exact points' side cache (_exact; never counted before: the Newton points
+                     # are most of the factorisations, driver-serial.md)
+_ML = []             # bfs.mumps_lu, once imported (the factorisations and solves of each request, eval_task)
+_MEMO_KINDS = ('row', 'block', 'rowx', 'slopex', 'blockx')    # the requests evaluate() keeps per design (REQ_MEMO)
+
+
+def _mumps_mod():
+    """bfs.mumps_lu, or None where it cannot be imported."""
+    if not _ML:
+        try:
+            from bfs import mumps_lu
+            _ML.append(mumps_lu)
+        except Exception:
+            _ML.append(None)
+    return _ML[0]
+
+
+def _mumps():
+    """(factorisations, their seconds, solves, their seconds) of this process so far (bfs/mumps_lu.STATS,
+    every context; zeros where MUMPS is not the factoriser)."""
+    m = _mumps_mod()
+    if m is None:
+        return 0, 0.0, 0, 0.0
+    S = m.STATS
+    nf = sf = ns = ss = 0
+    for k, v in S.items():
+        if k.startswith('factor'):
+            nf += v[0]; sf += v[1]
+        elif k.startswith('solve'):
+            ns += v[0]; ss += v[1]
+    return nf, sf, ns, ss
 
 
 def snap(w, level):
     """The lattice point of level `level` nearest w (an exact dyadic float)."""
     h = 2.0 ** -int(level)
     return float(np.round(float(w) / h) * h)
+
+
+def _lpt(ts, n):
+    """The makespan of the task times ts on n ranks, longest first (each to the
+    least loaded rank): the ledger's projection of a wave (packing.md P3)."""
+    if not ts:
+        return 0.0
+    if len(ts) <= n:
+        return float(max(ts))
+    import heapq
+    h = [0.0] * int(n)
+    for t_ in sorted(ts, reverse=True):
+        heapq.heapreplace(h, h[0] + t_)
+    return float(max(h))
 
 
 # --------------------------------------------------------------------- worker
@@ -179,11 +259,14 @@ def _gain(d, dz, w, vectors=True):
     return r
 
 
-def _exact(d, fn):
+def _exact(d, fn, w=None):
     """fn() with the closed loop's factor cache switched to the exact points'
     own (a Newton point is new at every evaluation: in the lattice cache it would
-    only push the lattice's factors out)."""
+    only push the lattice's factors out).  w: the point (its side-cache hit or
+    miss counted)."""
     cl = d['cl']
+    if w is not None:
+        STATS['xhit' if complex(w) in _XCACHE else 'xmiss'] += 1
     saved = (cl.lu_cache, cl.lu_cache_max, cl.lu_lru)
     cl.lu_cache, cl.lu_cache_max, cl.lu_lru = _XCACHE, int(XCAP), False
     try:
@@ -411,8 +494,12 @@ def _level_disk(d, dz, th, gam):
     import scipy.sparse.linalg as spla
     from closedloop_sparse import _v0
     s1, rn = _norm_disk(d, dz, th, gam)
+    # the disk's cost log (20261010j stage C, level-set-waves.md LS1): Arnoldi
+    # applications, the tier that converged (0 = the first of LEVEL_ARNOLDI, -1 =
+    # none), the CG iterations -- the slow disks were inferred from aggregates only
     if s1 >= gam or rn >= LEVEL_NORM_MIN:
-        return dict(theta=float(th), lams=[], rad=(0.0 if s1 >= gam else rn), sigma=s1, cg_max=0, pencil=False)
+        return dict(theta=float(th), lams=[], rad=(0.0 if s1 >= gam else rn), sigma=s1, cg_max=0, pencil=False,
+                    napp=0, tier=None, cg_sum=0, cg_n=0)
     cl = d['cl']
     n, r = cl.n, cl.r
     N = n + r
@@ -421,7 +508,7 @@ def _level_disk(d, dz, th, gam):
     cl.setup(float(th), dz['arow'], dz['nvec'], dz['K'])
     zr, zn = np.zeros(r, complex), np.zeros(n, complex)
     S, SH = cl.solve, cl.solveH
-    nit = []
+    nit = []; napp = [0]
 
     def B(y):
         return g * S(np.concatenate([M @ SH(np.concatenate([M @ y, zr]))[:n], zr]))[:n]
@@ -439,6 +526,7 @@ def _level_disk(d, dz, th, gam):
         return y0 + B(y)                     # the components M does not see, from the converged M y
 
     def op(v):
+        napp[0] += 1
         v1, v2 = v[:N], v[N:]
         f = np.concatenate([M @ v1[:n], v1[n:]])
         a = S(f)
@@ -449,7 +537,8 @@ def _level_disk(d, dz, th, gam):
         return np.concatenate([x1, x2])
     O = spla.LinearOperator((2 * N, 2 * N), matvec=op, dtype=complex)
     s = 1j * float(th)
-    for ncv, mxit in LEVEL_ARNOLDI:
+    tier = -1
+    for j_, (ncv, mxit) in enumerate(LEVEL_ARNOLDI):
         conv = True
         try:
             mu = spla.eigs(O, k=LEVEL_K, which='LM', tol=LINE_TOL, maxiter=mxit, v0=_v0(2 * N), ncv=ncv,
@@ -458,6 +547,7 @@ def _level_disk(d, dz, th, gam):
             conv = False
             mu = e.eigenvalues if e.eigenvalues is not None else np.zeros(0, complex)
         if conv:
+            tier = j_
             break
     mu = np.asarray(mu)[np.abs(mu) > 1e-300]
     lam = s + 1.0 / mu
@@ -466,7 +556,8 @@ def _level_disk(d, dz, th, gam):
     # crossings
     rp = float(np.min(np.abs(lam - s))) if (conv and len(lam) == LEVEL_K) else 0.0
     return dict(theta=float(th), lams=[complex(l_) for l_ in lam], rad=max(rp, rn), sigma=s1,
-                cg_max=max(nit, default=0), pencil=True)
+                cg_max=max(nit, default=0), pencil=True, napp=int(napp[0]), tier=int(tier),
+                cg_sum=int(sum(nit)), cg_n=len(nit))
 
 
 def eval_task(t):
@@ -477,12 +568,18 @@ def eval_task(t):
     and sigma_2; ('rowx', w), ('slopex', w), ('blockx', w) the same at an exact
     (off-lattice) point, factor in the side cache; ('centre', sre, theta, rlo)
     a disk centred at sre + i theta, rows for its eigenvalues with Re >= rlo;
-    ('level', theta, gam) a level-set disk at i theta (_level_disk)."""
+    ('level', theta, gam) a level-set disk at i theta (_level_disk).
+    Each request's own cost comes back in 'req' (20261010j stage C, eval-waves.md
+    P0 / P7, driver-serial.md P1): (seconds, factorisations, their seconds,
+    solves, their seconds) -- the ledger's per-kind work and critical path, the
+    measured costs of _assign, each rank's time per solve; dt also counts the
+    design's set-up."""
     dz, reqs = t
     t0 = time.perf_counter()
     d = _design(dz)
-    out = []
+    out = []; rec = []
     for q in reqs:
+        t1 = time.perf_counter(); m1 = _mumps()
         kind = q[0]
         if kind == 'row':
             r = _gain(d, dz, q[1])
@@ -496,12 +593,12 @@ def eval_task(t):
             res = dict(sigma=r['sigma'], gprime=r['gprime'])
         elif kind in ('rowx', 'slopex'):
             w = float(q[1])
-            r = _exact(d, lambda: d['cl'].gain(w, dz['arow'], dz['nvec'], dz['K']))
+            r = _exact(d, lambda: d['cl'].gain(w, dz['arow'], dz['nvec'], dz['K']), w)
             res = dict(sigma=r['sigma'], gprime=r['gprime'])
             if kind == 'rowx':
                 res['g'] = _grads(d, dz, r['x'], r['z'])
         elif kind == 'blockx':
-            res = _exact(d, lambda: _block(d, dz, q[1]))
+            res = _exact(d, lambda: _block(d, dz, q[1]), q[1])
         elif kind == 'value2':
             _note(complex(q[1]))
             P = d['cl'].gain_k(float(q[1]), dz['arow'], dz['nvec'], dz['K'], k=2)
@@ -513,24 +610,30 @@ def eval_task(t):
         else:
             raise ValueError(kind)
         out.append(res)
-    return dict(out=out, resident=_resident(), dt=time.perf_counter() - t0, hit=STATS['hit'], miss=STATS['miss'])
+        m2 = _mumps()
+        rec.append((time.perf_counter() - t1, m2[0] - m1[0], m2[1] - m1[1], m2[2] - m1[2], m2[3] - m1[3]))
+    return dict(out=out, resident=_resident(), dt=time.perf_counter() - t0, req=rec, **_counts())
+
+
+def _counts():
+    return dict(hit=STATS['hit'], miss=STATS['miss'], xhit=STATS['xhit'], xmiss=STATS['xmiss'])
 
 
 def vec_task(t):
     """The (v, u, eta) a centre task of this design kept, by (sre, theta, lambda)."""
     key, items = t
     return dict(out=[_VEC.get((key, float(sr), float(th), round(l_.real, 10), round(l_.imag, 10))) for sr, th, l_ in items],
-                resident=_resident(), dt=0.0, hit=STATS['hit'], miss=STATS['miss'])
+                resident=_resident(), dt=0.0, **_counts())
 
 
 def stats_task(t):
-    return dict(out=[], resident=_resident(), dt=0.0, hit=STATS['hit'], miss=STATS['miss'])
+    return dict(out=[], resident=_resident(), dt=0.0, **_counts())
 
 
 def drop_task(t):
     """Forget everything (a new plant order, a new run phase)."""
     _CACHE.clear(); _DES.clear(); _VEC.clear(); _V0.clear(); _XCACHE.clear()
-    return dict(out=[], resident=[], dt=0.0, hit=STATS['hit'], miss=STATS['miss'])
+    return dict(out=[], resident=[], dt=0.0, **_counts())
 
 
 
@@ -691,12 +794,29 @@ class LatticeOracle:
         self.line_prev = {}              # eps -> centres that covered the line at the last call
         self.strip_prev = {}             # eps -> the strip's shifts (sre, theta) that served its last cover
         self.level_prev = []             # the level-set centres that covered the band at the last call
-        self.calls = {}                  # kind -> [calls, tasks, wall, critical path (longest rank), misses]
+        # kind -> [waves, tasks, wall, critical path (longest rank), factorisations, busy (all ranks)]; [4] was
+        # assigned the sum of the cumulative miss counters of the wave's ranks -- not a count of anything
+        # (eval-waves.md P0 verifier; 20261010j stage C: the factorisations of the kind's requests)
+        self.calls = {}
         self.verbose = False
         self._dkey = None; self._dz = None
         self._line_memo = {}             # (design key, eps, wlo, whi, eps_int) -> (reach, result): the last few designs
         self._level_memo = {}            # (design key, gam, wlo, whi) -> the level set computed beside an evaluation
+        self._req_memo = {}              # design key -> {row request: result}, the last REQ_MEMO designs (evaluate)
         self._rot = 0                    # the ranks' tie-break order rotates from one wave to the next
+        # ---- 20261010j stage C: the measured costs (TASK_COSTS) and the ledger's measurements
+        self._cost = {}                  # cost kind (_rkind without the result) -> [samples, running mean s, the
+                                         #   factorisation apart]
+        self._lu = [0, 0.0]              # factorisations, running mean s
+        self._lvl_last = {}              # level-set centre theta -> its disk's last time (s, the factorisation apart)
+        self._sre_line = set()           # the lines' Re = -eps (a centre there is the line's, else the strip's)
+        self._req = {}                   # ledger request kind -> [tasks, work s, critical s, factorisations, their s,
+                                         #   longest s]: critical = on each wave's slowest rank (sums to [3])
+        self._busy = {}                  # rank -> busy s in the waves
+        self._solve = {}                 # rank -> [solves, their s] (a slow node, two runs on one: level-set-waves LS1)
+        self._slow = [0, 0]              # waves rank 0 was the slowest rank in, waves
+        self._rstat = {}                 # rank -> its latest cumulative (hit, miss, xhit, xmiss)
+        self._proj = {}                  # ledger kind -> [critical path, replay on this many ranks, on PROJ_RANKS]
 
     # ---------------------------------------------------------------- plumbing
     def design(self, z):
@@ -728,7 +848,10 @@ class LatticeOracle:
         fewest factors -- it evicts nothing while that rank has room -- the
         remaining ties in an order rotating from one wave to the next (the first
         ranks used to take every new point of the small waves, and their caches
-        thrashed: 5816 factorisations on the driver in the central MIMO run)."""
+        thrashed: 5816 factorisations on the driver in the central MIMO run).
+        TASK_COSTS 'measured' (20261010j stage C): the costs in seconds as
+        measured (_cost_of), and each of the two passes (points held, then new
+        points) LONGEST FIRST -- the rule above and its tie-break unchanged."""
         ranks = self._ranks()
         n = len(ranks)
         self._rot = (self._rot + 1) % n
@@ -744,17 +867,88 @@ class LatticeOracle:
 
         def least():
             return min(ranks, key=lambda r_: (load[r_], nheld[r_], order[r_]))
-        items = [(_key(q), q, TASK_COST[q[0]]) for q in reqs]
+        if TASK_COSTS == 'measured':
+            lu = self._lu[1] if self._lu[0] else LU_COST * COST_UNIT
+            items = sorted(((_key(q), q, self._cost_of(q)) for q in reqs), key=lambda it: -it[2])   # stable: ties in order
+        else:
+            lu = LU_COST
+            items = [(_key(q), q, TASK_COST[q[0]]) for q in reqs]
         for k, q, c in [it for it in items if it[0] in where]:
             r = min(where[k], key=load.get)
             rmin = least()
-            if load[r] > load[rmin] + LU_COST:
-                r = rmin; c += LU_COST; nheld[r] += 1
+            if load[r] > load[rmin] + lu:
+                r = rmin; c += lu; nheld[r] += 1
             out[r].append(q); load[r] += c
         for k, q, c in [it for it in items if it[0] not in where]:
             r = least()
-            out[r].append(q); load[r] += c + LU_COST; nheld[r] += 1
+            out[r].append(q); load[r] += c + lu; nheld[r] += 1
         return {r: v for r, v in out.items() if v}
+
+    # ------------------------------------------------- costs and the ledger
+    def _rkind(self, q, o=None):
+        """The ledger's kind of a request: its own, a centre split into the line's
+        and the strip's, a level-set disk into norm and pencil (o: its result)."""
+        k = q[0]
+        if k == 'centre':
+            return 'line' if float(q[1]) in self._sre_line else 'strip'
+        if k == 'level' and o is not None:
+            return 'level-pencil' if o.get('pencil') else 'level-norm'
+        return k
+
+    def _cost_of(self, q):
+        """A request's expected seconds, its factorisation apart (TASK_COSTS
+        'measured'): a level-set disk at a centre of an earlier call its own last
+        time (its cost is 1-2 s or 5-210 s, by the centre: norm or pencil disk),
+        else its kind's running mean, else the static units x COST_UNIT."""
+        if q[0] == 'level':
+            v = self._lvl_last.get(float(q[1]))
+            if v is not None:
+                return v
+        e = self._cost.get(self._rkind(q))
+        return e[1] if e is not None else TASK_COST[q[0]] * COST_UNIT
+
+    def _account(self, kind, per, res):
+        """One wave's requests into the ledger and the measured costs: per request
+        kind the tasks, the work, the share on the wave's slowest rank (the
+        critical path) and the factorisations; the replay of the wave's requests
+        longest first on this many ranks and on PROJ_RANKS."""
+        if not res:
+            return
+        rslow = max(res, key=lambda r_: res[r_]['dt'])
+        ts = []
+        for r, qs in per.items():
+            o = res[r]
+            tot = 0.0
+            sv = self._solve.setdefault(r, [0, 0.0])
+            for q, out, rc in zip(qs, o['out'], o.get('req') or ()):
+                dt, nf, sf = float(rc[0]), int(rc[1]), float(rc[2])
+                if len(rc) > 4:
+                    sv[0] += int(rc[3]); sv[1] += float(rc[4])
+                k = self._rkind(q, out)
+                a = self._req.setdefault(k, [0, 0.0, 0.0, 0, 0.0, 0.0])
+                a[0] += 1; a[1] += dt; a[3] += nf; a[4] += sf; a[5] = max(a[5], dt)
+                if r == rslow:
+                    a[2] += dt
+                tot += dt; ts.append(dt)
+                c_ = max(dt - sf, 0.0)
+                e = self._cost.setdefault(self._rkind(q), [0, 0.0])
+                e[0] += 1; e[1] += (c_ - e[1]) * max(1.0 / e[0], COST_EMA)
+                if q[0] == 'level':
+                    self._lvl_last.pop(float(q[1]), None); self._lvl_last[float(q[1])] = c_   # the latest last
+                if nf > 0:
+                    self._lu[0] += nf; self._lu[1] += (sf / nf - self._lu[1]) * max(float(nf) / self._lu[0], COST_EMA)
+            # the rest of the rank's task: the design's ports and closed loop (once per design and rank)
+            a = self._req.setdefault('setup', [0, 0.0, 0.0, 0, 0.0, 0.0])
+            oh = max(float(o['dt']) - tot, 0.0)
+            a[1] += oh; a[5] = max(a[5], oh)
+            if r == rslow:
+                a[2] += oh
+        while len(self._lvl_last) > 4096:
+            self._lvl_last.pop(next(iter(self._lvl_last)))
+        p = self._proj.setdefault(kind, [0.0] * (2 + len(PROJ_RANKS)))
+        p[0] += max(float(o['dt']) for o in res.values())
+        for j, nr in enumerate((len(self._ranks()),) + tuple(PROJ_RANKS)):
+            p[1 + j] += _lpt(ts, int(nr))
 
     def _run(self, fn, per_rank, kind, ntask=None):
         """fn(args) on each rank of per_rank {rank: args}; this process does
@@ -762,32 +956,58 @@ class LatticeOracle:
         t0 = time.perf_counter()
         res = {}
         others = {r: a for r, a in per_rank.items() if r != 0}
+        ml = _mumps_mod()
         if others and self.pool is not None:
             ranks = self.pool.each(fn, others)
             try:
                 if 0 in per_rank:
-                    res[0] = fn(per_rank[0])
+                    # rank 0's own share of the wave, booked apart from the driver's
+                    # serial MUMPS work (bfs/mumps_lu 'wave'; driver-serial.md P1: the
+                    # ledger's 'driver' was rank 0 in any context)
+                    if ml is not None:
+                        ml.IN_WAVE = True
+                    try:
+                        res[0] = fn(per_rank[0])
+                    finally:
+                        if ml is not None:
+                            ml.IN_WAVE = False
             finally:
                 res.update(self.pool.collect(ranks))
         else:
-            for r, a in per_rank.items():
-                res[r] = fn(a)
+            if ml is not None:
+                ml.IN_WAVE = True
+            try:
+                for r, a in per_rank.items():
+                    res[r] = fn(a)
+            finally:
+                if ml is not None:
+                    ml.IN_WAVE = False
         for r, o in res.items():
             self.held[r] = set(complex(k) for k in o['resident'])
+            self._rstat[r] = tuple(int(o.get(k_, 0)) for k_ in ('hit', 'miss', 'xhit', 'xmiss'))
+            self._busy[r] = self._busy.get(r, 0.0) + float(o['dt'])
         c = self.calls.setdefault(kind, [0, 0, 0.0, 0.0, 0, 0.0])
         c[0] += 1; c[1] += int(ntask if ntask is not None else len(per_rank))
         c[2] += time.perf_counter() - t0
         c[3] += max((o['dt'] for o in res.values()), default=0.0)
-        c[4] = sum(o['miss'] for o in res.values())
+        c[4] += sum(int(rc[1]) for o in res.values() for rc in (o.get('req') or ()))
         c[5] += sum(o['dt'] for o in res.values())       # busy time summed over the ranks (utilisation)
+        if len(res) > 1 and max(o['dt'] for o in res.values()) > 0.0:     # a wave of tasks (not stats, vectors)
+            self._slow[1] += 1
+            self._slow[0] += int(max(res, key=lambda r_: res[r_]['dt']) == 0)
         return res
 
-    def _drive(self, dz, agents, kind, R):
+    def _drive(self, dz, agents, kind, R, track=None):
         """Run the agents -- generators of requests (eval_task) that read their
         results from R -- side by side: every wave sends all their outstanding
         requests at once, one batch per rank, and resumes each agent.
-        Returns ({name: the agent's return value}, waves)."""
-        done, pend = {}, {}
+        Returns ({name: the agent's return value}, waves).  track (a dict;
+        20261010j stage C, omega-growth.md P1): per agent the requests it was the
+        first to ask for in a wave -- the tasks it cost ('own'; an identical chain
+        of another member costs none) -- and the wave it finished in ('fin').
+        Each result carries its rank and its own seconds ('dt_')."""
+        done, pend, fin = {}, {}, {}
+        waves = 0
 
         def step(nm, g):
             try:
@@ -797,22 +1017,33 @@ class LatticeOracle:
                         pend[nm] = (g, q)
                         return
             except StopIteration as e:
-                done[nm] = e.value
+                done[nm] = e.value; fin[nm] = waves
                 pend.pop(nm, None)
         for nm, g in agents.items():
             step(nm, g)
-        waves = 0
+        own = track.setdefault('own', {}) if track is not None else None
         while pend:
             waves += 1
-            reqs = list(dict.fromkeys(q for _, qs in pend.values() for q in qs))
+            owner = {}
+            for nm, (_, qs) in pend.items():
+                for q in qs:
+                    owner.setdefault(q, nm)
+            reqs = list(owner)                     # the requests in the order first asked, each once
+            if own is not None:
+                for nm in owner.values():
+                    own[nm] = own.get(nm, 0) + 1
             per = self._assign(reqs)
             res = self._run(eval_task, {r: (dz, qs) for r, qs in per.items()}, kind, ntask=len(reqs))
+            self._account(kind, per, res)
             for r, qs in per.items():
-                for q, o in zip(qs, res[r]['out']):
-                    o['rank'] = r
+                rq = res[r].get('req') or [(0.0,)] * len(qs)
+                for q, o, rc in zip(qs, res[r]['out'], rq):
+                    o['rank'] = r; o['dt_'] = float(rc[0])
                     R[q] = o
             for nm in list(pend):
                 step(nm, pend[nm][0])
+        if track is not None:
+            track.setdefault('fin', {}).update(fin)
         return done, waves
 
     def report(self):
@@ -824,6 +1055,66 @@ class LatticeOracle:
                  f"{100.0 * c[5] / max(nr * c[2], 1e-300):.0f} %)"
                  for k, c in sorted(self.calls.items())]
         return f"lattice ({self.size} ranks): " + "; ".join(parts) + f"; {held} factors held"
+
+    def report_lines(self):
+        """The ledger's measurements beside report() (20261010j stage C; cumulative,
+        each line 'lattice ...' for the '[ledger]' prefix):
+          rank 0    its busy time in the waves against the mean and the busiest
+                    rank, how often it was the slowest rank, the time per solve
+                    (rank 0, and over the ranks: a slow or shared node shows
+                    there), and its own serial MUMPS work outside the waves
+                    (driver-serial.md P1);
+          requests  per request kind: tasks, work, the critical path (the share on
+                    each wave's slowest rank: the kinds sum to the 'longest rank'
+                    seconds), the longest task, the measured cost (eval-waves.md P0);
+          factors   the factorisations (MUMPS, per request: lattice points and the
+                    exact points apart), the cache hits and misses of both caches,
+                    the running mean of a factorisation (eval-waves.md P0 verifier:
+                    c[4] was not a miss count, the exact points were not counted);
+          projection  every wave's requests replayed longest first on this many
+                    ranks and on PROJ_RANKS, against the measured critical path
+                    (packing.md P3: no factor moves with a task there, so the misses
+                    of a smaller cache, the driver's dispatch and a slower node are
+                    not in it)."""
+        out = []
+        ranks = self._ranks()
+        if self._busy:
+            b = [self._busy.get(r, 0.0) for r in ranks]
+            rmax = max(ranks, key=lambda r_: self._busy.get(r_, 0.0))
+            ml = _mumps_mod()
+            ser = ''
+            if ml is not None:
+                f_, s_ = ml.STATS.get('factor_driver', [0, 0.0]), ml.STATS.get('solve_driver', [0, 0.0])
+                ser = f"; serial MUMPS outside the waves {f_[0]} factorisations ({f_[1]:.0f} s), {s_[0]} solves ({s_[1]:.0f} s)"
+            ms = {r: 1e3 * v[1] / v[0] for r, v in self._solve.items() if v[0] > 0}
+            sol = ''
+            if ms:
+                q_ = np.percentile(list(ms.values()), [0, 50, 100])
+                sol = (f"; ms per solve: rank 0 {ms.get(0, float('nan')):.1f}, ranks {q_[0]:.1f} / {q_[1]:.1f} / {q_[2]:.1f} "
+                       f"(min / median / max)")
+            out.append(f"lattice rank 0: busy {self._busy.get(0, 0.0):.0f} s in the waves (mean rank "
+                       f"{np.mean(b):.0f} s, busiest rank {rmax} {self._busy.get(rmax, 0.0):.0f} s), the slowest rank in "
+                       f"{self._slow[0]} of {self._slow[1]} waves" + ('' if self.use_driver else ' (--lattice-driver off)')
+                       + sol + ser)
+        if self._req:
+            order = sorted(self._req, key=lambda k_: -self._req[k_][2])
+            out.append("lattice requests (tasks / work / critical / longest, s): " + "; ".join(
+                f"{k} {a[0]} / {a[1]:.0f} / {a[2]:.0f} / {a[5]:.1f}" + (f" ({a[1] / a[0]:.2f} s each)" if a[0] else '')
+                for k, a in ((k_, self._req[k_]) for k_ in order)))
+            fx = sum(self._req[k][3] for k in self._req if k in ('rowx', 'slopex', 'blockx'))
+            fl = sum(self._req[k][3] for k in self._req) - fx
+            sf = sum(self._req[k][4] for k in self._req)
+            h, m_, xh, xm = (sum(v[j] for v in self._rstat.values()) for j in range(4))
+            out.append(f"lattice factors: {fl + fx} factorisations in the requests ({sf:.0f} s; "
+                       f"{self._lu[1]:.2f} s each, running mean): lattice points {fl} (cache {h} hits / {m_} misses), "
+                       f"exact points {fx} (side cache {xh} hits / {xm} misses); "
+                       f"{sum(len(v) for v in self.held.values())} held")
+        if self._proj:
+            nr = len(ranks)
+            out.append("lattice projection (requests replayed longest first; critical path / on " +
+                       " / ".join(str(r_) for r_ in (nr,) + tuple(PROJ_RANKS)) + " ranks, s): " + "; ".join(
+                f"{k} {p[0]:.0f} / " + " / ".join(f"{x:.0f}" for x in p[1:]) for k, p in sorted(self._proj.items())))
+        return out
 
     def counts(self):
         """(factorisations, cached hits) over all ranks so far."""
@@ -858,13 +1149,24 @@ class LatticeOracle:
         within 1e-4 keep one, the one whose base is nearest, and the others
         restart once from their own base, cold, in more waves; a restart back on
         a shared top marks the member merged (state 'merged'), not restarted
-        again near that top (the round's end merges it)."""
+        again near that top (the round's end merges it).
+        The row requests of the last REQ_MEMO designs are kept (20261010j stage
+        C, eval-waves.md P8): an evaluation of the same design (the strip arm's
+        accepted trial, the refine's re-evaluation) finds its fixed rows and the
+        points its Newton chains revisit answered -- the same values, the same
+        decisions, fewer tasks; the centres are not (the line has its own memo,
+        the strip reads every centre of its evaluation).  info['members']: per
+        member kind the points asked for and the tasks caused, by s / smax, and
+        which agents set the last wave (omega-growth.md P1, strip-ab.md AB4)."""
         dz = self.design(z)
         follow = follow or {}
         w_star = {} if w_star is None else w_star
         state = {} if state is None else state
         enroll = set(int(i) for i in (enroll or ()))
         R = {}
+        if REQ_MEMO > 0 and dz['key'] in self._req_memo:
+            R.update(self._req_memo[dz['key']])
+        track = {}
 
         def member(w, rad, hint, st, blk):
             if rad:
@@ -926,7 +1228,7 @@ class LatticeOracle:
             lk = (dz['key'],) + tuple(float(v) for v in level)
             if lk not in self._level_memo:
                 agents['level'] = self._level(*lk[1:], R, watch=watch)
-        done, waves = self._drive(dz, agents, 'eval', R)
+        done, waves = self._drive(dz, agents, 'eval', R, track=track)
         ndedup = nev_redo = 0
         if dedup and follow:
             # (ii): members on one top -- groups of tops within 1e-4 (Newton's tops
@@ -960,8 +1262,14 @@ class LatticeOracle:
                     st_new = {k_: v_ for k_, v_ in state[k6].items() if k_ == 'merged'}
                     state[k6] = st_new                     # cold: no carried curvature either
                     nev_redo += done[i][2]
+                    track.setdefault('nev0', {})[i] = int(done[i][2])     # the first chain's points (the member log)
                     ag2[i] = member(W[i], follow[k6], None, st_new, i in enroll)
-                done2, waves2 = self._drive(dz, ag2, 'eval', R)
+                tr2 = {}
+                done2, waves2 = self._drive(dz, ag2, 'eval', R, track=tr2)
+                for nm_, c_ in tr2.get('own', {}).items():
+                    track['own'][nm_] = track['own'].get(nm_, 0) + c_
+                for nm_, f_ in tr2.get('fin', {}).items():
+                    track['fin'][nm_] = waves + f_         # the restarts' waves follow the first drive's
                 waves += waves2
                 for i in redo:
                     done[i] = done2[i]
@@ -969,6 +1277,12 @@ class LatticeOracle:
                     if any(abs(x_ - tp) <= 1e-4 for tp, _ in ft):
                         state[round(float(W[i]), 6)]['merged'] = x_    # back on a shared top
                 ndedup = len(redo)
+        if REQ_MEMO > 0:
+            mem_ = self._req_memo.pop(dz['key'], {})       # the most recent design last (dropped last)
+            mem_.update((q, o) for q, o in R.items() if q[0] in _MEMO_KINDS)
+            self._req_memo[dz['key']] = mem_
+            while len(self._req_memo) > int(REQ_MEMO):
+                self._req_memo.pop(next(iter(self._req_memo)))
         if 'level' in done:
             self._level_memo[lk] = done['level']
             while len(self._level_memo) > 4:
@@ -1005,7 +1319,36 @@ class LatticeOracle:
                 Gc[0, 1] = grad(B['g01']) + 1j * grad(B['g01i'])
                 Gc[1, 0] = grad(B['g10']) + 1j * grad(B['g10i'])
                 blocks[i] = dict(sig=np.array(B['sig']), Gc=Gc)
+        info['members'] = self._member_log(W, follow, done, track, s, waves)
         return s, Gs, blocks, tops, info, lr
+
+    @staticmethod
+    def _member_log(W, follow, done, track, s, waves):
+        """The evaluation's per-member counts (20261010j stage C, omega-growth.md
+        P1 and its verifier): per kind (fixed, followed) the members, the points
+        their agents asked for (nev, the round's 'sigma evaluations') and the
+        tasks they caused (the requests each was the first to ask for: what was
+        computed), the followed members that caused none (a chain identical to
+        another's, or answered by the memo); the same by s / smax (MEMBER_BINS);
+        and which agents finished in the last wave (members by kind, the line,
+        the strip, the level set: the evaluation's critical path in waves)."""
+        own, fin, nev0 = track.get('own', {}), track.get('fin', {}), track.get('nev0', {})
+        smax = float(np.max(s)) if len(s) else 0.0
+        nb = len(MEMBER_BINS) + 1
+        out = dict(n=[0, 0], pts=[0, 0], own=[0, 0], none=0, bn=[0] * nb, bpts=[0] * nb, bown=[0] * nb)
+        for i in range(len(W)):
+            j = int(bool(follow.get(round(float(W[i]), 6))))
+            nev, ow = int(done[i][2]) + int(nev0.get(i, 0)), int(own.get(i, 0))
+            out['n'][j] += 1; out['pts'][j] += nev; out['own'][j] += ow
+            out['none'] += int(j == 1 and ow == 0)
+            b = int(np.searchsorted(MEMBER_BINS, float(s[i]) / smax, side='right')) if smax > 0 else 0
+            out['bn'][b] += 1; out['bpts'][b] += nev; out['bown'][b] += ow
+        last = set()
+        for nm, f_ in fin.items():
+            if f_ == waves:
+                last.add(nm if isinstance(nm, str) else ('followed' if follow.get(round(float(W[nm]), 6)) else 'fixed'))
+        out['last'] = sorted(last)
+        return out
 
     def sigmas(self, z, ws, k=1, slope=False):
         """sigma_1 values (no vectors) at the lattice points ws; k = 2: the
@@ -1068,10 +1411,12 @@ class LatticeOracle:
             self._line_memo.pop(next(iter(self._line_memo)))
 
     def base_grid(self, wlo, whi):
-        """The line's base grid: ranks/2 equispaced centres on [wlo, whi] (at
-        least LINE_BASE_MIN), each on its nearest point of 2^-LINE_LMAX -- one wave,
-        half the ranks, the other half free for the gaps (user, 2026-10-09)."""
-        n = max(self.size // 2, LINE_BASE_MIN)
+        """The line's (and the level set's first) base grid: LINE_BASE equispaced
+        centres on [wlo, whi] whatever the number of ranks (20261010j stage C;
+        LINE_BASE = 0: ranks/2, at 96 ranks the same 48 -- one wave, half the
+        ranks, the other half free for the gaps, user 2026-10-09), at least
+        LINE_BASE_MIN, each on its nearest point of 2^-LINE_LMAX."""
+        n = max(int(LINE_BASE) if int(LINE_BASE) > 0 else self.size // 2, LINE_BASE_MIN)
         return sorted(set(snap(wlo + j * (whi - wlo) / (n - 1), LINE_LMAX) for j in range(n)))
 
     def _line(self, eps, wlo, whi, reach, eps_int, R):
@@ -1080,6 +1425,7 @@ class LatticeOracle:
         hmin = 2.0 ** -LINE_LMAX if eps_int is None else float(eps_int)
         key = round(float(eps), 12)
         rlo = -eps - reach
+        self._sre_line.add(float(-eps))                    # the ledger: a centre at Re = -eps is the line's
         cent = sorted(set(self.base_grid(wlo, whi)) |
                       set(c for c in self.line_prev.get(key, []) if wlo - 1e-12 <= c <= whi + 1e-12))
         done = {}
@@ -1110,21 +1456,52 @@ class LatticeOracle:
             # next call's first wave: the base grid and a cover of the line (the
             # rows of the eigenvalues near the line come from the strip)
             self.line_prev[key] = sorted(self._cover(done, wlo, whi))
-        seen, rows = [], []
+        seen, cand = [], []
         for th in sorted(done):
             c = done[th]
             for l_ in c['lams']:
                 if all(abs(l_ - q) > 1e-8 * max(1.0, abs(l_)) for q in seen):
                     seen.append(l_)
-            for rw in c['rows']:
-                if all(abs(rw['lam'] - q['lam']) > 1e-8 * max(1.0, abs(rw['lam'])) for q in rows):
-                    rows.append(dict(rw, sre=c['sre'], theta=th, rank=c['rank']))
+            cand += [dict(rw, sre=c['sre'], theta=th, rank=c['rank']) for rw in c['rows']]
+        rows, ndup = self._rows_merged(cand)
         rows.sort(key=lambda r_: -r_['lam'].real)
         alpha = max((l_.real for l_ in seen), default=-np.inf)
         if witness is not None:
             alpha = max(alpha, witness.real)
         return dict(clear=bool(clear), alpha=float(alpha), witness=witness, rows=rows, seen=seen,
-                    nshift=nshift, waves=waves, uncovered=uncovered)
+                    nshift=nshift, waves=waves, uncovered=uncovered, rows_dup=int(ndup))
+
+    @staticmethod
+    def _rows_merged(cand):
+        """One stability row per eigenvalue among the candidate rows `cand` (each
+        with the centre sre + i theta that found it): eigenvalues within ROW_MERGE
+        x max(1, |lambda|) are one, the copy from the NEAREST shift kept -- its
+        eigenvalue and gradient are the most accurate (20261010j stage C, strip-
+        ab.md AB3; 1e-8 left copies 2e-8 .. 1.5e-7 apart, each a row with its own
+        elastic slack).  ROW_MERGE <= 1e-8: the rule before, 1e-8 and the first
+        copy in `cand`'s order.  The same row computed twice (one centre's, in
+        the line's result and again in R) is not a copy.  Returns (rows, the
+        rows the rule before would have kept beyond these: the copies AB3
+        merges)."""
+        uniq, ks = [], set()
+        for rw in cand:
+            k_ = (float(rw['sre']), float(rw['theta']), complex(rw['lam']))
+            if k_ not in ks:
+                ks.add(k_); uniq.append(rw)
+        def keep(order, tol):
+            rows = []
+            for i in order:
+                rw = uniq[i]
+                if all(abs(rw['lam'] - q['lam']) > tol * max(1.0, abs(rw['lam'])) for q in rows):
+                    rows.append(rw)
+            return rows
+        old = keep(range(len(uniq)), 1e-8)
+        if ROW_MERGE <= 1e-8:
+            return old, 0
+        rows = keep(sorted(range(len(uniq)), key=lambda i: (abs(complex(uniq[i]['lam']) -
+                                                                complex(uniq[i]['sre'], uniq[i]['theta'])), i)),
+                    float(ROW_MERGE))
+        return rows, len(old) - len(rows)
 
     # --------------------------------------------------------------- level set
     def level(self, z, gam, wlo, whi, watch=None):
@@ -1149,7 +1526,7 @@ class LatticeOracle:
     def _level(self, gam, wlo, whi, R, watch=None):
         """The level set's waves, as the line's (_line): the centres that
         covered the band at the last call (their factors held) or, at the first
-        call, the base grid (ranks/2 equispaced axis points), then centres in the
+        call, the base grid (LINE_BASE equispaced axis points), then centres in the
         gaps, until the band is covered -- sigma_1 < gam everywhere, since every
         disk is centred at a point below gam (a centre at or above gam has none)
         and holds no crossing -- or a region above gam is found that no followed
@@ -1192,12 +1569,14 @@ class LatticeOracle:
         done = {}
         waves = 0; nshift = 0; spurious = set(); conf = {}
         cross, watched, excl = [], [], []
+        wmax = []                                          # the slowest disk of each wave (LS1: the call's critical path)
         while cent and waves < LINE_WAVES:
             waves += 1
             reqs = [('level', float(th), gam) for th in cent]
             yield reqs
             for q in reqs:
                 done[q[1]] = R[q]
+            wmax.append(max(float(R[q].get('dt_', 0.0)) for q in reqs))
             nshift += len(cent)
             on = []
             known = list(conf) + list(spurious)
@@ -1246,7 +1625,31 @@ class LatticeOracle:
                     uncovered=uncovered, cg_max=max((c['cg_max'] for c in done.values()), default=0),
                     pencil=int(sum(c['pencil'] for c in done.values())), outcome=outcome,
                     watched=[dict(w=float(r_['w']), v=float(r_['v']), lo=float(r_['lo']), hi=float(r_['hi']),
-                                  by_w=float(r_['by'][0]), by_v=float(r_['by'][1])) for r_ in watched])
+                                  by_w=float(r_['by'][0]), by_v=float(r_['by'][1])) for r_ in watched],
+                    disks=self._disk_log(done, wmax))
+
+    @staticmethod
+    def _disk_log(done, wmax):
+        """The level-set call's disk costs (20261010j stage C, level-set-waves.md
+        LS1): per path -- 'norm' (the norm disk alone), 'tier k' (the pencil's
+        Arnoldi converged at LEVEL_ARNOLDI[k]), 'failed' (no tier converged: the
+        norm disk's radius only) -- [disks, seconds, longest]; the applications
+        and CG iterations; the critical path (each wave's slowest disk) against the
+        work; the three slowest disks [(theta, s, path, applications)]."""
+        paths = {}
+        app_max = cg_sum = cg_n = cg_max = 0
+        slow = []
+        for th, c in done.items():
+            dt = float(c.get('dt_', 0.0))
+            tr = c.get('tier')
+            p = 'norm' if not c.get('pencil') else ('failed' if tr is None or tr < 0 else f"tier {tr}")
+            a = paths.setdefault(p, [0, 0.0, 0.0])
+            a[0] += 1; a[1] += dt; a[2] = max(a[2], dt)
+            app_max = max(app_max, int(c.get('napp', 0)))
+            cg_sum += int(c.get('cg_sum', 0)); cg_n += int(c.get('cg_n', 0)); cg_max = max(cg_max, int(c.get('cg_max', 0)))
+            slow = sorted(slow + [(float(th), dt, p, int(c.get('napp', 0)))], key=lambda q_: -q_[1])[:3]
+        return dict(paths=paths, app_max=app_max, cg_sum=cg_sum, cg_n=cg_n, cg_max=cg_max,
+                    crit=float(sum(wmax)), work=float(sum(a[1] for a in paths.values())), slow=slow)
 
     @staticmethod
     def _regions(done, conf, gam):
@@ -1442,19 +1845,18 @@ class LatticeOracle:
     def _merge(lr, st, R):
         """The line's result with the rows and eigenvalues of every centre of the
         evaluation (line and strip), and the strip's report."""
-        seen, rows = list(lr['seen']), list(lr['rows'])
+        seen, cand = list(lr['seen']), list(lr['rows'])
         for q in sorted(k for k in R if k[0] == 'centre'):
             o = R[q]
             for l_ in o['lams']:
                 if all(abs(l_ - e_) > 1e-8 * max(1.0, abs(l_)) for e_ in seen):
                     seen.append(l_)
-            for rw in o['rows']:
-                if all(abs(rw['lam'] - x_['lam']) > 1e-8 * max(1.0, abs(rw['lam'])) for x_ in rows):
-                    rows.append(dict(rw, sre=o['sre'], theta=o['theta'], rank=o['rank']))
+            cand += [dict(rw, sre=o['sre'], theta=o['theta'], rank=o['rank']) for rw in o['rows']]
+        rows, ndup = LatticeOracle._rows_merged(cand)      # one row per eigenvalue (ROW_MERGE; 'seen' keeps 1e-8)
         rows.sort(key=lambda r_: -r_['lam'].real)
         # alpha stays the line's: a trial (line only) and its iterate (line and
         # strip) must read the same value for the same design
-        return dict(lr, rows=rows, seen=seen, strip=st)
+        return dict(lr, rows=rows, seen=seen, strip=st, rows_dup=int(lr.get('rows_dup', 0)) + int(ndup))
 
     @staticmethod
     def _fill(done, gaps, hmin):
