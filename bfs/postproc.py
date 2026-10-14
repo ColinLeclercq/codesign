@@ -10,7 +10,9 @@
                    (left singular vector), without and with control, with the
                    actuator (half-amplitude circle of its Gaussian) and the
                    sensor (its window on the floor) drawn on every panel
-  controller.png   Bode plot of the controller k(s) = K + n^T (sI - A_c)^-1 B_c
+  controller.png   Bode plot of the controller k(s) = K + n^T (sI - A_c)^-1 B_c;
+                   MIMO: its singular values and the alignment of its optimal
+                   input / output directions with (1, 0)^T (fig_controller_mimo)
   post.npz         every number and field behind the figures (below)
   post.json        a summary (peaks, frequencies, timings)
 
@@ -286,9 +288,24 @@ def fig_modes(path, D, w, rec, des, comp='u'):
     plt.close(fig)
 
 
+def ctrl_directions(kk):
+    """MIMO controller K(i w) = U S V^H at each frequency (N x m x p): its
+    singular values (N x min(m, p)) and the alignment with e_1 = (1, 0)^T of
+    the optimal input direction v_1 (sensor space, the 'forcing' of K) and of
+    the optimal output direction u_1 (actuator space, its 'response'):
+    |v_1^H e_1| and |u_1^H e_1|, in [0, 1] (1: sensor 1 / actuator 1 alone, 0:
+    the other port alone; phase-free).  Where sigma_1 = sigma_2 the directions
+    are not unique and the alignments may jump."""
+    U, S, Vh = np.linalg.svd(np.asarray(kk, complex))
+    return S, np.abs(Vh[:, 0, 0]), np.abs(U[:, 0, 0])
+
+
 def fig_controller(path, wk, kk, poles, W):
     import matplotlib; matplotlib.use('Agg')
     import matplotlib.pyplot as plt
+    kk = np.asarray(kk)
+    if kk.ndim == 3:
+        return fig_controller_mimo(path, wk, kk, poles, W)
     fig, (a1, a2) = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
     for ax in (a1, a2):
         _style(ax)
@@ -296,27 +313,60 @@ def fig_controller(path, wk, kk, poles, W):
         for p in poles:
             if p.imag > 1e-9 * max(abs(p), 1.0) and wk[0] <= p.imag <= wk[-1]:
                 ax.axvline(p.imag, color=GRID, lw=1.0, ls=(0, (2, 2)))
-    kk = np.asarray(kk)
-    if kk.ndim == 3:
-        # MIMO: every entry that is not identically zero (decentral: the diagonal),
-        # k_ij = sensor j -> actuator i
-        cols = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100']
-        ent = [(i, j) for i in range(kk.shape[1]) for j in range(kk.shape[2]) if np.abs(kk[:, i, j]).max() > 0]
-        for q, (i, j) in enumerate(ent):
-            a1.loglog(wk, np.abs(kk[:, i, j]), color=cols[q % 4], lw=2.0, label=f'$k_{{{i + 1}{j + 1}}}$ (sensor {j + 1} -> actuator {i + 1})')
-            a2.semilogx(wk, np.degrees(np.unwrap(np.angle(kk[:, i, j]))), color=cols[q % 4], lw=2.0)
-        a1.legend(fontsize=8, frameon=False)
-    else:
-        a1.loglog(wk, np.abs(kk), color=C_CLOSED, lw=2.0)
-        a2.semilogx(wk, np.degrees(np.unwrap(np.angle(kk))), color=C_CLOSED, lw=2.0)
+    a1.loglog(wk, np.abs(kk), color=C_CLOSED, lw=2.0)
+    a2.semilogx(wk, np.degrees(np.unwrap(np.angle(kk))), color=C_CLOSED, lw=2.0)
     a1.set_ylabel('|k(i$\\omega$)|', color=INK)
     a2.set_ylabel('phase (deg)', color=INK)
     a2.set_xlabel('$\\omega$', color=INK)
-    ps = ', '.join((f'{p.real:.3g}{p.imag:+.3g}i' if abs(p.imag) > 1e-9 * max(abs(p), 1.0) else f'{p.real:.3g}')
-                   for p in sorted(poles, key=lambda z: (z.real, z.imag)))
     a1.set_title(f'Controller Bode plot (shaded: certified band [0, {W:g}]; dashed: |Im| of its poles)\n'
-                 f'poles {ps}', color=INK, fontsize=9, loc='left')
+                 f'poles {_poles_str(poles)}', color=INK, fontsize=9, loc='left')
     fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def _poles_str(poles):
+    return ', '.join((f'{p.real:.3g}{p.imag:+.3g}i' if abs(p.imag) > 1e-9 * max(abs(p), 1.0) else f'{p.real:.3g}')
+                     for p in sorted(poles, key=lambda z: (z.real, z.imag)))
+
+
+def fig_controller_mimo(path, wk, kk, poles, W):
+    """MIMO controller (user, 2026-10-14, in place of the Bode plot of its
+    entries): (a) its singular values, (b) the alignment of its optimal input
+    direction v_1 with (1, 0)^T (sensor 1), (c) that of its optimal output
+    direction u_1 with (1, 0)^T (actuator 1); ctrl_directions."""
+    import matplotlib; matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    S, av, au = ctrl_directions(kk)
+    fig, (a1, a2, a3) = plt.subplots(3, 1, figsize=(8, 8), sharex=True,
+                                     gridspec_kw=dict(height_ratios=[1.4, 1.0, 1.0]))
+    for ax in (a1, a2, a3):
+        _style(ax)
+        ax.axvspan(wk[0], W, color='#f0efec', zorder=0)
+        for p in poles:
+            if p.imag > 1e-9 * max(abs(p), 1.0) and wk[0] <= p.imag <= wk[-1]:
+                ax.axvline(p.imag, color=GRID, lw=1.0, ls=(0, (2, 2)))
+    for j in range(S.shape[1]):
+        a1.loglog(wk, S[:, j], color=C_CLOSED, lw=2.0 if j == 0 else 1.4, ls='-' if j == 0 else (0, (5, 2)),
+                  label=f'$\\sigma_{j + 1}(K(i\\omega))$')
+    a1.legend(fontsize=8, frameon=False)
+    a1.set_ylabel('singular values', color=INK)
+    a1.set_title(f'(a) Controller singular values (shaded: certified band [0, {W:g}]; dashed: |Im| of its poles)\n'
+                 f'poles {_poles_str(poles)}', color=INK, fontsize=9, loc='left')
+    for ax, al, lab, title in ((a2, av, '$|v_1^H e_1|$',
+                                '(b) optimal input direction $v_1$ (sensor space) against $(1, 0)^T$: '
+                                '1 = sensor 1 alone, 0 = sensor 2 alone'),
+                               (a3, au, '$|u_1^H e_1|$',
+                                '(c) optimal output direction $u_1$ (actuator space) against $(1, 0)^T$: '
+                                '1 = actuator 1 alone, 0 = actuator 2 alone')):
+        ax.semilogx(wk, al, color=C_CLOSED, lw=2.0)
+        ax.set_ylim(-0.03, 1.03)
+        ax.set_ylabel(lab, color=INK)
+        ax.set_title(title, color=INK, fontsize=9, loc='left')
+    a3.set_xlabel('$\\omega$', color=INK)
+    fig.text(0.01, 0.005, '$K(i\\omega) = U \\Sigma V^H$; where $\\sigma_1 = \\sigma_2$ the directions are not unique '
+             '(the alignments may jump there)', color=INK2, fontsize=8)
+    fig.tight_layout(rect=(0, 0.02, 1, 1))
     fig.savefig(path, dpi=150)
     plt.close(fig)
 
@@ -400,6 +450,14 @@ def plot(out, D, des, comp='u'):
     """The figures, from OUT/post.npz alone (and the mesh): no solve."""
     z = np.load(os.path.join(out, 'post.npz'))
     ws, W, wvec = z['omega'], float(z['band'][1]), [float(w) for w in z['vec_omega']]
+    # mode figures of an earlier record in the same directory (a continued
+    # run: its closed-loop peak was at another frequency, so another file
+    # name) are removed, or they show the old design beside the new one
+    # (20261010g: one stale modes_w*.png in each of the six directories)
+    keep = {f'modes_w{w:.3f}.png' for w in wvec}
+    for f in os.listdir(out):
+        if f.startswith('modes_w') and f.endswith('.png') and f not in keep:
+            os.remove(os.path.join(out, f))
     fig_sigma(os.path.join(out, 'sigma.png'), ws, z['sigma_open'], z['sigma_closed'], float(z['gamma']), W, wvec)
     fig_sigma(os.path.join(out, 'sigma_loglog.png'), ws, z['sigma_open'], z['sigma_closed'], float(z['gamma']), W, wvec,
               logw=True)
