@@ -71,7 +71,9 @@ FOLLOW_HALVE = 3     # a Newton step and its halvings evaluated side by side (on
 FOLLOW_EXTEND = 2    # a Newton stopped at its window's edge, the slope still pointing out: the window re-centred on the
                      # point, at most this many times per evaluation (20261010j; 770632 round 11: the member based at the
                      # 2^-5 grid point 4.03125 stopped exactly on its edge 4.13125, sigma 143.48, slope +284, while its
-                     # top 4.180605 stood at 151.4775 -- the round's SQP never saw it; missed-peaks.md P3)
+                     # top 4.180605 stood at 151.4775 -- the round's SQP never saw it; missed-peaks.md P3).  Every
+                     # window stays within the base +- (1 + FOLLOW_EXTEND) x radius, from a hint too (the review of
+                     # stage A: unclipped, the row alternated between edge and top at one design; _newton)
 XCAP = 2             # factors of the exact (off-lattice) points kept per rank, apart from the lattice cache
 LINE_BASE_MIN = 4    # the line's base grid: ranks/2 equispaced centres, at least this many
 LINE_LMAX = 17       # finest centre spacing 2^-17 (7.6e-6, the serial certificate's eps_int 1e-5)
@@ -560,26 +562,45 @@ def _newton(w0, rad, hint, st, real, R, kind='rowx'):
     slope +284; from 4.13125 Newton climbs to the top 4.180605, 151.4775, in 15
     evaluations).  A hint (the last top) outside the base window but within the
     reach of the extensions starts the walk, the window centred on it; one
-    beyond restarts from the base.  A walk that never meets an edge is the one
-    of 20261010i, point for point.  The member's state records st['edge'] (the
-    last window's edge still stopped it), st['ext'] (re-centrings used) and
-    st['top'] (the point is a top: converged, or off the edges with Newton's
-    own distance to the top |sigma'/sigma''| below 1e-4 -- the round's end
-    moves a member only onto a top).  kind: the request of the
-    walk's points ('rowx': value, slope and gradient, a row; 'slopex': value
-    and slope, the certificate's peak locator, LatticeOracle.peak_tops)."""
+    beyond restarts from the base.  EVERY window is clipped to that REACH, the
+    base +- (1 + FOLLOW_EXTEND) rad, so what a walk can reach does not depend
+    on where it starts (20261010j, the review of stage A: unclipped, a window
+    centred on a hint reached the hint +- 3 rad, up to 6 rad from the base; on
+    the final 770632 design a member based at 3.78125 then read 127.166 on the
+    reach edge 4.08125 from its base, 151.4775 on the top 4.180605 from that
+    edge, 127.161 from the base again (the top now beyond the hint rule), at
+    successive evaluations of ONE design: a trial and its iterate disagreeing
+    on the row by 16 %, the iterate accepted on a false value of STAGE5 29.2).
+    A top beyond the reach is the same flagged edge stop (edge True, top
+    False) at every evaluation, and the level set at max(t, smax)(1 + tol)
+    enrols a member at it (missed-peaks.md P1).  An edge the re-centring
+    cannot push further (the reach's own) stops the walk.  A walk that never
+    meets an edge is the one of 20261010i, point for point; one that stays
+    within the reach, the one of the unclipped windows.  The member's state
+    records st['edge'] (the last window's edge still stopped it), st['ext']
+    (re-centrings used) and st['top'] (the point is a top: converged, or off
+    the edges with Newton's own distance to the top |sigma'/sigma''| below
+    1e-4 -- the round's end moves a member only onto a top).  kind: the
+    request of the walk's points ('rowx': value, slope and gradient, a row;
+    'slopex': value and slope, the certificate's peak locator,
+    LatticeOracle.peak_tops)."""
+    reach = (1 + FOLLOW_EXTEND) * rad
+    rlo, rhi = w0 - reach, w0 + reach              # the windows' bounds, whatever the start
+    if real:
+        rlo = max(rlo, 0.0)                        # w = 0: the band's own end on a real plant
+
     def window(c):
-        lo_, hi_ = c - rad, c + rad
-        if real:
-            lo_ = max(lo_, 0.0)
-        return lo_, hi_
+        return max(c - rad, rlo), min(c + rad, rhi)
     lo, hi = window(w0)
     x = float(w0)
     if hint is not None:
         if lo <= float(hint) <= hi:
             x = float(hint)
-        elif abs(float(hint) - w0) <= (1 + FOLLOW_EXTEND) * rad and (not real or float(hint) >= 0.0):
-            x = float(hint); lo, hi = window(x)       # the top walked out of the base window at an earlier evaluation
+        elif rlo <= float(hint) <= rhi:
+            # the top walked out of the base window at an earlier evaluation; the same
+            # float bounds as the windows', so a walk's own stop on the reach edge
+            # (x <= rhi exactly) is always taken back as its next hint
+            x = float(hint); lo, hi = window(x)
     yield [(kind, x)]
     e = R[(kind, x)]; n = 1
     g2 = st.get('g2')
@@ -629,9 +650,15 @@ def _newton(w0, rad, hint, st, real, R, kind='rowx'):
         # MIMO plateau); w = 0 is the band's own end on a real plant, not an edge
         edge = (not conv) and blocked and not (real and lo <= 0.0 and x + stp < lo)
         if edge and ext < FOLLOW_EXTEND:
-            ext += 1
-            lo, hi = window(x)
-            continue
+            lo2, hi2 = window(x)
+            # re-centre only where the window then reaches past the edge that stopped
+            # the step; the reach's own edge does not move, and a re-centring on it would
+            # only repeat the stop (a fresh FD pair each time on a convex flank).  Within
+            # the reach this always holds (x within a trust step <= rad of the edge)
+            if (hi2 > hi) if stp > 0.0 else (lo2 < lo):
+                ext += 1
+                lo, hi = lo2, hi2
+                continue
         break
     if g2 is not None and g2 < 0.0:
         st['g2'] = float(g2)
