@@ -14,7 +14,10 @@
 #                     lines and the lattice [ledger] line (ranks busy %), refusals
 #                     (also the gate's and the winding check's), the excess
 #                     diagnoses (missed peak / t lag / within tol, 20261010j),
-#                     errors, the final state (the first thing to read)
+#                     the resume and provenance lines, the anchor's count, gate
+#                     refusals in full, deadline stops, the winding certificate
+#                     and its veto (20261010j stage B), errors, the final state
+#                     (the first thing to read)
 #   version.txt       bfs/version_check.py (code version, git commit)
 #   logs/             this version's job logs: those whose version_check line names
 #                     it or says the checkout is NOT it, and those without a
@@ -115,7 +118,7 @@ done
         echo "================ $f ($(stat -c %y "$f" | cut -c1-19))"
         # the job's own output: slurm appends the script itself after "Command=",
         # whose echo lines would match too; its State / wall lines are kept
-        awk '/^Command=/{s=1} !s || /^State:|^Job Wall-clock/' "$f" | grep -E "^=== host|^record |^version_check|^  outer [0-9]+:|^    lattice:|refusal:|missed peak:|t lag:|within tol:|^activity:|QP failed|crossing \(it|REJECTS|REFUSED|refused|INCONCLUSIVE|^  \[ledger\] lattice|^(rows|sigma_2 blocks|sweep|follow|level set|  2n certificate|line|strip|moved design)|Traceback|Error|\*\*\* |^State:|^Job Wall-clock|best gamma after each round|final gamma|=== done" \
+        awk '/^Command=/{s=1} !s || /^State:|^Job Wall-clock/' "$f" | grep -E "^=== host|^record |^version_check|^  outer [0-9]+:|^    lattice:|refusal:|missed peak:|t lag:|within tol:|^activity:|QP failed|crossing \(it|REJECTS|REFUSED|refused|INCONCLUSIVE|^  \[ledger\] lattice|^(rows|sigma_2 blocks|sweep|follow|level set|  2n certificate|line|strip|moved design)|Traceback|Error|\*\*\* |^State:|^Job Wall-clock|best gamma after each round|final gamma|=== done|^resume:|^CONTINUE:|^RESUME:|DEADLINE STOP|sqp: deadline|cut by the deadline|^winding certificate|^continuation anchor|gate refusal|veto:|winding count right of|^FATAL" \
             | grep -v "^#" | cut -c1-1000 || true
     done
 } > "$OUTD/SUMMARY.txt"

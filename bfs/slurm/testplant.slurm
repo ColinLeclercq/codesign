@@ -165,7 +165,11 @@ echo "$(date -Is) $(sed -n 's/^# version //p' bfs/MANIFEST) $(git rev-parse --sh
 # would not end, 5 min kept for the figures (bfs/slurm_remaining.py)
 export DEADLINE=${DEADLINE:-$(python bfs/slurm_remaining.py --reserve 300)}
 export OPS OUTER PY=python LAUNCH="$LAUNCHER -n ${SLURM_NTASKS:-24}"
-time bash bfs/run_bfs.sh "$OUT/run" "$OUT/starts/$NAME.npz" --deadline-final 600 "${CONT[@]}"   # the test plant's end: ~3 min
+# --deadline-final 1200 (was 600, the end's ~3 min): since 20261010j stage B the
+# save counts right of -eps with the absolute step floor (the 369.87 record: 5434
+# points against 3208 right of -eps/2) and a veto counts up to --veto-counts more
+# designs while the deadline holds one
+time bash bfs/run_bfs.sh "$OUT/run" "$OUT/starts/$NAME.npz" --deadline-final 1200 "${CONT[@]}"
 # the figures are made by the driver itself (--post 1, same job and pool); a
 # second launch only if they are missing, bounded in time (a launch that hangs
 # must not hold the allocation to its limit)

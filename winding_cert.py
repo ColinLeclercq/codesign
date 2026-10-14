@@ -354,7 +354,8 @@ SEG_PER_WORKER = 4      # segments per worker when the pool is up (dynamic load 
 
 def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
                   mc=1.0, p_plant=None, tail=None, hot=None, zeros_hint=None,
-                  hmin_frac=1e-6, maxpts=20000, verbose=False, ctrl_exact=False, gbound=None, real_sym=False):
+                  hmin_frac=1e-6, maxpts=20000, verbose=False, ctrl_exact=False, gbound=None, real_sym=False,
+                  hmin_abs=None):
     """#{closed-loop eigenvalues with Re > line}, by the argument principle.
 
     `hot` is the list of (Im p, dist-to-line) for near-line PLANT poles (from
@@ -499,6 +500,17 @@ def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
     # pushes W_T to ~1e5 and a floor of 0.1 in w cannot resolve the plant's
     # near-line poles (INCONCLUSIVE with the right count, 2026-09-29)
     hmin = hmin_frac * (min(WT, 4000.0) if mimo else WT)
+    if hmin_abs is not None:
+        # an ABSOLUTE floor (20261010j stage B, gate-refusal.md G1): a count right
+        # of -eps at a design pinned 1e-4 from that line needs steps well below
+        # the eigenvalue's distance, whatever W_T is.  The relative floor is
+        # 1e-6 x 4000 = 4e-3 for MIMO and 1e-6 x W_T (3e-2 at the SISO no-strip
+        # record's W_T = 30720) for SISO, and GL's 1e-8 x W_T worked only because
+        # its W_T was ~60 (6e-7; STAGE5 22: 6e-5 was INCONCLUSIVE at 1.2e-4).
+        # A march whose phase scale never fell below the coarse floor takes the
+        # same points; where it did, the march goes on with finer steps instead of
+        # ending INCONCLUSIVE (or proposing the floor itself).
+        hmin = min(hmin, float(hmin_abs))
     import fullpar
     _D = fullpar.CTX.get('D')
     nseg = (min(SEG_PER_WORKER * fullpar.NPROC, max(1, len(knots) // 4))

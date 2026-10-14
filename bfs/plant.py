@@ -464,9 +464,12 @@ class BFSPlant(FECoDesign):
                     np.savez(pp, count=cnt, hot=np.array(hot).reshape(-1, 2))
         return cache[key]
 
-    def winding(self, pa, b, c, arow, nvec, K, line, zeros_hint=None):
+    def winding(self, pa, b, c, arow, nvec, K, line, zeros_hint=None, hmin_abs=None):
         """#{closed-loop eigenvalues with Re > line}, all frequencies
-        (winding_cert.winding_count with the M-free plant data and tail)."""
+        (winding_cert.winding_count with the M-free plant data and tail).
+        hmin_abs: an absolute step floor for the march (the driver's counts right
+        of -eps pass one, 20261010j stage B: the relative floor 1e-6 x min(W_T,
+        4000) is as coarse as the 1e-4 feature a design pinned at the line makes)."""
         import winding_cert as wc
         cnt, hot = self.plant_poles(line)
         if not np.any(nvec) and not np.any(K):
@@ -478,7 +481,8 @@ class BFSPlant(FECoDesign):
             return dict(count=cnt + pc, winding=0, winding_raw=0.0, p_plant=int(cnt), p_ctrl=pc, npts=0,
                         nsolve=0, wtail=0.0, ok=True, open_loop=True)
         return wc.winding_count(self.A, self.M, b, c, arow, nvec, K, line=line, mc=self.mc, p_plant=cnt, hot=hot,
-                                zeros_hint=zeros_hint, ctrl_exact=True, gbound=self.gbound(pa, c, line), real_sym=True)
+                                zeros_hint=zeros_hint, ctrl_exact=True, gbound=self.gbound(pa, c, line), real_sym=True,
+                                hmin_abs=hmin_abs)
 
     def cl(self, b, c):
         if np.ndim(b) == 2 or np.ndim(c) == 2:

@@ -965,7 +965,7 @@ def _track_worker(t):
 
 
 def continuation_step(A, M, b, c, Ac, Bc, nvec, Kfb, watch, eps=1e-3,
-                      motion_frac=0.5, motion_floor=0.05, k=1, pool=None):
+                      motion_frac=0.5, motion_floor=0.05, k=1, pool=None, info=None):
     """Track a WATCH LIST of eigenvalues onto a new design.  Matrix-free.
 
     Why this exists.  The line sweep proves "nothing ON Re = -eps"; stability
@@ -1002,6 +1002,9 @@ def continuation_step(A, M, b, c, Ac, Bc, nvec, Kfb, watch, eps=1e-3,
                   targeted query failed to converge -- which also forces
                   need_split, since an unconverged track proves nothing);
       worst       the rightmost tracked eigenvalue, for logging.
+    info (a dict, optional; 20261010j stage B, gate-refusal.md G2): filled with
+    each track -- lam0 (the deduplicated watch list), lam1 (where it went, None
+    unconverged) and the motion allowance -- for the gate's refusal report.
     """
     cl, arow = _cl_arow(M, A, b, c, Ac, Bc)
     ok, need_split = True, False
@@ -1042,6 +1045,9 @@ def continuation_step(A, M, b, c, Ac, Bc, nvec, Kfb, watch, eps=1e-3,
         allow = max(motion_frac * max(gap, 0.0), motion_floor)
         if abs(lam1 - lam0) > allow:
             need_split = True
+    if info is not None:
+        info.update(lam0=list(dedup), lam1=[None if l_ is None else complex(l_) for l_ in tracked],
+                    allow=[max(motion_frac * max(-eps - l_.real, 0.0), motion_floor) for l_ in dedup])
     return ok, need_split, new_watch, worst
 
 

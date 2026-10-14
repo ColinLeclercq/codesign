@@ -41,6 +41,15 @@ import controller as ctl
 import certify_sparse as csp
 from packer import Packer, EPS_STAB_DEFAULT
 
+# The backward-facing step's winding counts right of Re = -eps (the feasible
+# start, a refused continuation, a resumed anchor, the save-time veto): an
+# ABSOLUTE step floor for the march (20261010j stage B, gate-refusal.md G1 with
+# its verifier's correction).  The records sit on the rows' target, ~1e-4 left
+# of the line (alpha -0.0501042 / -0.0501307); the relative floor 1e-6 x
+# min(W_T, 4000) is 4e-3 for MIMO, and GL's 1e-8 x W_T would be 4e-5 here, about
+# the 6e-5 that failed in STAGE5 22.
+WIND_HMIN_ABS = 1e-6
+
 
 # --------------------------------------------------------------------------
 # CONTINUATION GATE (matrix-free).
@@ -102,9 +111,129 @@ def _topk_watch(eigs, k, eps, reach=3.0):
     return out
 
 
+def _track_report(tr, eps, worst_only=True):
+    """The offending tracks of one continuation_step (20261010j stage B,
+    gate-refusal.md G2): lam0 -> lam1, the motion and its allowance -- crossed
+    (Re > -eps), moved beyond the allowance, or not converged."""
+    out = []
+    for l0, l1, al_ in zip(tr.get('lam0', []), tr.get('lam1', []), tr.get('allow', [])):
+        if l1 is None:
+            out.append(f"{l0:.6g} -> not converged")
+        elif l1.real > -eps or abs(l1 - l0) > al_ or not worst_only:
+            out.append(f"{l0:.6g} -> {l1:.6g} (moved {abs(l1 - l0):.3g}, allowance {al_:.3g}"
+                       + (", CROSSED" if l1.real > -eps else '') + ")")
+    return out
+
+
+def gate_refusal_report(pts, pinf, glogs, iseg, eps, log=print):
+    """A refusal along the SQP's path, readable (20261010j stage B,
+    gate-refusal.md G2): the failing segment's ends -- the iteration that
+    reached each, its step alpha, whether the step left an admissible iterate
+    (False: the segment closes a merit excursion), returns to the last
+    admissible iterate in between, each end's own line (alpha, rightmost seen,
+    rows) -- and every sub-segment that did not pass, with its tracks lam0 ->
+    lam1.  770633 round 1 printed one line, 'crossed to -0.0498897', which could
+    not tell a hidden eigenvalue from a disagreement of two computations.
+    pts: the gate's points (the last accepted design first), pinf: the SQP's
+    path_info for each (None for the first), glogs: _gate_along's per-segment
+    logs, iseg: the failing segment."""
+    def _end(j):
+        p = pinf[j] if j < len(pinf) else None
+        if p is None:
+            return "the last accepted design"
+        rs = sorted(p.get('seen') or [], key=lambda q: -q.real)[:3]
+        al_s = p.get('alpha')
+        return (f"SQP it {p.get('it')} (step alpha {('%.4g' % al_s) if al_s is not None else '-'}"
+                + ('' if p.get('prev_adm') is None else
+                   (', from an admissible iterate' if p['prev_adm'] else ', from an INADMISSIBLE iterate (merit excursion)'))
+                + (f", {p['backs']} return(s) to the last admissible iterate before" if p.get('backs') else '')
+                + (f", {p['how']}" if p.get('how') else '')
+                + f"; line alpha {p.get('al', np.nan):+.7f}, rightmost seen {[f'{q:.6g}' for q in rs]}, "
+                  f"{len(p.get('rows') or [])} row(s))")
+    log(f"    gate refusal: path segment {iseg + 1} of {len(pts) - 1}, |dz| "
+        f"{float(np.linalg.norm(np.asarray(pts[iseg + 1]) - np.asarray(pts[iseg]))):.4g}: from {_end(iseg)} to "
+        f"{_end(iseg + 1)}", flush=True)
+    seg = glogs[iseg] if iseg < len(glogs) else None
+    for ent in (seg['log'] if seg else []):
+        if ent.get('verdict') in ('certified', 'split'):
+            continue
+        log(f"      [{ent['ta']:.4g}, {ent['tb']:.4g}] (depth left {ent['depth']}): {ent.get('verdict')}"
+            + (f", midpoint alpha {ent['alpha_mid']:+.5f}" if 'alpha_mid' in ent else '') + ": "
+            + "; ".join(_track_report(ent, eps, worst_only=False)), flush=True)
+
+
+def _js(o):
+    """JSON-safe (complex as [re, im]): gate_fail_k.npz's 'info', the veto's record."""
+    if isinstance(o, dict):
+        return {str(k): _js(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_js(v) for v in o]
+    if isinstance(o, np.ndarray):
+        return _js(o.tolist())
+    if isinstance(o, (complex, np.complexfloating)):
+        return [float(np.real(o)), float(np.imag(o))]
+    if isinstance(o, (np.floating, float)):
+        return float(o)
+    if isinstance(o, (np.integer, np.bool_)):
+        return o.item()
+    return o
+
+
+def save_gate_fail(outdir, rec, pk, flags, mimo, eps, gamma_best, cont, log=print):
+    """A gate refusal as gate_fail_k.npz in outdir, k the next free index (a
+    resumed job keeps the earlier jobs' files) -- 20261010j stage B,
+    gate-refusal.md G2, as qp_fail_k.npz (20261010f).  rec: the round, the
+    anchor and candidate designs (z0, z1) and the candidate's gamma, alpha and
+    seen list, the anchor's watch list, the path (pts), its SQP info (pinf) and
+    segment logs (glogs), the failing segment (iseg; None: the path was not
+    gated or passed), the straight chord's log and verdict (clog, chord_ok: a
+    path refusal the chord then certified is saved too), and the fallbacks'
+    outcome (accepted, count, prefix_accepted).
+    Saved: the designs in record form (anchor_*, cand_*, and the failing path
+    segment's ends seg0_*, seg1_*: d, e, f, Bc, nvec, K, xa, xs, va, vs and z),
+    the path, and 'info' (JSON) -- enough to replay the refusal offline (a count
+    right of -eps, a LATTICE_K=2 line at the failing end).  Never fatal.
+    Returns the file name, or None."""
+    try:
+        k = 1
+        while os.path.exists(os.path.join(outdir, f"gate_fail_{k}.npz")):
+            k += 1
+        fn = os.path.join(outdir, f"gate_fail_{k}.npz")
+        arr = {}
+
+        def _des(pre, z_):
+            ar, nv, K, xa, xs, va, vs = pk.unpack(z_)
+            arr.update({pre + 'z': np.asarray(z_, float), pre + 'd': ar[0], pre + 'e': ar[1], pre + 'f': ar[2],
+                        pre + 'nvec': nv, pre + 'K': K, pre + 'xa': xa, pre + 'xs': xs})
+            if mimo:
+                arr[pre + 'Bc'] = np.asarray(ar[3])
+            for key, v in (('va', va), ('vs', vs)):     # the free fields (FB / FC), when the case has them
+                if v is not None:
+                    arr[pre + key] = np.asarray(v)
+        _des('anchor_', rec['z0']); _des('cand_', rec['z1'])
+        if rec.get('pts') is not None and rec.get('iseg') is not None:
+            _des('seg0_', rec['pts'][rec['iseg']]); _des('seg1_', rec['pts'][rec['iseg'] + 1])
+            arr['path'] = np.array([np.asarray(p, float) for p in rec['pts']])
+        if mimo:
+            arr.update(loop_orders=np.array(flags['loop_orders']), m=int(flags['m']), p=int(flags['p']),
+                       struct=str(flags['struct']))
+        info = dict(round=rec['round'], eps=float(eps), gamma_best=float(gamma_best), gamma_cand=float(rec['g']),
+                    alpha_cand=float(rec['al']), seen_cand=list(rec.get('seen') or []), watch_anchor=rec['watch'],
+                    path_info=rec.get('pinf'), path_logs=rec.get('glogs'), path_failed_segment=rec.get('iseg'),
+                    chord_log=rec.get('clog'), chord_ok=rec.get('chord_ok'), accepted=rec.get('accepted'), count=rec.get('count'),
+                    prefix_accepted=rec.get('prefix_accepted'), cont=dict(cont), code_version=_code_version())
+        np.savez(fn, info=json.dumps(_js(info)), **arr)
+        log(f"    gate refusal saved -> {fn} (replay: the designs anchor_*, cand_*, seg0_*/seg1_*; "
+            f"np.load(...)['info'] is JSON)", flush=True)
+        return fn
+    except Exception as e:
+        log(f"    gate refusal: save failed ({type(e).__name__}: {e})", flush=True)
+        return None
+
+
 def continuation_gate(D, pk, z0, z1, watch0, eps, depth=4,
                       motion_frac=0.5, motion_floor=0.05, kwatch=8,
-                      verbose=True, pool=None, reach=None):
+                      verbose=True, pool=None, reach=None, log=None):
     """Certify the design segment [z0, z1] free of stability-line crossings.
 
     Returns (ok, watch1, nquery, nsplit).  `watch1` is the watch list at z1
@@ -118,6 +247,12 @@ def continuation_gate(D, pk, z0, z1, watch0, eps, depth=4,
     the segment -- the subsegments are certified left to right, so the last
     one passed ends at the furthest point reached from z0 without a crossing:
     reach['z'], its watch list reach['watch'] (BFS.md 5, --gate-prefix).
+
+    log (a list, optional; 20261010j stage B, gate-refusal.md G2): one entry per
+    sub-segment checked -- its place [ta, tb] on [z0, z1], the split depth left,
+    every track (lam0 -> lam1, allowance), the verdict, and a midpoint's alpha
+    and seen list -- for the refusal report and gate_fail_k.npz.  Decisions
+    are unchanged.
     """
     z0 = np.asarray(z0, float)
     z1 = np.asarray(z1, float)
@@ -128,33 +263,43 @@ def continuation_gate(D, pk, z0, z1, watch0, eps, depth=4,
         b, c, *_ = D.bc(xa, xs, va, vs)
         return arow, nvec, K, b, c, ctl.A_of(*arow)
 
-    def _seg(za, zb, wa, d):
+    def _seg(za, zb, wa, d, ta=0.0, tb=1.0):
         wa_use = [w for w in wa if w is not None]
+        ent = dict(ta=float(ta), tb=float(tb), depth=int(d))
+        if log is not None:
+            log.append(ent)
         if not wa_use:
             if verbose:
                 print("    continuation: empty watch list -> cannot prove; "
                       "reject", flush=True)
+            ent.update(verdict='empty watch list')
             return False, wa
         arow_b, nvec_b, K_b, b_b, c_b, Ac_b = _design(zb)
         Bc = ctl.Bc_of(arow_b, D.r, D.mc)
+        tr = {}
         ok, split, wb, worst = csp.continuation_step(
             D.A, D.M, b_b, c_b, Ac_b, Bc, nvec_b, K_b, wa_use, eps=eps,
-            motion_frac=motion_frac, motion_floor=motion_floor, pool=pool)
+            motion_frac=motion_frac, motion_floor=motion_floor, pool=pool, info=tr)
+        ent.update(tr, ok=bool(ok), split=bool(split), worst=worst)
         stats['nq'] += len(wa_use)
         if not ok:
             if verbose:
                 print(f"    continuation REJECTS: tracked eigenvalue crossed "
-                      f"to {worst:.6g}", flush=True)
+                      f"to {worst:.6g} on [{ta:.4g}, {tb:.4g}] of the segment: "
+                      + "; ".join(_track_report(tr, eps)), flush=True)
+            ent.update(verdict='crossed')
             return False, wb
         if not split:
             if reach is not None:
                 reach.update(z=np.array(zb, float), watch=list(wb))
+            ent.update(verdict='certified')
             return True, wb
         if d <= 0:
             if verbose:
                 print("    continuation REJECTS: split depth exhausted with "
                       "motion still above the allowance (step too large to "
-                      "certify)", flush=True)
+                      f"certify) on [{ta:.4g}, {tb:.4g}]: " + "; ".join(_track_report(tr, eps)), flush=True)
+            ent.update(verdict='depth exhausted')
             return False, wb
         stats['nsplit'] += 1
         zm = 0.5 * (za + zb)
@@ -165,16 +310,21 @@ def continuation_gate(D, pk, z0, z1, watch0, eps, depth=4,
         arow_m, nvec_m, K_m, b_m, c_m, _ = _design(zm)
         al_m = D.alpha_certified(arow_m, nvec_m, K_m, b_m, c_m, eps=eps,
                                  eigs_seen=seen_m)[0]
+        ent.update(alpha_mid=float(al_m), seen_mid=list(seen_m))
         if al_m + eps > 0.0:
             if verbose:
                 print(f"    continuation REJECTS: homotopy midpoint is "
-                      f"infeasible (alpha={al_m:+.4f})", flush=True)
+                      f"infeasible (alpha={al_m:+.4f}) at {0.5 * (ta + tb):.4g} of the segment; "
+                      f"its rightmost seen {[f'{q:.5g}' for q in sorted(seen_m, key=lambda q: -q.real)[:3]]}", flush=True)
+            ent.update(verdict='midpoint infeasible')
             return False, wb
-        ok1, wm = _seg(za, zm, wa, d - 1)
+        ent.update(verdict='split')
+        tm = 0.5 * (ta + tb)
+        ok1, wm = _seg(za, zm, wa, d - 1, ta, tm)
         if not ok1:
             return False, wm
         wm2 = _topk_watch(list(wm) + seen_m, kwatch, eps)
-        return _seg(zm, zb, wm2, d - 1)
+        return _seg(zm, zb, wm2, d - 1, tm, tb)
 
     ok, w1 = _seg(z0, z1, list(watch0), depth)
     return ok, w1, stats['nq'], stats['nsplit']
@@ -1035,6 +1185,46 @@ def _input_fingerprint(ne: int, init_path: str | None) -> dict:
     return out
 
 
+_CODE_VERSION = []
+
+
+def _code_version() -> str:
+    """'<MANIFEST label> <git commit>[+modified]' of the code running (20261010j
+    stage B): written into the record, the checkpoint and the _partN.json, and
+    printed on a resume ('checkpoint written by X, continued by Y').  The run
+    directories are shared by every code version (bfs/home.sh), and a record
+    or checkpoint carried no trace of the code that wrote it -- only the slurm
+    scripts' code_versions.txt beside it, one line per job, not per file.
+    '+modified': tracked files differ from the commit (a sandbox edit; on the
+    cluster bfs/version_check.py refuses a checkout whose files differ from its
+    MANIFEST).  Once per process."""
+    if _CODE_VERSION:
+        return _CODE_VERSION[0]
+    import subprocess
+    here = os.path.dirname(os.path.abspath(__file__))
+    label = '?'
+    try:
+        with open(os.path.join(here, 'bfs', 'MANIFEST')) as fh:
+            for line in fh:
+                if line.startswith('# version'):
+                    label = line.split(None, 2)[2].strip()
+                    break
+    except (OSError, IndexError):
+        pass
+
+    def _git(*args):
+        try:
+            r = subprocess.run(['git', '--no-optional-locks', *args], cwd=here, stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, universal_newlines=True, timeout=20)
+            return r.stdout.strip() if r.returncode == 0 else None
+        except Exception:
+            return None
+    head = _git('rev-parse', '--short', 'HEAD')
+    st = _git('status', '--porcelain', '--untracked-files=no') if head else None
+    _CODE_VERSION.append(f"{label} {head or 'no-git'}" + ('+modified' if st else ''))
+    return _CODE_VERSION[0]
+
+
 def dump_outer(path, it, D, pk, flags, z, Omega, t, gamma_cert, gamma_best,
                eps, par=None, inner_stats=None, lu=None, gate=None,
                extra=None):
@@ -1562,6 +1752,86 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
     return float(g), float(w), bool(ok), peaks
 
 
+def winding_veto(final, earlier, count_fn, line, cap=3, time_ok=None, log=print):
+    """THE SAVE-TIME WINDING VETO's choice (20261010j stage B; the user's decision
+    of 2026-10-14: the save-time count vetoes, never an unstable design as the
+    record).  final: the ledger entry of the design about to be saved; earlier:
+    this job's other accepted designs, oldest first, the anchor (its start) first
+    of all; an entry is dict(round (-1: the anchor), z, g, watch, count) with
+    count a dict(count, ok, ..., how) when a count right of `line` is known for
+    it (the feasible start's, the anchor's at the start, one at acceptance),
+    else None.  count_fn(entry) counts one (a dict with count, ok, npts, ...).
+
+    The final design stands when its count is a conclusive 0 (known, or counted
+    here).  Otherwise the record falls back to the LATEST earlier design whose
+    count is a conclusive 0: free where known, else counted -- at most `cap`
+    counts, none once time_ok() says the deadline cannot hold one; the designs
+    passed over are listed.  Returns (chosen entry or None, its count dict with
+    'source', the veto dict or None when the final design passed); prints the
+    '*** WINDING VETO' lines."""
+    def _known0(e_):
+        c_ = e_.get('count')
+        return bool(c_) and bool(c_.get('ok')) and c_.get('count') == 0
+
+    def _count(e_):
+        try:
+            o_ = count_fn(e_)
+            return dict(count=(None if o_.get('count') is None else int(o_['count'])), ok=bool(o_.get('ok')),
+                        npts=int(o_.get('npts', 0) or 0), seconds=o_.get('seconds'),
+                        wtail=float(o_.get('wtail', np.nan)), p_plant=int(o_.get('p_plant', -1)))
+        except Exception as _e:
+            return dict(count=None, ok=False, error=f"{type(_e).__name__}: {str(_e)[:80]}")
+
+    def _desc(e_):
+        return ("the anchor (this job's start)" if e_.get('round') == -1 else
+                (f"round {e_['round']}'s design" if e_.get('round') is not None else "the final design")) + \
+            f" (gamma {e_['g']:.6f})"
+    counted = []
+    if _known0(final):
+        return final, dict(final['count'], source=f"known: {final['count'].get('how')}"), None
+    cf = _count(final)
+    counted.append(dict(cf, round=final.get('round'), gamma=float(final['g'])))
+    if cf['ok'] and cf['count'] == 0:
+        final['count'] = dict(cf, how='counted at the save')
+        return final, dict(cf, source='counted at the save'), None
+    log(f"*** WINDING VETO: {_desc(final)} has "
+        + (f"{cf.get('count')} closed-loop eigenvalue(s)" if cf.get('ok') else
+           f"an INCONCLUSIVE count{(' (' + cf['error'] + ')') if cf.get('error') else ''}")
+        + f" right of Re={line:g} over all frequencies ({cf.get('npts', 0)} pts): it is not the record; "
+        f"falling back to the last accepted design with a conclusive 0", flush=True)
+    chosen, nc, skipped = None, 0, []
+    for e_ in reversed(list(earlier)):
+        if _known0(e_):
+            chosen = e_
+            break
+        if nc >= int(cap):
+            skipped.append(dict(round=e_.get('round'), why=f'cap of {cap} counts'))
+            continue
+        if time_ok is not None and not time_ok():
+            skipped.append(dict(round=e_.get('round'), why='the deadline'))
+            continue
+        ce = _count(e_); nc += 1
+        counted.append(dict(ce, round=e_.get('round'), gamma=float(e_['g'])))
+        log(f"    veto: {_desc(e_)}: " + (f"{ce['count']} right of Re={line:g}" if ce['ok'] else 'INCONCLUSIVE')
+            + f" ({ce.get('npts', 0)} pts, {ce.get('seconds')} s)", flush=True)
+        if ce['ok'] and ce['count'] == 0:
+            e_['count'] = dict(ce, how='counted at the save (veto)')
+            chosen = e_
+            break
+    if skipped:
+        log(f"    veto: {len(skipped)} earlier design(s) not counted (at most {cap} counts, or the deadline): "
+            f"rounds {[s_['round'] for s_ in skipped]}", flush=True)
+    veto = dict(line=float(line), final=dict(round=final.get('round'), gamma=float(final['g'])),
+                counted=counted, skipped=skipped, cap=int(cap),
+                fallback=(None if chosen is None else
+                          dict(round=chosen.get('round'), gamma=float(chosen['g']), count_source=chosen['count'].get('how'))))
+    if chosen is None:
+        return None, None, veto
+    log(f"*** WINDING VETO: the record is {_desc(chosen)}, not the final design (gamma {final['g']:.6f}); "
+        f"its count right of Re={line:g}: 0 ({chosen['count'].get('how')})", flush=True)
+    return chosen, dict(chosen['count'], source=f"veto fallback: {chosen['count'].get('how')}"), veto
+
+
 def _atoms_record_keys(D, apa, aps):
     """The atoms in natural form (Re a, Im a, c, width, wavenumber) and the
     bounds they were made with, for a record (STAGE6 6.35): its (rho, tau)
@@ -1605,6 +1875,7 @@ def _mimo_setup(a, D, flags, tag):
             if g0 is None or not np.isfinite(g0) or gck < g0:
                 print(f"CHECKPOINT found (gamma={gck:.6f}) -- resuming from {ck}", flush=True)
                 src, g0 = ck, gck
+                a.start_from_ckpt = True          # the anchor is inherited: counted at the start (G4, 20261010j)
         except Exception:
             pass
     z = np.load(src, allow_pickle=True)
@@ -1653,10 +1924,25 @@ def main():
     ap.add_argument('--ne', type=int, default=200)
     ap.add_argument('--wall', type=float, default=1500.)
     ap.add_argument('--deadline', type=float, default=0.0,
-                    help='seconds: no new round once elapsed + 1.25 x the longest round + --deadline-final would pass '
-                         'it (the job time limit; 0 = off). A resume restarts the clock.')
+                    help='seconds: the job time limit (0 = off; a resume restarts the clock).  --inner sqp: the SQP '
+                         'stops (code 4) when another iteration would leave less than the round reserve '
+                         '(--deadline-reserve) + --deadline-final, and that round ends the job as a deadline stop; no '
+                         'new round once elapsed + its setup + that reserve + a minimum inner budget '
+                         '(--deadline-min-inner) + --deadline-final would pass it (20261010j stage B; was, and still is '
+                         'for pyGRANSO: 1.25 x the longest round, which ended the four MIMO jobs of 20261010g 1.2-2.3 h '
+                         'early)')
     ap.add_argument('--deadline-final', dest='deadline_final', type=float, default=1800.0,
-                    help='seconds reserved after the last round for the final certificate and save (--deadline)')
+                    help='seconds reserved after the last round for the final certificate, the save-time winding count '
+                         '(and its veto\'s counts, BFS) and the save (--deadline)')
+    ap.add_argument('--deadline-reserve', dest='deadline_reserve', type=float, default=900.0,
+                    help='--deadline: seconds kept after a time-truncated inner solve for its own tail and the '
+                         'round\'s certificate, gate and checkpoint (at least; 1.25 x the longest such phase seen, plus '
+                         'the longest winding count with --cont-accept-winding, when that is more)')
+    ap.add_argument('--deadline-min-inner', dest='deadline_min_inner', type=float, default=600.0,
+                    help='--deadline: no round starts with less inner-solve time than this (at least 3 SQP iterations)')
+    ap.add_argument('--veto-counts', dest='veto_counts', type=int, default=3,
+                    help='--plant bfs: the save-time winding veto counts at most this many earlier accepted designs '
+                         'when the final one is not a conclusive 0 right of -eps (designs with a known count are free)')
     ap.add_argument('--r', type=int, default=7)
     ap.add_argument('--alpha_warm', type=int, default=0,
                     help='warm-started single alpha shift; 0 = OFF (default). '
@@ -2360,6 +2646,7 @@ def main():
     _wind_accept = (a.wind_accept == 'on') or (a.wind_accept == 'auto' and
                                                 (MIMO or 'FB' in a.case.split('+') or 'FC' in a.case.split('+')))
     n_wind_accept, n_wind_refused, n_gate_wind = [0], [0], [0]
+    _wind_sec = [0.0]                   # the longest BFS count of this job (s): the deadline's round reserve, the veto's guard
 
     def _wind_right_of_margin(bb_, cc_, aa_, nn_, KK_, seen_, pa_=None):
         """Exact count of closed-loop eigenvalues right of Re = -eps (argument
@@ -2370,9 +2657,19 @@ def main():
         import winding_cert as _wc
         _line = -a.eps
         if BFS:
-            # the M-free count (BFSPlant.winding: certified plant data, H^1 tail)
-            _zh = [complex(x) for x in (seen_ or []) if abs(complex(x).real - _line) < 0.3]
-            return D.winding(pa_, bb_, cc_, aa_, nn_, KK_, _line, zeros_hint=_zh)
+            # the M-free count (BFSPlant.winding: certified plant data, H^1 tail),
+            # with the ABSOLUTE step floor (20261010j stage B, gate-refusal.md G1):
+            # the designs sit on the rows' target, ~1e-4 left of this line
+            _zh = []
+            for x in (seen_ or []):
+                x = complex(x)
+                if abs(x.real - _line) < 0.3 and all(abs(x - q) > 1e-10 for q in _zh):
+                    _zh.append(x)
+            _t0w = time.time()
+            _o = D.winding(pa_, bb_, cc_, aa_, nn_, KK_, _line, zeros_hint=_zh, hmin_abs=WIND_HMIN_ABS)
+            _o['seconds'] = round(time.time() - _t0w, 1); _o['line'] = float(_line)
+            _wind_sec[0] = max(_wind_sec[0], _o['seconds'])
+            return _o
         if getattr(D, '_wind_plant_eps', None) is None:
             D._wind_plant_eps = _wc.plant_pole_data(D.A, D.M, _line)      # sparse enclosure (STAGE6 6.13)
         _pp, _hot = (D._wind_plant_eps if getattr(D, '_wind_plant_eps', None) else (None, None))
@@ -2389,24 +2686,70 @@ def main():
                        + ('_bfs' if a.plant == 'bfs' else f"_ne{a.ne}")
                        + (f"_mimo{a.n_act}x{a.n_sens}_{a.ctrl_struct}" if MIMO else ''))
     t_start = time.time()
-    if a.continue_record and not os.path.exists(tag + '_ckpt.npz') and os.path.exists(tag + '.npz'):
-        # CONTINUE A FINISHED RUN (--continue-record; BFS.md 7, 2026-10-02): its
-        # record becomes the checkpoint, so the run resumes from the saved design
-        # with its working set (the record's active frequencies), through the same
-        # anchor verification as any resume.  The finished run's summary is kept
-        # as tag_partN.json (its round history would otherwise be overwritten).
-        import shutil
+    a.start_from_ckpt = False                     # set where the start design is this run's checkpoint (G4 below)
+
+    def _keep_part(why):
+        """tag.json -> the next free tag_partN.json (its round history would
+        otherwise be overwritten at this run's end), with a 'part' block: why,
+        the code that wrote it and the code continuing it (20261010j stage B).
+        Not again when the newest part already holds that summary (a
+        resubmission after a job that saved nothing: strip-ab.md AB2, the
+        cancelled restarts 770564-770623).  Returns N, or None (no summary)."""
+        if not os.path.exists(tag + '.json'):
+            return None
         _k = 1
         while os.path.exists(f"{tag}_part{_k}.json"):
             _k += 1
-        if os.path.exists(tag + '.json'):
+        try:
+            _cur = json.load(open(tag + '.json'))
+        except Exception:
+            _cur = None
+        if _k > 1 and _cur is not None:
+            try:
+                _last = json.load(open(f"{tag}_part{_k - 1}.json")); _last.pop('part', None)
+                if json.dumps(_last, sort_keys=True) == json.dumps(_cur, sort_keys=True):
+                    print(f"  (the summary is already kept as {os.path.basename(tag)}_part{_k - 1}.json)", flush=True)
+                    return _k - 1
+            except Exception:
+                pass
+        if _cur is None:
+            import shutil                             # unreadable as JSON: kept byte for byte
             shutil.copyfile(tag + '.json', f"{tag}_part{_k}.json")
+        else:
+            _cur['part'] = dict(n=_k, why=why, written_by=_cur.get('code_version') or 'a version that did not record it (before 20261010j)',
+                                continued_by=_code_version(), kept=time.strftime('%Y-%m-%dT%H:%M:%S'))
+            json.dump(_cur, open(f"{tag}_part{_k}.json", 'w'), indent=1)
+        return _k
+    if a.continue_record and not os.path.exists(tag + '_ckpt.npz') and os.path.exists(tag + '.npz'):
+        # CONTINUE A FINISHED RUN (--continue-record; BFS.md 7, 2026-10-02): its
+        # record becomes the checkpoint, so the run resumes from the saved design
+        # with its working set (the record's active frequencies) and, since
+        # 20261010j stage B, its loop state (inner budget, SQP trust radius, peak
+        # members, tau cap: the record now carries them, omega-growth.md P6),
+        # through the same anchor verification as any resume.  The finished run's
+        # summary is kept as tag_partN.json.
+        import shutil
+        _k = _keep_part('continued from the finished record')
         shutil.copyfile(tag + '.npz', tag + '_ckpt.npz')
         _gr = float(np.load(tag + '.npz', allow_pickle=True)['gamma'])
-        json.dump(dict(case=a.case, gamma=_gr, note=f'continued from the finished record (part {_k})'),
+        try:
+            _wb = json.load(open(tag + '.json')).get('code_version')
+        except Exception:
+            _wb = None
+        json.dump(dict(case=a.case, gamma=_gr, note=f'continued from the finished record (part {_k})',
+                       code_version=_wb),                # None: the record predates the field
                   open(tag + '_ckpt.json', 'w'))
-        print(f"CONTINUE: the finished record (gamma={_gr:.6f}) is the checkpoint; its summary kept as "
-              f"{os.path.basename(tag)}_part{_k}.json", flush=True)
+        print(f"CONTINUE: the finished record (gamma={_gr:.6f}) is the checkpoint; "
+              + (f"its summary kept as {os.path.basename(tag)}_part{_k}.json" if _k else "it has no summary to keep"),
+              flush=True)
+    elif os.path.exists(tag + '_ckpt.npz') and os.path.exists(tag + '.json'):
+        # A DEADLINE-STOPPED RUN resumed (its checkpoint kept, its summary written;
+        # strip-ab.md AB2): the summary of the job that stopped is kept as well --
+        # only the finished-record branch above kept it, and the next job's end
+        # overwrote it (the 20261010e central strip summary was lost that way)
+        _k = _keep_part('a deadline-stopped run resumed from its checkpoint')
+        if _k is not None:
+            print(f"RESUME: the stopped job's summary is {os.path.basename(tag)}_part{_k}.json", flush=True)
 
     # The controller order is set by the SEED CATALOGUE (the common order from
     # the Hankel shoulder), not by --r.  Enlarging the catalogue moved it from
@@ -2513,9 +2856,12 @@ def main():
             return False, f"eigenvalue at {lam_:.6g} on Re=-{eps_:g}", 0
         return False, f"INCONCLUSIVE: could not prove the line Re=-{eps_:g} clear (lattice)", 0
 
-    def _path_to(path_, z0_, z1_):
+    def _path_to(path_, z0_, z1_, info_=None, info_out=None):
         """The SQP's accepted iterates from z0_ (the last accepted design) to the
-        candidate z1_, consecutive duplicates removed; None if z1_ is not on it."""
+        candidate z1_, consecutive duplicates removed; None if z1_ is not on it.
+        info_ (the SQP's path_info, parallel to path_) and info_out (a list):
+        info_out gets the entries of the points kept, None for z0_ (20261010j
+        stage B, G2)."""
         if not path_:
             return None
         P_ = [np.asarray(p_, float) for p_ in path_]
@@ -2523,20 +2869,28 @@ def main():
         if j_ is None:
             return None
         pts_ = [np.asarray(z0_, float)]
-        for p_ in P_[:j_ + 1]:
+        inf_ = [None]
+        for k_, p_ in enumerate(P_[:j_ + 1]):
             if not np.array_equal(p_, pts_[-1]):
                 pts_.append(p_)
+                inf_.append(info_[k_] if (info_ is not None and k_ < len(info_)) else None)
+        if info_out is not None:
+            info_out[:] = inf_
         return pts_
 
-    def _gate_along(pts_, watch_):
+    def _gate_along(pts_, watch_, logs_=None):
         """continuation_gate on each segment of pts_ in turn.  Returns (ok, watch
-        at the end, queries, splits, certified prefix {z, watch}, failing segment)."""
+        at the end, queries, splits, certified prefix {z, watch}, failing segment).
+        logs_ (a list): one continuation_gate log per segment (G2)."""
         nq_ = ns_ = 0; w_ = list(watch_)
         for i_ in range(len(pts_) - 1):
             r_ = {}
+            lg_ = [] if logs_ is not None else None
+            if logs_ is not None:
+                logs_.append(dict(seg=i_, watch=list(w_), log=lg_))
             ok_, w2_, q_, sp_ = continuation_gate(D, pk, pts_[i_], pts_[i_ + 1], w_, a.eps, depth=a.cont_depth,
                                                   motion_frac=a.cont_motion, motion_floor=a.cont_floor,
-                                                  kwatch=a.cont_k, pool=fullpar.POOL, reach=r_)
+                                                  kwatch=a.cont_k, pool=fullpar.POOL, reach=r_, log=lg_)
             nq_ += q_; ns_ += sp_
             if not ok_:
                 if r_.get('z') is not None:
@@ -2548,6 +2902,17 @@ def main():
                 return False, w2_, nq_, ns_, pre_, i_
             w_ = list(w2_)
         return True, w_, nq_, ns_, {}, len(pts_) - 1
+
+    _n_gate_fail = [0]
+
+    def _save_gate_fail(rec_):
+        """The first three gate refusals of the job as gate_fail_k.npz in the run's
+        directory (save_gate_fail; lattice runs only, where QP_DUMP is set too)."""
+        if _lat is None or _n_gate_fail[0] >= 3:
+            return
+        _n_gate_fail[0] += 1
+        save_gate_fail(a.outdir, rec_, pk, flags, MIMO, a.eps, gbest,
+                       dict(k=a.cont_k, depth=a.cont_depth, motion=a.cont_motion, floor=a.cont_floor))
     _ctrl_borrowed, _ctrl_default = False, None
     _resume_gamma = None
     if BFS:
@@ -2623,6 +2988,7 @@ def main():
                   + f") -- resuming from {_ck}", flush=True)
             src = _ck
             a.resume = _ck
+            a.start_from_ckpt = True              # the anchor is inherited: counted at the start (G4, 20261010j)
     # When --resume is given explicitly the file need NOT be this case's own
     # previous result -- it is routinely a PARENT's.  Assuming otherwise made
     # pf['K'] true for KG+FBR+FCR resuming from FBR+FCR, so the controller was
@@ -2865,7 +3231,8 @@ def main():
                 # the all-frequency count right of -eps (BFS.md 4)
                 _bb_, _cc_, _pa_, *_ = D.bc(xa0, xs0)
                 _t0 = time.time()
-                _wo = D.winding(_pa_, _bb_, _cc_, arow0, nvec0, K0, -a.eps)
+                _wo = D.winding(_pa_, _bb_, _cc_, arow0, nvec0, K0, -a.eps, hmin_abs=WIND_HMIN_ABS)
+                _wind_sec[0] = max(_wind_sec[0], time.time() - _t0)
                 _stab_rec['count_right_of_eps'] = int(_wo['count']) if _wo['ok'] else None
                 print(f"  feasible start: {_stab_rec['count_right_of_eps']} closed-loop eigenvalue(s) right of "
                       f"Re = {-a.eps:g} over all frequencies (winding count, {_wo['npts']} pts, "
@@ -3221,6 +3588,23 @@ def main():
                 _resume_state = dict(maxit_cur=int(_srcw['maxit_cur']),
                                      sqp_trust=float(_srcw['sqp_trust']),
                                      peakset=[float(x) for x in np.asarray(_srcw['peakset']).ravel()])
+                # the tau cap and its clean-acceptance streak (20261010j stage B): a
+                # cap set by the gate's evidence (770633 round 1: 3.5) held across a
+                # job boundary, as it would within one job; nan = off (older files: off)
+                if 'tau_rho' in _srcw.files and np.isfinite(float(_srcw['tau_rho'])):
+                    _resume_state.update(tau_rho=float(_srcw['tau_rho']),
+                                         tau_streak=int(_srcw['tau_streak']) if 'tau_streak' in _srcw.files else 0)
+            # PROVENANCE (20261010j stage B): which code wrote the file this run resumes
+            if getattr(a, 'start_from_ckpt', False):
+                _wb = None
+                try:
+                    _wb = json.load(open(tag + '_ckpt.json')).get('code_version')
+                except Exception:
+                    pass
+                if not _wb and 'code_version' in _srcw.files:
+                    _wb = str(_srcw['code_version'])
+                print(f"resume: checkpoint written by {_wb or 'a version that did not record it (before 20261010j)'}, "
+                      f"continued by {_code_version()}", flush=True)
             if 'whi' in _srcw.files and float(_srcw['whi']) > a.whi:
                 a.wlo, a.whi = float(_srcw['wlo']), float(_srcw['whi'])   # the band the run had reached
             if 'active_freqs' in _srcw.files and len(_srcw['active_freqs']):
@@ -3323,10 +3707,17 @@ def main():
     _peakset = set(round(float(x), 6) for x in ([w0] + list(peaks0)))   # members enrolled as PEAKS (followed with --peak-follow)
     _peaks_of_best = [float(w0)] + [float(x) for x in peaks0]
     if _resume_state:
-        _maxit_cur = max(int(_resume_state['maxit_cur']), int(a.inner_maxit_min)) if a.inner_maxit_adapt else _maxit_cur
+        # within this job's [--inner-maxit-min, --inner-maxit-max] (the cap since
+        # 20261010j stage B: a record now carries the budget too, and a short test
+        # round from one -- --inner-maxit-max 3 -- would otherwise run its 40)
+        _maxit_cur = (min(max(int(_resume_state['maxit_cur']), int(a.inner_maxit_min)), int(a.inner_maxit_max))
+                      if a.inner_maxit_adapt else _maxit_cur)
         _sqp_trust_prev = (_resume_state['sqp_trust'] or None)
         _peakset.update(round(float(x), 6) for x in _resume_state['peakset'])
-        print(f"resume: inner budget {_maxit_cur}, SQP trust {_sqp_trust_prev}, {len(_resume_state['peakset'])} peak members restored", flush=True)
+        if a.tau and _resume_state.get('tau_rho') is not None:
+            _tau_rho, _tau_streak = float(_resume_state['tau_rho']), int(_resume_state.get('tau_streak', 0))
+        print(f"resume: inner budget {_maxit_cur}, SQP trust {_sqp_trust_prev}, {len(_resume_state['peakset'])} peak members restored"
+              + (f", tau cap {_tau_rho:.4g} (streak {_tau_streak})" if _tau_rho is not None else ", no tau cap"), flush=True)
     gbest_cert, zbest_cert = float(gbest), (zbest.copy() if zbest is not None else None)   # --cert-every: last FULLY certified best
     _al_accepted = None                 # certified abscissa of the accepted design (SQP start check)
     # ---- STAGE 5: the projected oracle for the inner loop ------------------
@@ -3610,8 +4001,110 @@ def main():
             watch_cur = _topk_watch(_seen0, a.cont_k, a.eps)
             print(f"continuation anchor verified: alpha={_al0:+.4f}, watching "
                   f"{len(watch_cur)} near-line eigenvalue(s)", flush=True)
+    # THE ACCEPTED DESIGNS OF THIS JOB (20261010j stage B; the user's decision of
+    # 2026-10-14: the save-time winding count VETOES): the anchor, then every
+    # accepted design, each with its watch list and, where one was computed, its
+    # conclusive count right of -eps -- the fallbacks of the veto at the save
+    _accepted = []
+    _anchor_count = None
+    if BFS and a.wind and a.cont and _anchor_ok:
+        if _stab_rec is not None and 'count_right_of_eps' in _stab_rec:
+            # the anchor is this job's feasible start, counted above: 0 is known; an
+            # INCONCLUSIVE count there is not repeated (the same design, the same march)
+            if _stab_rec['count_right_of_eps'] == 0:
+                _anchor_count = dict(count=0, ok=True, how='feasible start')
+        else:
+            # THE INHERITED ANCHOR COUNTED (gate-refusal.md G4 with its verifier's
+            # correction): a checkpoint, a continued record or a start record whose
+            # feasible-start count did not run (STABILISE=0) was anchored by its line
+            # alone -- the feasible start's count right of -eps (BFS.md 6) runs only
+            # on a start without a checkpoint -- and the parents' records hold
+            # counts right of -eps/2 only, which do not exclude (-eps, -eps/2)
+            # (STAGE6 6.29: 0 right of -eps implies 0 right of -eps/2, not the
+            # converse), while the k = 1 line can hide an eigenvalue behind a pinned
+            # one (alpha -0.0501042 at the decentral no-strip record).  FATAL only on
+            # a conclusive count > 0; INCONCLUSIVE: logged, and the line-verified
+            # anchor is kept (deferring it would drop the gate until the first
+            # acceptance, a weaker chain than the inherited one)
+            try:
+                _o = _wind_right_of_margin(_bb0, _cc0, _aa0, _nn0, _KK0, list(_seen0) + list(watch_cur),
+                                           pa_=D.bc(_xa0, _xs0, _va0, _vs0)[2])
+                if _o['ok'] and _o['count'] > 0:
+                    print(f"FATAL: the inherited anchor has {_o['count']} closed-loop eigenvalue(s) right of "
+                          f"Re={-a.eps:g} (winding count, {_o['npts']} pts, {_o['seconds']:.0f} s) although its line "
+                          f"is clear: the chain broke upstream (an escape); not running", flush=True)
+                    return
+                if _o['ok']:
+                    _anchor_count = dict(count=0, ok=True, npts=int(_o['npts']), seconds=_o['seconds'], how='counted at the start')
+                    print(f"continuation anchor: 0 closed-loop eigenvalues right of Re={-a.eps:g} over all frequencies "
+                          f"(winding count, {_o['npts']} pts, {_o['seconds']:.0f} s): the inherited anchor is certified",
+                          flush=True)
+                else:
+                    print(f"*** continuation anchor: the winding count right of Re={-a.eps:g} is INCONCLUSIVE "
+                          f"({_o['npts']} pts, {_o['seconds']:.0f} s): the line-verified anchor is kept, its premise "
+                          f"inherited", flush=True)
+            except Exception as _e:
+                print(f"*** continuation anchor: winding count failed ({type(_e).__name__}: {_e}); the line-verified "
+                      f"anchor is kept", flush=True)
+    if a.cont and _anchor_ok:
+        _accepted.append(dict(round=-1, z=zbest.copy(), g=float(gbest), al=float(_al0),
+                              watch=list(watch_cur) + list(_seen0), count=_anchor_count, how='anchor', prov=False))
     _t_round = []                                # round start times (--deadline)
     _deadline_stop = False                       # stopped by --deadline: the checkpoint stays (resume)
+    # --deadline with the SQP (20261010j stage B, P5): each round's phase before the
+    # inner solve (its rows' setup), after its last iteration (the SQP's own
+    # re-evaluations, the certificate, gate and checkpoint) and the longest SQP
+    # iteration, measured
+    _t_sqp_end, _pre_dur, _post_dur, _it_wall_max = [None], [], [], [0.0]
+
+    def _round_reserve():
+        """Seconds kept after a time-truncated inner solve: the round's certificate,
+        gate and checkpoint (1.25 x the longest such phase seen) plus, with
+        --cont-accept-winding, the longest winding count of this job (a refused
+        step is counted: 2-7 min on the test plant, 20-40 min on the full mesh,
+        BFS.md 9); never below --deadline-reserve."""
+        return max(float(a.deadline_reserve),
+                   1.25 * max(_post_dur, default=0.0) + (_wind_sec[0] if a.cont_accept_winding else 0.0))
+
+    def _loop_state():
+        """The loop's own state, in the checkpoint and (20261010j stage B,
+        omega-growth.md P6) in the record, so that CONTINUE=1 from a finished
+        record restores what a checkpoint restores: the adaptive inner budget,
+        the SQP trust radius, the peak members (followed with --peak-follow), the
+        tau cap and its streak (nan: off), and the code that wrote it.  Five of
+        the six 20261010g jobs restarted at budget 10 with the start's peaks only
+        (no 'resume:' line), 770629 alone resumed at 40 with 39 peak members."""
+        return dict(maxit_cur=int(_maxit_cur), sqp_trust=float(_sqp_trust_prev or 0.0),
+                    peakset=np.array(sorted(_peakset), float),
+                    tau_rho=float(_tau_rho if _tau_rho is not None else np.nan), tau_streak=int(_tau_streak),
+                    code_version=_code_version())
+
+    def _write_ckpt(z_, g_, al_, freqs_, note_=None):
+        """tag_ckpt.npz/.json for the design z_ (certified g_, abscissa al_) with
+        the working set freqs_ and the loop state: written at every acceptance and,
+        refreshed with the end-of-job state, at a deadline stop (the save below)."""
+        try:
+            aa_w, nn_w, KK_w, xa_w, xs_w, va_w, vs_w = pk.unpack(z_)
+            _apa, _aps = pk.atom_params(z_)
+            np.savez(tag + '_ckpt.npz', d=aa_w[0], e=aa_w[1], f=aa_w[2],
+                     nvec=nn_w, K=KK_w, xa=xa_w, xs=xs_w,
+                     **(dict(Bc=np.asarray(aa_w[3]), loop_orders=np.array(flags['loop_orders'])) if MIMO else {}),
+                     atoms_a_p=(_apa if _apa is not None else np.zeros(0)),
+                     atoms_s_p=(_aps if _aps is not None else np.zeros(0)),
+                     **_atoms_record_keys(D, _apa, _aps),
+                     va=(va_w if va_w is not None else np.zeros(0)),
+                     vs=(vs_w if vs_w is not None else np.zeros(0)),
+                     gamma=g_, alpha=float(al_), wlo=float(a.wlo), whi=float(a.whi),
+                     **_loop_state(),
+                     active_freqs=np.array(sorted(set(round(float(x), 6) for x in freqs_))))   # the working set: a resume that lacks it re-discovers the band
+            json.dump(dict(case=a.case, gamma=float(g_),
+                           alpha=float(al_),
+                           note=note_ or ('checkpoint (PROVISIONAL: reduced-model certificate; a resume re-certifies it in full)'
+                                          if getattr(certified_norm, 'last_provisional', False) else 'checkpoint'),
+                           code_version=_code_version()),
+                      open(tag + '_ckpt.json', 'w'))
+        except Exception as _e:
+            print(f"    checkpoint write failed: {_e!r}", flush=True)
     for it in range(a.outer):
         if BFS:
             # the run-time ledger (BFS.md 7): wall so far, the driver's own MUMPS
@@ -3628,9 +4121,25 @@ def main():
             # then never cuts a round (or the final save) in half (BFS.md 7)
             _t_round.append(time.time())
             _dur = max(np.diff(_t_round)) if len(_t_round) > 1 else 0.0
-            if it > 0 and (_t_round[-1] - t_start) + 1.25 * _dur + a.deadline_final > a.deadline:
-                print(f"  DEADLINE STOP: {(_t_round[-1] - t_start) / 3600:.2f} h elapsed, the longest round took "
-                      f"{_dur / 3600:.2f} h, --deadline {a.deadline / 3600:.2f} h", flush=True)
+            if _t_sqp_end[0] is not None:
+                _post_dur.append(_t_round[-1] - _t_sqp_end[0]); _t_sqp_end[0] = None
+            if a.inner == 'sqp':
+                # 20261010j stage B (driver-serial.md P5): the SQP stops on time itself
+                # (its deadline below), so a round needs only the reserve for its
+                # certificate, gate and checkpoint and a minimum inner budget -- not
+                # 1.25 x the longest round, which ended the four MIMO jobs of 20261010g
+                # 1.2-2.3 h before their limit (rounds of 1.1-1.9 h); plus the phase
+                # before the solve (1.25 x the longest seen)
+                _need = (1.25 * max(_pre_dur, default=0.0) + _round_reserve()
+                         + max(float(a.deadline_min_inner), 3.0 * _it_wall_max[0]))
+                _why = (f"a round needs {_need / 3600:.2f} h (reserve {_round_reserve() / 3600:.2f} h + the minimum "
+                        f"inner solve + the setup before it)")
+            else:
+                _need = 1.25 * _dur
+                _why = f"the longest round took {_dur / 3600:.2f} h"
+            if it > 0 and (_t_round[-1] - t_start) + _need + a.deadline_final > a.deadline:
+                print(f"  DEADLINE STOP: {(_t_round[-1] - t_start) / 3600:.2f} h elapsed, {_why}, "
+                      f"--deadline {a.deadline / 3600:.2f} h", flush=True)
                 _deadline_stop = True
                 break
         # ALWAYS restart the inner solve from the best CERTIFIED point.  The
@@ -3771,8 +4280,11 @@ def main():
                         if (a.peak_follow == 'on' and (_ro is not None or _lat is not None)) else None)
         _prov_pre = bool(a.cert_every > 1 and _ro is not None and (it % a.cert_every != 0)
                          and it < a.outer - 1 and _ro.dim > 0 and a.prov_gate == 'reduced')
+        _truncated = False                       # the inner solve was cut by --deadline (P5)
         if a.inner == 'sqp':
             from sqp_inner import solve_epigraph_sqp
+            if a.deadline > 0:
+                _pre_dur.append(time.time() - _t_round[-1])
             best, ncalls, Hcur, inner_stats = solve_epigraph_sqp(
                 # the CURRENT certified best as the start level (t0 is the run's
                 # start value, never updated: a stationary SQP reported it back
@@ -3793,7 +4305,15 @@ def main():
                 refine_grid=np.linspace(a.wlo, a.whi, 1201), refine_max=a.sqp_refine_max,
                 alpha_ref=(float(_al_accepted) if _al_accepted is not None else None),
                 pred_rel=(1e-7 if (a.sqp_stat == 'pred' or (a.sqp_stat == 'auto' and MIMO)) else None),
-                pen_adapt=(a.sqp_pen == 'adaptive'), lattice=_lat)
+                pen_adapt=(a.sqp_pen == 'adaptive'), lattice=_lat,
+                # the job's deadline less the round's reserve and the final save (P5)
+                deadline=((t_start + a.deadline - a.deadline_final - _round_reserve()) if a.deadline > 0 else None))
+            _t_sqp_end[0] = float(inner_stats.get('t_loop_end') or time.time())   # the reserve covers the SQP's own tail
+            _it_wall_max[0] = max(_it_wall_max[0], float(inner_stats.get('it_wall_max') or 0.0))
+            _truncated = bool(inner_stats.get('deadline_hit'))
+            if _truncated:
+                print(f"    inner solve cut by the deadline after {inner_stats.get('iters')} iteration(s) (code 4): "
+                      f"this round is the last of the job, exempt from the progress and stall rules", flush=True)
             _sqp_trust_prev = inner_stats.get('trust_final')
             if _lat is not None and inner_stats.get('lattice'):
                 _li = inner_stats['lattice']
@@ -4212,6 +4732,8 @@ def main():
         watch_cand = None
         _nsp_seen = 0
         _reach = {}
+        _gref = None                      # a refusal of the gate this round (G2: printed, saved as gate_fail_k.npz)
+        _prefix_acc = False               # the step replaced by its certified prefix (G2's record of the outcome)
         if feasible and a.cont and _anchor_ok and g < gbest * (1 - 1e-12) and not _gate_reduced:
             if a.cont_track == 'reduced' and _ro is not None and _ro.dim > 0:
                 # algebra note item 11 (STAGE5 33): eigenvalues tracked on the
@@ -4225,7 +4747,10 @@ def main():
                 _reach = {}
                 _okc = None
                 _gpath = (a.gate_path == 'on' or (a.gate_path == 'auto' and _lat is not None)) and a.inner == 'sqp'
-                _pts = _path_to(inner_stats.get('path'), zwatch, zc) if _gpath else None
+                _pinf = []                              # the kept path points' SQP info (G2)
+                _pts = _path_to(inner_stats.get('path'), zwatch, zc, inner_stats.get('path_info'), _pinf) if _gpath else None
+                _glogs, _clog = [], []                  # the path's segment logs, the straight chord's (G2)
+                _path_refused = False
                 if _pts is not None and len(_pts) > 2:
                     # THE SQP'S OWN PATH (--gate-path; BFS.md 5, 2026-10-06): its accepted
                     # iterates in order, segment by segment -- short steps, each end
@@ -4234,21 +4759,39 @@ def main():
                     # candidate can leave the feasible set (test plant, order 10: a
                     # midpoint at alpha -0.0458 refused a round whose every iterate was
                     # admissible)
-                    _okc, watch_cand, _nq, _nsp, _reach_p, _iseg = _gate_along(_pts, watch_cur)
+                    _okc, watch_cand, _nq, _nsp, _reach_p, _iseg = _gate_along(_pts, watch_cur, _glogs)
                     print(f"    continuation along the SQP's path: {len(_pts) - 1} segments, "
                           f"{'certified' if _okc else 'refused at segment %d' % (_iseg + 1)} "
                           f"({_nq} tracked queries, {_nsp} splits)", flush=True)
+                    if not _okc:
+                        _path_refused = True
+                        gate_refusal_report(_pts, _pinf, _glogs, _iseg, a.eps)
                 if not _okc:
                     _okc, watch_cand, _nq2, _nsp2 = continuation_gate(
                         D, pk, zwatch, zc, watch_cur, a.eps,
                         depth=a.cont_depth, motion_frac=a.cont_motion,
-                        motion_floor=a.cont_floor, kwatch=a.cont_k, pool=fullpar.POOL, reach=_reach)
+                        motion_floor=a.cont_floor, kwatch=a.cont_k, pool=fullpar.POOL, reach=_reach, log=_clog)
                     if _pts is not None and len(_pts) > 2:
                         _nq += _nq2; _nsp += _nsp2
                         if not _okc and _reach_p.get('z') is not None:
                             _reach = _reach_p           # the path's certified prefix: along improving iterates
                     else:
                         _nq, _nsp = _nq2, _nsp2
+                if not _okc:
+                    # the straight chord's ends (G2): their own lines -- the anchor's
+                    # abscissa and watch list, the candidate's abscissa and seen list
+                    print(f"    gate refusal: the straight chord, |dz| {float(np.linalg.norm(zc - zwatch)):.4g}, from the "
+                          f"last accepted design (alpha {(albest if albest is not None else _al0):+.7f}, watching "
+                          f"{[f'{q:.6g}' for q in (watch_cur or [])[:4]]}) to the candidate (alpha {al_c:+.7f}, rightmost seen "
+                          f"{[f'{q:.6g}' for q in sorted(_seen_c or [], key=lambda q: -q.real)[:3]]}); "
+                          f"{sum(e_.get('verdict') not in ('certified', 'split') for e_ in _clog)} sub-segment(s) failed",
+                          flush=True)
+                if _path_refused or not _okc:
+                    # the refusal -- the path's (the chord then certified or not) or the
+                    # chord's -- for gate_fail_k.npz below, once the fallbacks decided
+                    _gref = dict(round=int(it), pts=_pts, pinf=_pinf, glogs=_glogs, iseg=(_iseg if _path_refused else None),
+                                 clog=_clog, chord_ok=bool(_okc), watch=list(watch_cur), z0=np.array(zwatch, float),
+                                 z1=np.array(zc, float), g=float(g), al=float(al_c), seen=list(_seen_c or []))
             _nsp_seen = _nsp
             _ndz_used = float(np.linalg.norm(zc - zwatch))
             if not _okc and a.cont_accept_winding:
@@ -4261,8 +4804,14 @@ def main():
                 try:
                     # count right of the MARGIN itself, Re = -eps (2026-09-25; was
                     # -eps/2, which left the gap (-eps, -eps/2) the Stage-0 report
-                    # flagged)
-                    _o = _wind_right_of_margin(bb, cc, aa, nn, KK, _seen_c, pa_=(D.bc(xa_, xs_, va_, vs_)[2] if BFS else None))
+                    # flagged).  Hints: the candidate's line and, 20261010j stage B (G1,
+                    # verifier's correction 2), the BFS gate's tracked eigenvalues -- the
+                    # tracker's offset shift finds an eigenvalue the k = 1 line can
+                    # hide behind a pinned one (770633 round 1: -0.0498897; GL as before)
+                    _o = _wind_right_of_margin(bb, cc, aa, nn, KK,
+                                               list(_seen_c or []) + ([q for q in (watch_cand or []) if q is not None]
+                                                                      if BFS else []),
+                                               pa_=(D.bc(xa_, xs_, va_, vs_)[2] if BFS else None))
                     if _o is not None:
                         _wind_done = _o
                         if not (_o['ok'] and _o['count'] == 0):
@@ -4322,7 +4871,7 @@ def main():
                     watch_cand = _topk_watch(list(_reach.get('watch') or []) + _seen_p, a.cont_k, a.eps)
                     _okc = True
                     _ndz_used = float(np.linalg.norm(_zp - zwatch))
-                    n_prefix[0] += 1
+                    n_prefix[0] += 1; _prefix_acc = True
                     if a.tau:
                         _tau_rho = min(_tau_rho or np.inf, _ndz_used)
                         _tau_streak = 0
@@ -4347,6 +4896,9 @@ def main():
                 except Exception as _e:
                     _okc = False
                     print(f"    winding check at acceptance failed ({type(_e).__name__}): refused", flush=True)
+            if _gref is not None:
+                _gref.update(accepted=bool(_okc), count=_wind_done, prefix_accepted=bool(_okc and _prefix_acc))
+                _save_gate_fail(_gref)
             if not _okc:
                 feasible = False
                 n_located[0] += 1
@@ -4461,27 +5013,7 @@ def main():
             # just passed the line certificate, the pole cap and the
             # continuation gate -- and the startup anchor re-verifies it
             # (dense at GL) before any resumed run trusts it.
-            try:
-                _apa, _aps = pk.atom_params(zbest)
-                np.savez(tag + '_ckpt.npz', d=aa[0], e=aa[1], f=aa[2],
-                         nvec=nn, K=KK, xa=xa_, xs=xs_,
-                         **(dict(Bc=np.asarray(aa[3]), loop_orders=np.array(flags['loop_orders'])) if MIMO else {}),
-                         atoms_a_p=(_apa if _apa is not None else np.zeros(0)),
-                         atoms_s_p=(_aps if _aps is not None else np.zeros(0)),
-                         **_atoms_record_keys(D, _apa, _aps),
-                         va=(va_ if va_ is not None else np.zeros(0)),
-                         vs=(vs_ if vs_ is not None else np.zeros(0)),
-                         gamma=g, alpha=float(al_c), wlo=float(a.wlo), whi=float(a.whi),
-                         maxit_cur=int(_maxit_cur), sqp_trust=float(_sqp_trust_prev or 0.0),
-                         peakset=np.array(sorted(_peakset), float),
-                         active_freqs=np.array(sorted(set(list(Omega) + [round(float(x), 6) for x in ([w] + peaks)]))))   # the working set: a resume that lacks it re-discovers the band
-                json.dump(dict(case=a.case, gamma=float(g),
-                               alpha=float(al_c),
-                               note=('checkpoint (PROVISIONAL: reduced-model certificate; a resume re-certifies it in full)'
-                                     if getattr(certified_norm, 'last_provisional', False) else 'checkpoint')),
-                          open(tag + '_ckpt.json', 'w'))
-            except Exception as _e:
-                print(f"    checkpoint write failed: {_e!r}", flush=True)
+            _write_ckpt(zbest, g, al_c, list(Omega) + [w] + list(peaks))
             if a.tau and _tau_rho is not None:
                 if _nsp_seen == 0 or (a.inner == 'sqp' and a.tau_split == 'ignore'):
                     _tau_streak += 1
@@ -4513,6 +5045,16 @@ def main():
                 if not _gate_reduced:   # a reduced gate has no certified eigenvalue list: keep the last certified anchor
                     watch_cur = _topk_watch(_merged + _seen_c, a.cont_k, a.eps)
                     zwatch = zc.copy()
+            # the veto's ledger (above): this design, its hints for a count (the watch
+            # list and the line's seen list) and its count right of -eps when this
+            # round computed one (a refused step accepted on its count, --wind-accept)
+            # (prov: a reduced-model value, --cert-every; never a fallback)
+            _accepted.append(dict(round=int(it), z=zbest.copy(), g=float(gbest), al=float(al_c),
+                                  watch=[q for q in (watch_cur or []) if q is not None] + list(_seen_c or []),
+                                  count=(dict(count=0, ok=True, npts=int(_wind_done.get('npts', 0)), how='at acceptance')
+                                         if (_wind_done is not None and _wind_done.get('ok') and _wind_done.get('count') == 0)
+                                         else None),
+                                  how='accepted', prov=bool(_prov)))
 
         # adapt the trust radius: a faithful step earns a bigger one, a step
         # whose certified norm blew past t earns a smaller one
@@ -4658,7 +5200,12 @@ def main():
                       + (f" (bound {a.field_kmax:g}, order {a.field_order})" if a.field_kmax else ''), flush=True)
             except Exception as _e:
                 print(f"    fields: shape report failed ({type(_e).__name__}: {_e})", flush=True)
-        if a.inner_maxit_adapt:
+        if a.inner_maxit_adapt and _truncated:
+            # an inner solve cut by the deadline (P5) ran fewer iterations than the
+            # budget: its agreement says nothing about the budget, which the next
+            # job resumes with (the checkpoint, the record) unchanged
+            print(f"    inner budget kept at {_maxit_cur} (the solve was cut by the deadline)", flush=True)
+        elif a.inner_maxit_adapt:
             # STAGE 3: the inner budget follows the surrogate's validity.  The
             # certification just measured how far the restricted optimum was
             # from the truth: agreement -> a longer inner solve next round;
@@ -4827,9 +5374,11 @@ def main():
                                    below=int(sum(s_ < _retire_frac * gbest for s_ in _sr))))
             print(f"    omega retire: {_omega_log[-1]['below']} of {len(_Wr)} member(s) below {_retire_frac:g} x gamma, "
                   f"-{len(_retired)} retired after {_retire_rounds} accepted round(s) -> |Omega|={len(Omega)}", flush=True)
-        if not newf and not (_progress if a.converge else improved):
+        if not newf and not (_progress if a.converge else improved) and not _truncated:
             # nothing new to add and no progress: enlarge Omega with the peaks
             # of the CURRENT best design instead, then stop if still nothing
+            # (not after an inner solve cut by the deadline, P5: its iterations
+            # say nothing about a fixed point; the job stops below anyway)
             if _ro is not None or _lat is not None:
                 # the best design was certified when it was accepted; its peak list
                 # (reduced fine sweep + full peak reference) is _peaks_of_best --
@@ -4907,15 +5456,73 @@ def main():
             _n_noimp = 0 if improved else _n_noimp + 1
             _mismatch = (BFS and (not improved) and bool(np.isfinite(g)) and np.isfinite(best.get('t', np.nan))
                          and g > best['t'] * 1.01 and _n_noimp < 2 * _k)
+            # nor after an inner solve cut by the deadline (20261010j stage B, P5 with
+            # its verifier's correction): a short last round with a small gain would
+            # mark the run FINISHED (checkpoint removed) instead of deadline-stopped
             if (len(_gh_hist) > _k and (_gh_hist[-_k - 1] - _gh_hist[-1]) < _tol * _gh_hist[-1]
-                    and not _prov and not _stalled and not _accel and not _refused and not _mismatch and _armed):
+                    and not _prov and not _stalled and not _accel and not _refused and not _mismatch and _armed
+                    and not _truncated):
                 print(f"  PROGRESS STOP: {100 * (_gh_hist[-_k - 1] - _gh_hist[-1]) / _gh_hist[-1]:.3f} % over the last "
                       f"{_k} rounds (< {100 * _tol:.2f} %)"
                       + (f"; {_n_noimp} rounds without an accepted design" if _n_noimp else ""), flush=True)
                 exch_progress_stop = True
                 break
+        if _truncated:
+            # the inner solve stopped on the deadline: this round was the job's last, and
+            # the run ends as at a DEADLINE STOP -- its checkpoint stays for the next job
+            print(f"  DEADLINE STOP: {(time.time() - t_start) / 3600:.2f} h elapsed, the round's inner solve was cut "
+                  f"by the deadline, --deadline {a.deadline / 3600:.2f} h", flush=True)
+            _deadline_stop = True
+            break
 
     # ---- final evaluation and save (same format as run_case.py) ----
+    # THE SAVE-TIME WINDING VETO (BFS; 20261010j stage B, the user's decision of
+    # 2026-10-14: never report an unstable design as the record).  The final
+    # design's all-frequency count right of Re = -EPS -- the margin the record's
+    # alpha claims; the count was right of -eps/2 and advisory, so a record could
+    # carry an eigenvalue in (-eps, -eps/2), or one the k = 1 line hid behind a
+    # pinned one, and the chain's checkpoints and next round rested on the gate
+    # alone (gate-refusal.md).  The line is -eps as for every acceptance-time count
+    # since STAGE5 22 (which closed the (-eps, -eps/2) gap there); 0 right of -eps
+    # implies 0 right of -eps/2 (STAGE6 6.29), so the old field's meaning holds.
+    # Not a conclusive 0 (a count > 0, INCONCLUSIVE, a failure): the record falls
+    # back to the last accepted design of this job whose count is a conclusive 0
+    # -- free where known (the anchor, counted at the start; a design accepted on
+    # its count), else counted, at most --veto-counts of them and none the
+    # deadline cannot hold -- and says so (wind_veto in the JSON, a '*** ' line).
+    # No such design: nothing is saved.
+    _wind_final, _veto = None, None
+    if BFS and a.wind:
+        def _count_entry(e_):
+            aa_v, nn_v, KK_v, xa_v, xs_v, va_v, vs_v = pk.unpack(e_['z'])
+            bb_v, cc_v, pa_v, *_ = D.bc(xa_v, xs_v, va_v, vs_v)
+            return _wind_right_of_margin(bb_v, cc_v, aa_v, nn_v, KK_v, list(e_.get('watch') or []), pa_=pa_v)
+        _fin = next((e_ for e_ in reversed(_accepted) if np.array_equal(e_['z'], zbest)), None)
+        if _fin is None:
+            _fin = dict(round=None, z=zbest.copy(), g=float(gbest), watch=[q for q in (watch_cur or []) if q is not None],
+                        count=None, how='final')
+        # a further count only while it fits before the job's deadline with a quarter
+        # of --deadline-final left for the rest of the save (the record's gain curve,
+        # the figures: ~3 min on the test plant); never a provisional design
+        _chosen, _wind_final, _veto = winding_veto(
+            _fin, [e_ for e_ in _accepted if not e_.get('prov') and not np.array_equal(e_['z'], zbest)],
+            _count_entry, -a.eps, cap=int(a.veto_counts),
+            time_ok=((lambda: (time.time() - t_start) + 1.25 * _wind_sec[0] + 0.25 * a.deadline_final <= a.deadline)
+                     if a.deadline > 0 else None))
+        if _chosen is None:
+            # (a deadline stop's checkpoint stays as it is: the next job counts its
+            # anchor right of -eps first and stops FATAL on a conclusive count > 0)
+            print(f"*** WINDING VETO: no accepted design of this job back to the anchor has a conclusive count of 0 "
+                  f"right of Re={-a.eps:g}: NOT SAVING (the veto is in {os.path.basename(tag)}_veto.json)", flush=True)
+            try:
+                json.dump(_js(dict(case=a.case, wind_veto=_veto, history=hist, code_version=_code_version(),
+                                   seconds=round(time.time() - t_start, 1))), open(tag + '_veto.json', 'w'), indent=1)
+            except Exception as _e:
+                print(f"    veto record failed: {_e!r}", flush=True)
+            return
+        if _veto is not None:
+            zbest, gbest = np.array(_chosen['z'], float), float(_chosen['g'])
+            watch_cur = [q for q in (_chosen.get('watch') or []) if q is not None]
     arow, nvec, K, xa, xs, va, vs = pk.unpack(zbest)
     b, c, pa, ps, na, ns = D.bc(xa, xs, va, vs)
     # the alpha recorded on disk MUST come from the certificate: it is what
@@ -4936,6 +5543,14 @@ def main():
         print(f"NOT SAVING: final design is unstable (alpha={al:+.4f}; "
               f"{why_final})", flush=True)
         return
+    if _deadline_stop:
+        # A DEADLINE STOP keeps the checkpoint for the next job: refreshed here with
+        # the end-of-job loop state (inner budget, trust radius, peak members, tau
+        # cap: the acceptance-time file held the state before that round's
+        # adaptation and any later round's) and, after a veto, the fallback design
+        # -- the next job must not resume from a vetoed one (20261010j stage B)
+        _write_ckpt(zbest, gbest, al, list(Omega),
+                    note_=('checkpoint (the deadline stop' + (', the winding veto\'s fallback' if _veto else '') + ')'))
     # DENSE SAVE VETO -- check only, never part of the algorithm.  The
     # certificate above is conditional (continuation); a design about to be
     # written to disk deserves the standalone question, which at GL scale a
@@ -5003,21 +5618,19 @@ def main():
     wind_n = None
     wind_info = None
     if a.wind and BFS:
-        # the M-free count (bfs/plant.BFSPlant.winding: plant data from the
-        # inertia-certified enclosure, H^1 tail for the wall-shear sensor)
-        _line = -0.5 * a.eps
-        try:
-            _t0 = time.time()
-            _out = D.winding(pa, b, c, arow, nvec, K, _line, zeros_hint=[z for z in (watch_cur or []) if z is not None])
-            wind_n = int(_out['count']) if _out['ok'] else None
-            wind_info = dict(count=wind_n, npts=int(_out.get('npts', 0)), wtail=float(_out.get('wtail', np.nan)),
-                             p_plant=int(_out.get('p_plant', -1)), seconds=round(time.time() - _t0, 1))
-            print(f"winding certificate: {wind_n if wind_n is not None else 'INCONCLUSIVE'} eigenvalue(s) right of "
-                  f"Re={_line:+.4f} over all frequencies ({wind_info['npts']} pts, tail from |w| = "
-                  f"{wind_info['wtail']:.1f}, {wind_info['seconds']:.0f} s)"
-                  + (" -- UNCONDITIONALLY stable with eps/2 margin" if wind_n == 0 else ""), flush=True)
-        except Exception as _e:
-            print(f"winding certificate failed non-fatally: {_e!r}", flush=True)
+        # the count right of -eps of the design saved: the veto's above (the M-free
+        # count, bfs/plant.BFSPlant.winding: plant data from the inertia-certified
+        # enclosure, H^1 tail for the wall-shear sensor) -- counted there, or known
+        # for this design (the anchor's count at the start, a count at acceptance)
+        wind_n = 0
+        wind_info = dict(count=0, line=float(-a.eps), npts=int(_wind_final.get('npts', 0) or 0),
+                         wtail=float(_wind_final.get('wtail', np.nan)), p_plant=int(_wind_final.get('p_plant', -1)),
+                         seconds=_wind_final.get('seconds'), source=_wind_final.get('source'))
+        print(f"winding certificate: 0 eigenvalue(s) right of Re={-a.eps:+.4f} over all frequencies "
+              f"({wind_info['source']}; {wind_info['npts']} pts"
+              + (f", tail from |w| = {wind_info['wtail']:.1f}" if np.isfinite(wind_info['wtail']) else '')
+              + (f", {wind_info['seconds']:.0f} s" if wind_info['seconds'] is not None else '')
+              + ") -- UNCONDITIONALLY stable with the margin eps (so with eps/2 too, STAGE6 6.29)", flush=True)
     if a.wind and not BFS:
         # 0 right of -eps at acceptance (the same design) implies 0 right of
         # -eps/2: the save-time count is then not repeated (STAGE6 6.29)
@@ -5284,7 +5897,11 @@ def main():
                      p=int(flags['p']), struct=flags['struct']) if MIMO else {}),
              alpha_dense=(al_d if al_d is not None else np.nan),
              n_active=nact,
-             omega_grid=ws, gain=gain, gain_model=_gain_model, active_freqs=np.array(sorted(Omega)))
+             omega_grid=ws, gain=gain, gain_model=_gain_model, active_freqs=np.array(sorted(Omega)),
+             # what a checkpoint restores and the record lacked (20261010j stage B,
+             # omega-growth.md P6): CONTINUE=1 copies this file to the checkpoint, and the
+             # resume reads the loop state and the band from it; the code that wrote it
+             wlo=float(a.wlo), whi=float(a.whi), **_loop_state())
     summ = dict(case=a.case, start=a.start, ne=a.ne, n=D.n, NZ=len(z) + 1,
                 gamma=float(gam), alpha=float(al),
                 alpha_dense=(float(al_d) if al_d is not None else None),
@@ -5292,7 +5909,13 @@ def main():
                 band_incomplete=int(n_band_incomplete[0]), band_check=band_check, all_w=all_w,
                 all_w_outside_band=int(n_allw_outside[0]),
                 eps=float(a.eps),
-                wind_count=wind_n, wind_info=wind_info,
+                # BFS since 20261010j stage B: the count right of -eps (wind_line), the
+                # save-time veto (None: the final design passed); GL: right of -eps/2
+                wind_count=wind_n, wind_info=wind_info, wind_line=(float(-a.eps) if BFS else float(-0.5 * a.eps)),
+                wind_veto=(_js(_veto) if _veto is not None else None),
+                code_version=_code_version(),
+                loop_state=dict(maxit_cur=int(_maxit_cur), sqp_trust=float(_sqp_trust_prev or 0.0), peak_members=len(_peakset),
+                                tau_rho=(float(_tau_rho) if _tau_rho is not None else None), tau_streak=int(_tau_streak)),
                 sym=bool(a.sym),
                 sym_branch=(float(flags.get('sym_branch', 1.0))
                             if a.sym else None),

@@ -1155,7 +1155,16 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                        refine_tol=None, refine_grid=None, refine_max=3,
                        alpha_ref=None, alpha_ref_tol=1e-3, stat_rel=1e-4, pred_rel=1e-7, ctrl_block=False,
                        follow=None, follow_radius=0.1, row_screen=0.0, validate_full=True,
-                       cl_block=False, max_disp=None, pen_adapt=False, lattice=None):
+                       cl_block=False, max_disp=None, pen_adapt=False, lattice=None, deadline=None):
+    # deadline (20261010j stage B, driver-serial.md P5): a time.time() value by
+    # which the solve must have returned -- the job's deadline less the reserve
+    # for the round's certificate, gate and checkpoint and the final save
+    # (run_case_epi).  No iteration starts that the longest one so far would
+    # carry past it: the solve stops with code 4 (budget), deadline_hit in its
+    # stats.  The work after the loop (the candidates re-evaluated on the final
+    # set, the tops at the best: a few evaluations) counts in the caller's
+    # reserve, which measures from stats['t_loop_end'].  None: the iteration
+    # budget alone (every frozen path).
     if clarabel is None:
         raise RuntimeError("clarabel is not installed (pip install clarabel)")
     W = np.asarray(sorted(Omega), float)
@@ -1507,12 +1516,35 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             cands.append((e_['smax'], e_['z'].copy(), e_['al'], t_))
             cands.sort(key=lambda c: c[0]); del cands[6:]
     path = [z.copy()]                                     # the accepted iterates in order (the gate's path, --gate-path)
+    # PER PATH POINT (20261010j stage B, gate-refusal.md G2): the iteration that
+    # reached it, the line search's accepted step alpha, whether the iterate the
+    # step left was admissible (False: the segment ends a merit excursion), the
+    # returns to the last admissible iterate since the previous point, and the
+    # point's own line (its abscissa, the eigenvalues it saw and those with a
+    # row) -- what a gate refusal prints and saves, with no new computation
+    def _pinfo(e_, **kw):
+        _le = e_.get('lat_eigs')
+        return dict(kw, al=float(e_['al']), seen=([complex(q_) for q_ in _le[1]] if _le else []),
+                    rows=([complex(q_) for q_ in _le[0]] if _le else []))
+    path_info = [_pinfo(e, it=-1, alpha=None, prev_adm=None, backs=0)]
+    _backs_at = [0]                                       # n_back at the last path point
+    _deadline_hit = False; _it_wall = 0.0; _t_it = None   # the longest iteration so far, the current one's start (deadline)
     _note(e, t)
     if admissible(e) and e['smax'] < best['g']:
         best.update(g=e['smax'], z=z.copy(), al=e['al'], t=t, clr=e['clr'], w=_argw(e))
     if admissible(e):
         _last_adm[0] = (z.copy(), t)
     for it in range(int(maxit)):
+        if _t_it is not None:
+            _it_wall = max(_it_wall, time.time() - _t_it)   # every way an iteration ends (continue included)
+        if deadline is not None and time.time() + _it_wall > deadline:
+            # out of time for another iteration: the solve returns what it has (code 4,
+            # as an exhausted iteration budget), the round's certificate and gate then fit
+            _deadline_hit = True
+            print(f"    sqp: deadline -- stopped after {it} iteration(s) (the longest {_it_wall:.0f} s), "
+                  f"{max(deadline - time.time(), 0.0):.0f} s before the solve's deadline", flush=True)
+            break
+        _t_it = time.time()
         _disp = (z - z_start, float(max_disp)) if max_disp is not None else None
         sub, status = _sub(e, t, H, Delta, _disp)
         if sub is None:
@@ -1680,9 +1712,12 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             theta = 1.0 if sy >= 0.2 * sHs else 0.8 * sHs / (sHs - sy)
             r_ = theta * yv + (1 - theta) * (H @ sv)
             H = H - np.outer(H @ sv, H @ sv) / sHs + np.outer(r_, r_) / max(float(sv @ r_), 1e-16)
+        _adm_prev = bool(admissible(e))
         z, t, e = zn, tn, en
         if lattice is None or admissible(e):
             path.append(z.copy())     # the gate's path: admissible iterates only (LAT_CROSS 'merit' may accept others)
+            path_info.append(_pinfo(e, it=int(it), alpha=float(alpha), prev_adm=_adm_prev, backs=int(n_back[0] - _backs_at[0])))
+            _backs_at[0] = n_back[0]
         if _pair_ok and not ev_fn.pair_mode and not any(p_.get('event') == 'exit' for p_ in pair_log):
             # entry DURING the solve too (2026-09-26): the ne=100 pair closed from
             # 0.078 to 0.047 over rounds 12-15 and was let onto its face only at
@@ -1693,6 +1728,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                 e = ev_fn(z); t = max(t, e['smax']); _alpha_prev = 1.0
                 if lattice is None or admissible(e):
                     path.append(z.copy())
+                    path_info.append(_pinfo(e, it=int(it), alpha=None, prev_adm=True, backs=0, how='pair entry'))
         if (PARTIAL_SHRINK or (PAIR_BALL and ev_fn.pair_mode)) and alpha < 1.0:
             # the line search found where the model holds: a radius of twice the
             # accepted step (2 alpha failed), so the next QP picks its direction
@@ -1804,6 +1840,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                                  row_blocks={nm_: round(float(np.linalg.norm(_g[ix])), 6) for nm_, ix in pk.blocks()},
                                  stat_blocks={nm_: round(float(np.linalg.norm(_gl[ix])), 6) for nm_, ix in pk.blocks()})
             break
+    _t_loop_end = time.time()                             # (deadline) the work below is the round's reserve's
     if (oracle is not None or lattice is not None) and added and cands:
         # the working set grew during the solve: a candidate's recorded smax is
         # on the set of its time; re-evaluate all on the FINAL set (cheap on
@@ -1874,7 +1911,8 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                  refine_log=list(ev_fn.refine_log[-40:]), clblock_fail=int(ev_fn.n_clblock_fail),
                  sub_failures=list(sub_status_log),
                  w_star=_w_star_best, w_top=_w_top, rows_best=(dict(_rows_best) if _rows_best else None),
-                 n_blocks=len(e['blocks']), dedup=int(sum(ev_fn.n_dedup)), history=hist, path=path,
+                 n_blocks=len(e['blocks']), dedup=int(sum(ev_fn.n_dedup)), history=hist, path=path, path_info=path_info,
+                 deadline_hit=bool(_deadline_hit), it_wall_max=float(_it_wall), t_loop_end=float(_t_loop_end),
                  lattice=(dict(evaluations=len(ev_fn.lat_info), gain_evals=int(sum(i_['nev'] for i_ in ev_fn.lat_info)),
                                newton_max=int(max((i_['newton_max'] for i_ in ev_fn.lat_info), default=0)),
                                strip_shifts_max=int(max((l_['strip_shifts'] for l_ in ev_fn.lat_line), default=0)),
