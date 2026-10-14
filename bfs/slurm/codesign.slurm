@@ -102,6 +102,9 @@ echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none} (array ${SLURM_ARRAY_JOB_I
 echo "=== python: $(command -v python) ($(python -V 2>&1)); start $NAME (seed $SEED, order $R) -> $RUN ==="
 [ -f bfs/data/ops_fx.npz ] || { echo "*** bfs/data/ops_fx.npz missing: run bfs/slurm/smoke.slurm first"; exit 1; }
 [ -f bfs/data/ops_fx_range.npz ] || { echo "*** bfs/data/ops_fx_range.npz missing: run bfs/slurm/plant_cert.slurm first"; exit 1; }
+# bfs/data is shared by every code version (bfs/home.sh): files made by other
+# generators are refused (rerun smoke.slurm step 1 and plant_cert.slurm; STAMP_OK=1 runs anyway)
+bash bfs/data_stamp.sh check fx || [ "${STAMP_OK:-0}" = 1 ] || { echo "*** bfs/data/ops_fx*.npz were built by other generators (bfs/data_stamp.sh): rebuild them, or STAMP_OK=1"; exit 1; }
 post() {      # the figures and data of the saved record (bfs/postproc.py, BFS.md 7)
     timeout 3600 $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/postproc.py --ops bfs/data/ops_fx.npz --rec "$RUN/$TAG.npz" \
         || echo "*** postproc failed (the record is saved; rerun: sbatch the same array)"

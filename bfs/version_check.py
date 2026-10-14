@@ -47,6 +47,19 @@ def write(label):
     print(f"{MAN}: {len(rows)} files, version {label}")
 
 
+def _git_line():
+    """The commit, when the code directory is a git clone (bfs/home.sh, 20261010h)."""
+    try:
+        run = lambda *a: subprocess.run(['git', *a], cwd=ROOT, capture_output=True, text=True, timeout=20).stdout.strip()
+        head = run('rev-parse', '--short', 'HEAD')
+        if head:
+            dirty = [l for l in run('status', '--porcelain', '--untracked-files=no').splitlines() if l.strip()]
+            print(f"version_check: git {run('rev-parse', '--abbrev-ref', 'HEAD')} {head}"
+                  + (f", {len(dirty)} tracked file(s) modified" if dirty else ", clean"))
+    except Exception:
+        pass
+
+
 def check():
     if not os.path.exists(MAN):
         print("version_check: bfs/MANIFEST missing -- this checkout is older than the check (2026-10-02)")
@@ -66,12 +79,14 @@ def check():
             bad.append(f"different {path}")
     if not bad:
         print(f"version_check: code version {label}, {n} files consistent")
+        _git_line()
         return 0
     print(f"version_check: this checkout is NOT the code version {label}: {len(bad)} of {n} files differ")
     for b in bad:
         print("   " + b)
-    print("   (a file you edited on purpose: ALLOW_MODIFIED=1 sbatch ... runs anyway; see what differs with")
-    print("    tar xzf <package>.tar.gz -O codesign_bfs/<file> | diff - <file>; otherwise extract the package again)")
+    print("   (a file you edited on purpose: ALLOW_MODIFIED=1 sbatch ... runs anyway; in a git clone (bfs/home.sh)")
+    print("    git status / git diff show what differs and git pull brings the clone to one version; from a package:")
+    print("    tar xzf <package>.tar.gz -O codesign_bfs/<file> | diff - <file>, or extract the package again)")
     return 0 if os.environ.get('ALLOW_MODIFIED') == '1' else 1
 
 

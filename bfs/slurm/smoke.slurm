@@ -56,6 +56,7 @@ time $LAUNCHER -n 96 python bfs/bench_mumps.py --ops bfs/data/ops_fx.npz
 
 echo "=== 4. the test plant's certified range and poles (bfs/plant_cert.py), 24 ranks ==="
 time $LAUNCHER -n 24 python -u bfs/plant_cert.py --ops bfs/data/ops_coarse.npz
+bash bfs/data_stamp.sh write coarse      # bfs/data is shared across code versions (bfs/home.sh)
 
 echo "=== 5. one start end to end on the test plant, 24 ranks: feasible start, one round with gamma"
 echo "===    certified on [0, 10], the all-frequency winding count at the end ==="

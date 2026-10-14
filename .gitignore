@@ -11,3 +11,13 @@ cleanup_evidence/
 # BFS generated operators / meshes (bfs/ops_dolfinx.py, bfs/mesh_coarse.py)
 bfs/data/ops_*.npz
 bfs/data/coarse/
+
+# the cluster layout of bfs/home.sh (20261010h): symlinks into BFS_HOME, the report
+testplant_bfs
+results_bfs
+smoke_bfs
+logs
+bfs/data
+for_claude/
+.results_wt/
+.cache/

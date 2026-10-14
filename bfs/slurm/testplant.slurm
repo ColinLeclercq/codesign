@@ -117,9 +117,13 @@ until mkdir "$LOCKD" 2>/dev/null; do
     echo "=== waiting for another job to build the test plant's files ($(date -Is)) ==="; sleep 30
 done
 trap 'rmdir "$LOCKD" 2>/dev/null || true' EXIT
-if ! python -c "import numpy as np, sys; sys.exit(0 if 'shear_S_data' in np.load('$OPS').files else 1)" 2>/dev/null; then
-    echo "=== test plant operators (missing or without the shear trace) ==="
-    if ! python -c "import h5py, numpy as np; [h5py.File(f'bfs/data/coarse/{f}.h5', 'r') for f in ('mesh', 'facets')]; np.load('bfs/data/coarse/baseflow.npz')" 2>/dev/null; then
+# bfs/data is shared by every code version since 20261010h (bfs/home.sh): the
+# files are rebuilt when their generators changed (bfs/data_stamp.sh)
+STALE=0
+bash bfs/data_stamp.sh check coarse || STALE=1
+if [ "$STALE" = 1 ] || ! python -c "import numpy as np, sys; sys.exit(0 if 'shear_S_data' in np.load('$OPS').files else 1)" 2>/dev/null; then
+    echo "=== test plant operators (missing, without the shear trace, or built by other generators: bfs/data_stamp.sh) ==="
+    if [ "$STALE" = 1 ] || ! python -c "import h5py, numpy as np; [h5py.File(f'bfs/data/coarse/{f}.h5', 'r') for f in ('mesh', 'facets')]; np.load('bfs/data/coarse/baseflow.npz')" 2>/dev/null; then
         TMPD=bfs/data/.coarse.$$
         rm -rf "$TMPD"
         python bfs/mesh_coarse.py --out "$TMPD"
@@ -133,6 +137,7 @@ if [ ! -f bfs/data/ops_coarse_range.npz ]; then
     echo "=== the test plant's certified range and poles (bfs/plant_cert.py) ==="
     time $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/plant_cert.py --ops "$OPS"
 fi
+bash bfs/data_stamp.sh check coarse || bash bfs/data_stamp.sh write coarse
 rmdir "$LOCKD" 2>/dev/null || true
 trap - EXIT
 # NEVER delete a run (2026-10-06: CONTINUE=1, codesign.slurm's word, was not
