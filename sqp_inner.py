@@ -155,6 +155,7 @@ class Evaluator:
         self.lattice = lattice               # lattice.LatticeOracle: the full model on cached factors (BFS.md 5)
         self.lat_strip = True                # lattice: cover the strip (every eigenvalue near the line a row); off for trials
         self.level_req = None                # lattice: (gam, wlo, whi) -> the level-set certificate beside the evaluation
+        self.level_watch = None              # ... and its followed rows, (tol, [(top, sigma_1)]) (lattice._level, 20261010j)
         self.lat_info, self.lat_line, self.level_log = [], [], []
 
     def _ctrl_dirs(self):
@@ -298,7 +299,7 @@ class Evaluator:
         self.W = np.asarray(sorted(set(float(w) for w in W)), float)
         self.enroll = sorted(set(int(np.argmin(np.abs(self.W - f))) for f in enroll_freqs))
 
-    def missed_peaks(self, z, t, ws, tol):
+    def missed_peaks(self, z, t, ws, tol, rows=None):
         """A-N on the reduced model: sweep sigma_1 on `ws` at z (cheap on the
         oracle), return the local maxima above t (1 + tol) not yet in W.
         Lattice (full model): the LEVEL-SET certificate at gam = t (1 + tol) on
@@ -306,25 +307,37 @@ class Evaluator:
         on the axis, applied through the plant factors the rows use): either
         sigma_1 < gam everywhere, proven, or the regions above gam, each with a
         top estimate that joins as a new member (followed from then on) unless a
-        followed member or its top already watches it.  (2026-10-08/09: the
-        sweep of sigma_1 and its slope on 2^-5 missed peaks narrower than its
-        grid -- central 2x2, rounds 2 of 20261008c and 20261009b: tops at 1.6376
-        and 0.0656 next to fixed members, the rounds refused.)"""
+        followed row already watches it.  (2026-10-08/09: the sweep of sigma_1
+        and its slope on 2^-5 missed peaks narrower than its grid -- central
+        2x2, rounds 2 of 20261008c and 20261009b: tops at 1.6376 and 0.0656 next
+        to fixed members, the rounds refused.)  On the lattice the caller passes
+        t = max(t, smax) (20261010j, P1) and rows, the followed rows' (top,
+        sigma_1) at z (the evaluation's 'follow_rows')."""
         if self.lattice is not None:
-            # a top near a FIXED member is still new: the member's row sits on its
-            # own point and does not follow (central 2x2, 20261009b, round 2: the
-            # top at 0.0656 stood 5 % above t, 0.0008 from the fixed member 0.0664,
-            # and the round was refused); only followed members and their tops
-            # already watch a peak
-            near = [float(w_) for w_ in self.W if (self.follow or {}).get(round(float(w_), 6))] + \
-                list(self.w_star.values())
-            L = self.lattice.level(z, t * (1.0 + tol), float(ws[0]), float(ws[-1]))
-            out = [(w_, v_) for w_, v_ in L['cross'] if all(abs(w_ - q) > 1e-3 for q in near)]
+            # WATCHED BY VALUE (20261010j, missed-peaks.md P2): a region is watched
+            # only by a followed row within 1e-3 of it that reads at least its top
+            # estimate x (1 - tol) -- decided inside the level set (lattice._level),
+            # whose waves go on past the watched regions.  It was every region
+            # within 1e-3 of a followed member's BASE or of any top, whatever the
+            # row read there, and the call returned nothing when all were dropped
+            # (770632 round 11, by elimination: the rest of the band unexamined).
+            # A top near a FIXED member was and is new (20261009b: 0.0656 next to
+            # the fixed 0.0664, refused).
+            gam = t * (1.0 + tol)
+            L = self.lattice.level(z, gam, float(ws[0]), float(ws[-1]), watch=(tol, rows or []))
+            out = list(L['cross'])
+            oc = L.get('outcome', 'region' if L['cross'] else ('clear' if L['clear'] else 'inconclusive'))
             self.level_log.append(dict(shifts=L['shifts'], waves=L['waves'], clear=L['clear'], cross=len(L['cross']),
-                                       cg_max=L['cg_max'], pencil=L['pencil']))
-            self.refine_log.append(dict(t=float(t), ok=bool(L['clear'] or L['cross']), above=bool(out),
-                                        level_shifts=L['shifts'], level_waves=L['waves'],
-                                        uncovered=L['uncovered'], cross=[(round(w_, 6), v_) for w_, v_ in L['cross']]))
+                                       cg_max=L['cg_max'], pencil=L['pencil'], outcome=oc,
+                                       watched=len(L.get('watched') or [])))
+            # the decision, kept for the round's history (20261010j, P7: the round-11
+            # sequence of 770632 could only be inferred by elimination and replay)
+            self.refine_log.append(dict(t=float(t), gam=float(gam), outcome=oc, ok=bool(L['clear'] or L['cross']),
+                                        above=bool(out), level_shifts=int(L['shifts']), level_waves=int(L['waves']),
+                                        uncovered=float(L['uncovered']),
+                                        cross=[(round(float(w_), 6), round(float(v_), 6)) for w_, v_ in L['cross']],
+                                        watched=[(round(r_['w'], 6), round(r_['v'], 6), round(r_['by_w'], 6), round(r_['by_v'], 6))
+                                                 for r_ in (L.get('watched') or [])]))
             out.sort(key=lambda p_: -p_[1])
             return out
         if self.oracle is None:
@@ -398,11 +411,15 @@ class Evaluator:
             # the MPI ranks holding its factor; followed members by bracket and
             # refine (the row is an exact value at a lattice point); sigma_2
             # blocks at the row point.  The stability line in the same waves
+            # (followed members sharing a top: FOLLOW_DEDUP on the lattice too, 20261010j)
             s, Gs, blocks, _tops_l, _info_l, _lr_l = self.lattice.evaluate(
                 z, W, follow=self.follow, w_star=self.w_star, state=self.follow_state,
                 enroll=(self.enroll if self.kink_block else ()),
-                line=(self.eps, 0.0, float(getattr(D, 'stab_whi', 10.0))), strip=(self.lat_strip and LAT_STRIP), level=self.level_req)
+                line=(self.eps, 0.0, float(getattr(D, 'stab_whi', 10.0))), strip=(self.lat_strip and LAT_STRIP), level=self.level_req,
+                watch=self.level_watch, dedup=FOLLOW_DEDUP)
             self.lat_info.append(_info_l)
+            if self.follow:
+                self.n_dedup.append(int(_info_l.get('dedup', 0)))
         else:
             m = len(W)
             s = np.zeros(m); Gs = np.zeros((m, NZ))
@@ -806,8 +823,13 @@ class Evaluator:
                 lmi = None
         field_rows = self._field_rows(z) if FIELD_KMAX2 else []
         pos_rows = self._pos_rows(z)
+        # the followed rows' tops and values (lattice): what watches a level-set region (missed_peaks)
+        follow_rows = None
+        if self.lattice is not None:
+            follow_rows = [(float(self.w_star[round(float(w_), 6)]), float(s[i_])) for i_, w_ in enumerate(W)
+                           if (self.follow or {}).get(round(float(w_), 6)) and round(float(w_), 6) in self.w_star]
         return dict(s=s, Gs=Gs, smax=float(s.max()), blocks=blocks, tops=(dict(self.w_star) if DEBUG_LS else {}), field_rows=field_rows,
-                    pos_rows=pos_rows,
+                    pos_rows=pos_rows, follow_rows=follow_rows,
                     al=float(al), ga=ga, clr=bool(clr), al_rows=al_rows_qp, al_rows_all=al_rows,
                     al_ctrl=al_ctrl, al_ctrl_rest=al_ctrl_rest, ctrl_rows=ctrl_rows, lmi=lmi, hermite=hermite, pair=pair,
                     hermite_cl=hermite_cl, lat_eigs=lat_eigs, lat_strip=(self.lattice is None or self.lat_strip or not LAT_STRIP), z=z.copy())
@@ -1453,6 +1475,7 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         return float(ev_fn.w_star.get(round(w0_, 6), w0_))
 
     _alpha_prev = 1.0; _last_pair_mu = None
+    _lev_at = None                                        # (design, level) the strip arm's level set was asked at (P1)
 
     def _offender(e_, en_):
         # DIAGNOSTIC (2026-10-08, the cold central run: up to 131 of 156 trials of
@@ -1636,13 +1659,17 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         if not en.get('lat_strip', True):
             # the accepted trial with its strip (the QP's rows) and, in the same
             # waves, the level-set certificate the missed-peak check below asks
-            # for at this design and level (lattice memo)
-            ev_fn.level_req = ((tn * (1.0 + refine_tol), float(refine_grid[0]), float(refine_grid[-1]))
+            # for at this design and level (lattice memo).  The level from the
+            # rows' maximum, not the epigraph's t alone (20261010j, P1, below),
+            # the trial's own rows (the same design) watching
+            _lev_at = (zn.copy(), max(tn, en['smax']))
+            ev_fn.level_req = ((_lev_at[1] * (1.0 + refine_tol), float(refine_grid[0]), float(refine_grid[-1]))
                                if refine_tol is not None else None)
+            ev_fn.level_watch = (refine_tol, en.get('follow_rows') or []) if refine_tol is not None else None
             try:
                 en = ev_fn(zn)
             finally:
-                ev_fn.level_req = None
+                ev_fn.level_req = None; ev_fn.level_watch = None
         # damped BFGS on the Lagrangian
         subn, _ = subproblem(en, tn, H, Delta, eps, ctrl_max, kink_block,
                              disp=((zn - z_start, float(max_disp)) if max_disp is not None else None), pen=nu / 100.0, relax=lattice is not None)
@@ -1677,7 +1704,25 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             # set misses, then re-evaluate so the rows include them.  The full
             # certification outside is unchanged.  (Gap it closes: inner t
             # 8.7-9.0 against certified 10.0-10.7 with one frequency per round.)
-            mp = ev_fn.missed_peaks(z, t, refine_grid, refine_tol)[:refine_max]
+            # LEVEL AT THE ROWS' MAXIMUM (20261010j, missed-peaks.md P1).  After an
+            # accepted step t = t + alpha dt, which can lag the rows' maximum smax;
+            # at gam = t (1 + tol) the rows' own peaks stood above the level and the
+            # search stopped on them (filtered as watched) -- 770632 round 11, a
+            # design certified 4.6 % above t.  At max(t, smax) (1 + tol) no row's own
+            # peak is above gam: a region above is off the rows.  The lattice only
+            # (the reduced path's dense certificate computes the maximum itself).
+            # The strip arm asked for it above, from the trial's rows: the same
+            # design, so its level (to 1e-9) and its memo
+            _lev = t
+            if lattice is not None:
+                _lev = max(t, e['smax'])
+                if _lev_at is not None and np.array_equal(_lev_at[0], z) and _lev <= _lev_at[1] * (1.0 + 1e-9):
+                    _lev = _lev_at[1]
+            _lev_at = None
+            mp = ev_fn.missed_peaks(z, _lev, refine_grid, refine_tol, rows=e.get('follow_rows'))[:refine_max]
+            if lattice is not None and ev_fn.refine_log:
+                ev_fn.refine_log[-1].update(it=int(it), t_epi=float(t), smax=float(e['smax']),
+                                            added=[round(float(w_), 6) for w_, _ in mp])
             if mp:
                 enrolled_f = [float(ev_fn.W[i]) for i in ev_fn.enroll]
                 ev_fn.set_W(list(ev_fn.W) + [w for w, _ in mp], enrolled_f)
@@ -1802,22 +1847,33 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         # never hand back a design worse than the start: the exchange would
         # adopt it (it did: 211 -> 1019, then froze on it)
         best.update(g=np.inf, z=None, al=None, t=np.inf, clr=None)
+    _rows_best = {}
+    _ncalls_pre, _wall_pre = ev_fn.ncalls, time.time() - t_start      # the solve's own, as before (not the tops' evaluation)
+
     def _tops_at(zb):
-        ev_fn.w_star = {}; ev_fn(zb); return dict(ev_fn.w_star)
+        ev_fn.w_star = {}; e_b = ev_fn(zb)
+        _rows_best.update(W=[float(w_) for w_ in ev_fn.W], s=[float(v_) for v_ in e_b['s']])
+        return dict(ev_fn.w_star)
+    _w_star_best = _tops_at(best['z']) if (ev_fn.follow and best['z'] is not None) else {}
+    # which of those points are TOPS (lattice._newton's state: converged, or off the
+    # window's edges within 1e-4 of the top by Newton's own estimate): the
+    # round's end moves a member only onto a top (20261010j, P3; 770632 r11 moved the
+    # member onto the edge point 4.13125).  The reduced path keeps no such state: True
+    _w_top = {k_: bool(st_.get('top', True)) for k_, st_ in ev_fn.follow_state.items()} if _w_star_best else {}
     if verbose and pen_adapt:
         print(f"    sqp: penalty nu = {nu:.3g} at the end; {n_soc[0]} compensator correction(s), "
               f"{n_ctrl_cut[0]} trial(s) cut back inside the compensator's line"
               + (f", {n_stab_cut[0]} inside the closed loop's (lattice)" if lattice is not None else ''), flush=True)
-    stats = dict(iters=len(hist), fn_evals=ev_fn.ncalls, termination_code=code, exit_info=exit_info, certified_checks=code_cert,
+    stats = dict(iters=len(hist), fn_evals=_ncalls_pre, termination_code=code, exit_info=exit_info, certified_checks=code_cert,
                  nu_final=float(nu), ctrl_corrections=int(n_soc[0]), ctrl_cuts=int(n_ctrl_cut[0]), stab_cuts=int(n_stab_cut[0]),
                  stat_value=(hist[-1].get('stat') if hist else None),
-                 wall=time.time() - t_start, inner='sqp', kink_block=kink_block,
+                 wall=_wall_pre, inner='sqp', kink_block=kink_block,
                  ctrl_lmi=bool(ctrl_lmi), alpha_rows=ev_fn.n_alpha_rows, alpha_fallback=ev_fn.n_fallback,
                  trust_final=float(Delta), added_freqs=added, W_final=[float(w) for w in ev_fn.W], pair_log=pair_log, pair_mode_end=bool(ev_fn.pair_mode), z_last=[float(x) for x in z], e_last_al_ctrl=float(e["al_ctrl"]), e_last_al=float(e["al"]),
                  screen=(ev_fn.screen_stats[-1] if ev_fn.screen_stats else None),
                  refine_log=list(ev_fn.refine_log[-40:]), clblock_fail=int(ev_fn.n_clblock_fail),
                  sub_failures=list(sub_status_log),
-                 w_star=(_tops_at(best['z']) if (ev_fn.follow and best['z'] is not None) else {}),
+                 w_star=_w_star_best, w_top=_w_top, rows_best=(dict(_rows_best) if _rows_best else None),
                  n_blocks=len(e['blocks']), dedup=int(sum(ev_fn.n_dedup)), history=hist, path=path,
                  lattice=(dict(evaluations=len(ev_fn.lat_info), gain_evals=int(sum(i_['nev'] for i_ in ev_fn.lat_info)),
                                newton_max=int(max((i_['newton_max'] for i_ in ev_fn.lat_info), default=0)),
@@ -1833,6 +1889,13 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                                level_waves_max=int(max((l_['waves'] for l_ in ev_fn.level_log), default=0)),
                                level_calls=len(ev_fn.level_log),
                                level_not_clear=int(sum(not l_['clear'] and not l_['cross'] for l_ in ev_fn.level_log)),
+                               # calls whose regions were all watched by followed rows (P2; they used to end there,
+                               # silently: the '0 inconclusive' of 770632 r11 did not count them)
+                               level_watched=int(sum(l_.get('outcome') == 'watched' or (l_.get('watched') and not l_['cross'])
+                                                     for l_ in ev_fn.level_log)),
+                               follow_edge=int(sum(i_.get('edge', 0) for i_ in ev_fn.lat_info)),
+                               follow_edge_last=int(ev_fn.lat_info[-1].get('edge', 0)) if ev_fn.lat_info else 0,
+                               follow_ext=int(sum(i_.get('ext', 0) for i_ in ev_fn.lat_info)),
                                level_cg_max=int(max((l_['cg_max'] for l_ in ev_fn.level_log), default=0)),
                                level_pencil_max=int(max((l_['pencil'] for l_ in ev_fn.level_log), default=0)),
                                strip=bool(LAT_STRIP), cross_policy=LAT_CROSS, back=int(n_back[0]))

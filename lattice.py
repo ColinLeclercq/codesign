@@ -68,6 +68,10 @@ FOLLOW_FD = 1e-5     # finite-difference step for sigma'' when no secant curvatu
 FOLLOW_ITMAX = 8     # Newton steps per evaluation
 FOLLOW_TRUST = 0.05  # largest Newton step (and the step when the curvature is not negative)
 FOLLOW_HALVE = 3     # a Newton step and its halvings evaluated side by side (one wave); twice before giving up
+FOLLOW_EXTEND = 2    # a Newton stopped at its window's edge, the slope still pointing out: the window re-centred on the
+                     # point, at most this many times per evaluation (20261010j; 770632 round 11: the member based at the
+                     # 2^-5 grid point 4.03125 stopped exactly on its edge 4.13125, sigma 143.48, slope +284, while its
+                     # top 4.180605 stood at 151.4775 -- the round's SQP never saw it; missed-peaks.md P3)
 XCAP = 2             # factors of the exact (off-lattice) points kept per rank, apart from the lattice cache
 LINE_BASE_MIN = 4    # the line's base grid: ranks/2 equispaced centres, at least this many
 LINE_LMAX = 17       # finest centre spacing 2^-17 (7.6e-6, the serial certificate's eps_int 1e-5)
@@ -97,6 +101,8 @@ LEVEL_CG_TOL = 1e-12 # the inner CG on the plant factor (_level_disk): relative 
 LEVEL_CG_MAX = 200   # ... iterations at most
 LEVEL_IMAG = 1e-8    # a pencil eigenvalue with |Re| <= this x max(1, |lambda|) is ON the axis: a level crossing
 LEVEL_CONFIRM = 1e-6 # a crossing is confirmed where sigma_1 >= gam (1 - this) (certify_greater's sampling)
+LEVEL_WATCH_PAD = 1e-3  # a region a followed row watches is left out of the cover with this margin on each side (the
+                     # members' own spacing: a region within it of a watched one is that region; 20261010j, P2)
 TASK_COST = dict(row=1.0, value=1.0, slope=1.0, value2=2.0, block=2.0, centre=3.0,
                  rowx=1.0, slopex=1.0, blockx=2.0, level=10.0)   # relative costs of the requests
 LU_COST = 2.0        # ... and of a factorisation (balancing, LatticeOracle._assign)
@@ -528,7 +534,7 @@ def drop_task(t):
 
 
 # --------------------------------------------------------------------- driver
-def _newton(w0, rad, hint, st, real, R):
+def _newton(w0, rad, hint, st, real, R, kind='rowx'):
     """One followed peak by safeguarded Newton at EXACT frequencies (the reduced
     path's peakfollow.follow, on the full model, wave by wave): a generator that
     yields its requests and reads their results from R once the driver has
@@ -543,51 +549,97 @@ def _newton(w0, rad, hint, st, real, R):
     gradient -- no lattice, so no grid noise in the SQP's merit (2026-10-09: the
     bracket on the lattice left the row up to 1e-6 x sigma below the top, the
     point jumping between lattice points from one evaluation to the next).  The
-    points' factors go to the side cache (eval_task, _exact)."""
-    lo, hi = w0 - rad, w0 + rad
-    if real:
-        lo = max(lo, 0.0)
-    x = float(hint) if (hint is not None and lo <= float(hint) <= hi) else float(w0)
-    yield [('rowx', x)]
-    e = R[('rowx', x)]; n = 1
+    points' factors go to the side cache (eval_task, _exact).
+
+    The WINDOW (20261010j, missed-peaks.md P3) is the base +- rad, as before,
+    but it follows the top: where Newton stops at (within the trust step of) its
+    edge with the slope still pointing out (|sigma'| > FOLLOW_GTOL sigma), the
+    window is re-centred on the point and Newton continues, at most
+    FOLLOW_EXTEND times per evaluation (770632 round 11: from the 2^-5 grid
+    point 4.03125 the member stopped exactly on its edge 4.13125, sigma 143.48,
+    slope +284; from 4.13125 Newton climbs to the top 4.180605, 151.4775, in 15
+    evaluations).  A hint (the last top) outside the base window but within the
+    reach of the extensions starts the walk, the window centred on it; one
+    beyond restarts from the base.  A walk that never meets an edge is the one
+    of 20261010i, point for point.  The member's state records st['edge'] (the
+    last window's edge still stopped it), st['ext'] (re-centrings used) and
+    st['top'] (the point is a top: converged, or off the edges with Newton's
+    own distance to the top |sigma'/sigma''| below 1e-4 -- the round's end
+    moves a member only onto a top).  kind: the request of the
+    walk's points ('rowx': value, slope and gradient, a row; 'slopex': value
+    and slope, the certificate's peak locator, LatticeOracle.peak_tops)."""
+    def window(c):
+        lo_, hi_ = c - rad, c + rad
+        if real:
+            lo_ = max(lo_, 0.0)
+        return lo_, hi_
+    lo, hi = window(w0)
+    x = float(w0)
+    if hint is not None:
+        if lo <= float(hint) <= hi:
+            x = float(hint)
+        elif abs(float(hint) - w0) <= (1 + FOLLOW_EXTEND) * rad and (not real or float(hint) >= 0.0):
+            x = float(hint); lo, hi = window(x)       # the top walked out of the base window at an earlier evaluation
+    yield [(kind, x)]
+    e = R[(kind, x)]; n = 1
     g2 = st.get('g2')
     carried = g2 is not None
     trust = min(FOLLOW_TRUST, rad)
-    for _ in range(FOLLOW_ITMAX):
-        g1 = e['gprime']
-        if abs(g1) <= FOLLOW_GTOL * max(1.0, e['sigma']):
-            break
-        if g2 is None or not g2 < 0.0:
-            pts = [x + FOLLOW_FD, x - FOLLOW_FD]
-            yield [('slopex', p_) for p_ in pts]; n += 2
-            g2 = (R[('slopex', pts[0])]['gprime'] - R[('slopex', pts[1])]['gprime']) / (2.0 * FOLLOW_FD)
-            carried = False
-        stp = -g1 / g2 if (g2 < 0.0 and abs(g2) > 1e-16) else float(np.sign(g1)) * trust
-        stp = float(np.clip(stp, -trust, trust))
-        xt = None
-        for batch in range(2):
-            cands = [x + stp * 0.5 ** (k + batch * FOLLOW_HALVE) for k in range(FOLLOW_HALVE)]
-            cands = [c for c in cands if lo <= c <= hi and c != x]
-            if not cands:
-                continue
-            yield [('rowx', c) for c in cands]; n += len(cands)
-            ok = [c for c in cands if R[('rowx', c)]['sigma'] >= e['sigma']]
-            if ok:
-                xt = ok[0]
+    ext = 0
+    while True:
+        blocked = False
+        for _ in range(FOLLOW_ITMAX):
+            g1 = e['gprime']
+            if abs(g1) <= FOLLOW_GTOL * max(1.0, e['sigma']):
                 break
-        if xt is None:
-            if carried:
-                g2 = None; carried = False             # the carried curvature failed: one fresh FD attempt
-                continue
-            break
-        et = R[('rowx', xt)]
-        dx = xt - x
-        if abs(dx) > 1e-12:
-            g2s = (et['gprime'] - g1) / dx             # secant update of the curvature
-            g2 = g2s if g2s < 0.0 else None
-        x, e = xt, et
+            if g2 is None or not g2 < 0.0:
+                pts = [x + FOLLOW_FD, x - FOLLOW_FD]
+                yield [('slopex', p_) for p_ in pts]; n += 2
+                g2 = (R[('slopex', pts[0])]['gprime'] - R[('slopex', pts[1])]['gprime']) / (2.0 * FOLLOW_FD)
+                carried = False
+            stp = -g1 / g2 if (g2 < 0.0 and abs(g2) > 1e-16) else float(np.sign(g1)) * trust
+            stp = float(np.clip(stp, -trust, trust))
+            blocked = not (lo <= x + stp <= hi)            # the full step leaves the window
+            xt = None
+            for batch in range(2):
+                cands = [x + stp * 0.5 ** (k + batch * FOLLOW_HALVE) for k in range(FOLLOW_HALVE)]
+                cands = [c for c in cands if lo <= c <= hi and c != x]
+                if not cands:
+                    continue
+                yield [(kind, c) for c in cands]; n += len(cands)
+                ok = [c for c in cands if R[(kind, c)]['sigma'] >= e['sigma']]
+                if ok:
+                    xt = ok[0]
+                    break
+            if xt is None:
+                if carried:
+                    g2 = None; carried = False             # the carried curvature failed: one fresh FD attempt
+                    continue
+                break
+            et = R[(kind, xt)]
+            dx = xt - x
+            if abs(dx) > 1e-12:
+                g2s = (et['gprime'] - g1) / dx             # secant update of the curvature
+                g2 = g2s if g2s < 0.0 else None
+            x, e = xt, et
+        g1 = e['gprime']
+        conv = abs(g1) <= FOLLOW_GTOL * max(1.0, e['sigma'])
+        # stopped by the window: its last full step (at most a trust step) left the
+        # window -- not a top inside it that a step could not improve (a kink on the
+        # MIMO plateau); w = 0 is the band's own end on a real plant, not an edge
+        edge = (not conv) and blocked and not (real and lo <= 0.0 and x + stp < lo)
+        if edge and ext < FOLLOW_EXTEND:
+            ext += 1
+            lo, hi = window(x)
+            continue
+        break
     if g2 is not None and g2 < 0.0:
         st['g2'] = float(g2)
+    # a TOP: converged, or (not on an edge) Newton's own estimate of the distance to
+    # the top |sigma' / sigma''| within 1e-4, the tops' agreement tolerance (a kink of
+    # the MIMO plateau, where sigma_1 and sigma_2 cross, never reaches the slope test)
+    near = g2 is not None and g2 < 0.0 and abs(g1) <= 1e-4 * abs(g2)
+    st['edge'] = bool(edge); st['ext'] = int(ext); st['top'] = bool(conv or (near and not edge))
     return x, n
 
 
@@ -752,7 +804,8 @@ class LatticeOracle:
         return sum(o['miss'] for o in res.values()), sum(o['hit'] for o in res.values())
 
     # -------------------------------------------------------------- evaluation
-    def evaluate(self, z, W, follow=None, w_star=None, state=None, enroll=(), line=None, strip=True, level=None):
+    def evaluate(self, z, W, follow=None, w_star=None, state=None, enroll=(), line=None, strip=True, level=None,
+                 watch=None, dedup=False):
         """sigma_1 rows at every member of W and, with line = (eps, wlo, whi),
         the stability line and the strip -- in ONE sequence of waves: the first
         carries the fixed rows, every followed member's first Newton point, the
@@ -766,7 +819,19 @@ class LatticeOracle:
         strip = False: the line only (a line-search trial: its admissibility is
         the line's certificate; the rows the QP reads come from the iterate).
         level = (gam, wlo, whi): the level-set certificate (level()) in the same
-        waves, its result kept for the call of level() that asks for it."""
+        waves, its result kept for the call of level() that asks for it; watch:
+        its followed rows (level()).
+        dedup (20261010j, missed-peaks.md P4; the reduced path's FOLLOW_DEDUP,
+        STAGE5 29.2, on the lattice): (i) a member without a hint starts on the
+        nearest top of an earlier evaluation within half its radius only if no
+        member nearer to that top claims it -- the others start from their own
+        base (two members on one previous top ran identical chains and stayed
+        locked together: the 'sigma evaluations' outnumbered the tasks in every
+        20261010g no-strip run, eval-waves.md); (ii) members whose tops agree
+        within 1e-4 keep one, the one whose base is nearest, and the others
+        restart once from their own base, cold, in more waves; a restart back on
+        a shared top marks the member merged (state 'merged'), not restarted
+        again near that top (the round's end merges it)."""
         dz = self.design(z)
         follow = follow or {}
         w_star = {} if w_star is None else w_star
@@ -785,6 +850,20 @@ class LatticeOracle:
             return x, ('block' if blk else 'row'), 1
 
         agents = {}
+        claimed = None
+        if dedup and self.tops:
+            # (i): each earlier top to one member, the nearest by base
+            claim = {}
+            for i, w in enumerate(W):
+                k6 = round(float(w), 6)
+                rad = follow.get(k6)
+                if rad and w_star.get(k6) is None:
+                    q = min(self.tops, key=lambda x: abs(x - float(w)))
+                    if abs(q - float(w)) <= 0.5 * float(rad) and \
+                            (q not in claim or abs(float(w) - q) < abs(float(W[claim[q]]) - q)):
+                        claim[q] = i
+            claimed = {i: q for q, i in claim.items()}
+        cold = set()                                       # members whose walk starts from their own base
         for i, w in enumerate(W):
             k6 = round(float(w), 6)
             rad = follow.get(k6)
@@ -795,9 +874,14 @@ class LatticeOracle:
                 if hint is None and self.tops:
                     # a member placed at a top of an earlier evaluation (the
                     # round's end moves members there): start on that top
-                    q = min(self.tops, key=lambda x: abs(x - float(w)))
-                    if abs(q - float(w)) <= 0.5 * float(rad):
-                        hint = q
+                    if claimed is not None:
+                        hint = claimed.get(i)
+                    else:
+                        q = min(self.tops, key=lambda x: abs(x - float(w)))
+                        if abs(q - float(w)) <= 0.5 * float(rad):
+                            hint = q
+                if hint is None:
+                    cold.add(i)
             agents[i] = member(w, rad, hint, st, i in enroll)
         mk = lr = None
         if line is not None:
@@ -814,8 +898,50 @@ class LatticeOracle:
         if level is not None:
             lk = (dz['key'],) + tuple(float(v) for v in level)
             if lk not in self._level_memo:
-                agents['level'] = self._level(*lk[1:], R)
+                agents['level'] = self._level(*lk[1:], R, watch=watch)
         done, waves = self._drive(dz, agents, 'eval', R)
+        ndedup = nev_redo = 0
+        if dedup and follow:
+            # (ii): members on one top -- groups of tops within 1e-4 (Newton's tops
+            # agree to ~1e-6 on a flat peak, not 1e-9; the reduced path's rule)
+            ft = sorted((float(done[i][0]), i) for i in range(len(W)) if follow.get(round(float(W[i]), 6)))
+            groups, g_ = [], []
+            for tp, i in ft:
+                if g_ and tp - g_[-1][0] > 1e-4:
+                    groups.append(g_); g_ = []
+                g_.append((tp, i))
+            if g_:
+                groups.append(g_)
+            redo = []
+            for g_ in groups:
+                if len(g_) < 2:
+                    continue
+                tp = g_[0][0]
+                keep = min(g_, key=lambda q_: abs(float(W[q_[1]]) - tp))[1]
+                for _, i in g_:
+                    k6 = round(float(W[i]), 6)
+                    if i == keep or abs(float(W[i]) - tp) <= 1e-3:
+                        continue                           # the member at the top itself
+                    if i in cold:
+                        state[k6]['merged'] = tp           # its own base's walk came here: merged already
+                    elif abs(state[k6].get('merged', np.inf) - tp) > 5e-3:
+                        redo.append(i)
+            if redo:
+                ag2 = {}
+                for i in redo:
+                    k6 = round(float(W[i]), 6)
+                    st_new = {k_: v_ for k_, v_ in state[k6].items() if k_ == 'merged'}
+                    state[k6] = st_new                     # cold: no carried curvature either
+                    nev_redo += done[i][2]
+                    ag2[i] = member(W[i], follow[k6], None, st_new, i in enroll)
+                done2, waves2 = self._drive(dz, ag2, 'eval', R)
+                waves += waves2
+                for i in redo:
+                    done[i] = done2[i]
+                    x_ = float(done2[i][0])
+                    if any(abs(x_ - tp) <= 1e-4 for tp, _ in ft):
+                        state[round(float(W[i]), 6)]['merged'] = x_    # back on a shared top
+                ndedup = len(redo)
         if 'level' in done:
             self._level_memo[lk] = done['level']
             while len(self._level_memo) > 4:
@@ -831,7 +957,9 @@ class LatticeOracle:
             self.tops = {}
         NZ = len(self.pk.z0())
         s = np.zeros(m); Gs = np.zeros((m, NZ)); blocks = {}; tops = {}
-        info = dict(nev=0, newton_max=0, waves=waves)
+        # edge: followed members whose last window's edge still stopped them (FOLLOW_EXTEND used up);
+        # ext: window re-centrings; dedup: members restarted from their own base (P4 (ii))
+        info = dict(nev=nev_redo, newton_max=0, waves=waves, edge=0, ext=0, dedup=ndedup)
         grad = lambda g_: np.asarray(self.pk.grad(g_), float)
         for i in range(m):
             x, kind, nev = done[i]
@@ -842,6 +970,7 @@ class LatticeOracle:
                 w_star[k6] = float(x); tops[k6] = float(x)
                 self.tops[float(x)] = None
                 info['newton_max'] = max(info['newton_max'], nev)
+                info['edge'] += int(bool(state[k6].get('edge'))); info['ext'] += int(state[k6].get('ext', 0))
             if i in enroll:
                 B = r['block']
                 Gc = np.zeros((2, 2, NZ), complex)
@@ -867,6 +996,21 @@ class LatticeOracle:
         if k == 1:
             return np.array([R[q]['sigma'] for q in reqs])
         return np.array([(R[q]['sigma'], R[q]['sigma2']) for q in reqs]).reshape(len(ws), 2)
+
+    def peak_tops(self, z, ws, rad):
+        """The tops of the peaks whose grid maxima are ws (20261010j, missed-
+        peaks.md P6): each located by the followed members' Newton (_newton, value
+        and slope only: 'slopex'), all side by side in one sequence of waves,
+        window w +- rad and its re-centrings.  The certificate's peaks used to be
+        enrolled at their 2^-5 grid points (k/32: 4.03125 in 770632), so a new
+        member's window sat off its top by up to a grid step -- one of the two
+        causes of the round-11 edge stop.  Returns [(top, sigma_1 there)], each
+        at least its grid point's value (Newton accepts only ascent)."""
+        dz = self.design(z)
+        R = {}
+        agents = {i: _newton(float(w), float(rad), None, {}, self.real, R, kind='slopex') for i, w in enumerate(ws)}
+        done, _ = self._drive(dz, agents, 'locate', R)
+        return [(float(done[i][0]), float(R[('slopex', done[i][0])]['sigma'])) for i in range(len(ws))]
 
     def grid(self, wlo, whi, level=None):
         """The lattice points of `level` in [wlo, whi]."""
@@ -956,42 +1100,71 @@ class LatticeOracle:
                     nshift=nshift, waves=waves, uncovered=uncovered)
 
     # --------------------------------------------------------------- level set
-    def level(self, z, gam, wlo, whi):
+    def level(self, z, gam, wlo, whi, watch=None):
         """Is sigma_1 < gam on all of [wlo, whi]?  The level-set certificate of
         certify_sparse.certify_greater on the lattice (in-solve missed peaks;
         user, 2026-10-09: the 321-point sweep saw a peak only where it rose above
         a grid point).  Returns dict(clear, cross, shifts, waves, uncovered,
-        cg_max): cross lists (w, sigma_1) for each region above gam found (a top
-        estimate; empty when clear)."""
+        cg_max, pencil, watched, outcome): cross lists (w, sigma_1) for each
+        region above gam found that no followed row watches (a top estimate;
+        empty when clear); watched the regions a followed row does (_level).
+        watch = (tol, [(w, sigma_1)]): the followed rows' tops and values at
+        this design.  A call that finds the result computed beside an evaluation
+        (evaluate(level=...): the same design and level) returns it."""
         dz = z if isinstance(z, dict) else self.design(z)
         lk = (dz['key'], float(gam), float(wlo), float(whi))
         if lk in self._level_memo:
             return self._level_memo[lk]                    # computed beside an evaluation (evaluate(level=...))
         R = {}
-        done, _ = self._drive(dz, {0: self._level(*lk[1:], R)}, 'level', R)
+        done, _ = self._drive(dz, {0: self._level(*lk[1:], R, watch=watch)}, 'level', R)
         return done[0]
 
-    def _level(self, gam, wlo, whi, R):
+    def _level(self, gam, wlo, whi, R, watch=None):
         """The level set's waves, as the line's (_line): the centres that
         covered the band at the last call (their factors held) or, at the first
         call, the base grid (ranks/2 equispaced axis points), then centres in the
-        gaps, until the band
-        is covered -- sigma_1 < gam everywhere, since the band holds a point
-        below gam (every row is at most t < gam) and no disk holds a crossing --
-        or a centre has sigma_1 >= gam (a region above, found directly), or a
-        pencil eigenvalue lies on the axis.  Such a crossing (sigma_j = gam
-        at Im lambda) is confirmed by sigma_1 there (one wave, exact points); an
-        upward and the next downward crossing bracket one region above gam, whose
-        top the cubic Hermite fit on their values and slopes estimates.  An
-        unconfirmed one (an eigenvalue just off the axis) is passed over, its
-        neighbourhood then left to the finest level."""
+        gaps, until the band is covered -- sigma_1 < gam everywhere, since every
+        disk is centred at a point below gam (a centre at or above gam has none)
+        and holds no crossing -- or a region above gam is found that no followed
+        row watches.  A region is seen directly (centres with sigma_1 >= gam) or
+        through its crossings: a pencil eigenvalue on the axis is a crossing
+        sigma_j = gam at Im lambda, confirmed by sigma_1 there (one wave, exact
+        points); an unconfirmed one (an eigenvalue just off the axis) is passed
+        over, its neighbourhood then left to the finest level.  In w order, an
+        upward crossing or a centre above gam opens a region, a downward
+        crossing or a centre below gam closes it (_regions); its top estimate is
+        its highest centre or the cubic Hermite fit on its bracketing pair.
+
+        20261010j (missed-peaks.md P2).  (i) Every wave's crossings are looked at
+        before the search stops: it used to stop at the first wave in which a
+        centre stood above gam, so a region visible only through its crossings
+        (the 4.18 peak of 770632 round 11: crossings at 4.13598 and 4.22189 from
+        the pencil disks of centres 3.617-4.894, no centre above) was never
+        reported beside it.  (ii) 'Watched' is judged by value, not distance: a
+        region is watched only where a followed row within 1e-3 of it (of the
+        extent its crossings and centres show; a top estimate from the Hermite
+        fit or a centre can sit 0.002-0.02 off the top: 0.13443 for the top at
+        0.132094 at gam = 143.70 on the 770632 design) reads at least its top
+        estimate x (1 - tol) (watch = (tol, [(w, sigma_1)]), the rows' tops and
+        values at this design).  A followed
+        member's base, or a row on a lower neighbouring top or on its window's
+        edge, watches nothing (BFS.md 8, 20261009b: the distance filter already
+        bit once with a fixed member; 770632 r11: the region was dropped while
+        the row near it read 143.48 against 151.48).  (iii) When every region of
+        a wave is watched, the waves go on over the rest of the band, the
+        watched regions left out of the cover with LEVEL_WATCH_PAD on each side
+        (the search used to return nothing there, the rest of the band
+        unexamined); the result is then 'watched' (clear outside them) or
+        'inconclusive'."""
         hmin = 2.0 ** -LINE_LMAX
+        wtol, wrows = (float(watch[0]), list(watch[1] or [])) if watch is not None else (0.0, [])
         # the first wave: the last call's cover where there is one (86 centres
         # on the central record: with the base grid as well, 130 tasks for 96
         # ranks, two rounds of 5-8 s pencil disks), else the base grid
         cent = sorted(c for c in self.level_prev if wlo - 1e-12 <= c <= whi + 1e-12) or self.base_grid(wlo, whi)
         done = {}
-        waves = 0; nshift = 0; spurious = set(); cross = []
+        waves = 0; nshift = 0; spurious = set(); conf = {}
+        cross, watched, excl = [], [], []
         while cent and waves < LINE_WAVES:
             waves += 1
             reqs = [('level', float(th), gam) for th in cent]
@@ -999,46 +1172,36 @@ class LatticeOracle:
             for q in reqs:
                 done[q[1]] = R[q]
             nshift += len(cent)
-            # a centre itself above gam: a region above, sigma_1 its own witness --
-            # one per run of consecutive centres above gam (the highest), not
-            # every centre of a wide region (the central record below its level:
-            # 15 centres above gam in 8 regions)
-            run = []
-            for th, c in sorted(done.items()) + [(None, None)]:
-                if c is not None and c['sigma'] >= gam:
-                    run.append((float(th), float(c['sigma'])))
-                elif run:
-                    cross.append(max(run, key=lambda q_: q_[1])); run = []
-            if cross:
-                break
             on = []
+            known = list(conf) + list(spurious)
             for w_ in sorted(float(l_.imag) for c in done.values() for l_ in c['lams']
                              if abs(l_.real) <= LEVEL_IMAG * max(1.0, abs(l_)) and wlo - 1e-12 <= l_.imag <= whi + 1e-12):
                 # one crossing seen from several centres: its Im agrees to ~1e-10, not to
                 # the digit (the SISO record 641.71 gave the region at 1.581 three times)
                 if (not on or w_ - on[-1] > 1e-8 * max(1.0, abs(w_))) and \
-                        all(abs(w_ - q_) > 1e-8 * max(1.0, abs(w_)) for q_ in spurious):
+                        all(abs(w_ - q_) > 1e-8 * max(1.0, abs(w_)) for q_ in known):
                     on.append(w_)
             if on:
                 yield [('slopex', w_) for w_ in on]
-                ok = [(w_, R[('slopex', w_)]) for w_ in on if R[('slopex', w_)]['sigma'] >= gam * (1.0 - LEVEL_CONFIRM)]
-                spurious |= set(w_ for w_ in on if w_ not in dict(ok))
-                j = 0
-                while j < len(ok):
-                    (wa, ea) = ok[j]
-                    if j + 1 < len(ok) and ea['gprime'] > 0.0 > ok[j + 1][1]['gprime']:
-                        wb, eb = ok[j + 1]
-                        wt, ft, _ = _hermite_top(wa, wb, ea['sigma'], eb['sigma'], ea['gprime'], eb['gprime'])
-                        cross.append((float(wt), float(max(ft, ea['sigma'], eb['sigma']))))
-                        j += 2
+                for w_ in on:
+                    if R[('slopex', w_)]['sigma'] >= gam * (1.0 - LEVEL_CONFIRM):
+                        conf[w_] = R[('slopex', w_)]
                     else:
-                        cross.append((float(wa), float(ea['sigma'])))
-                        j += 1
-                if cross:
-                    break
-            cent = self._fill(done, self._gaps(done, wlo, whi), hmin)
+                        spurious.add(w_)
+            cross, watched = [], []
+            for rg in self._regions(done, conf, gam):
+                by = [(w_, v_) for w_, v_ in wrows if rg['lo'] - 1e-3 <= w_ <= rg['hi'] + 1e-3 and v_ >= rg['v'] * (1.0 - wtol)]
+                if by:
+                    watched.append(dict(rg, by=max(by, key=lambda q_: q_[1])))
+                else:
+                    cross.append((rg['w'], rg['v']))
+            if cross:
+                break
+            excl = [(rg['lo'] - LEVEL_WATCH_PAD, rg['hi'] + LEVEL_WATCH_PAD) for rg in watched]
+            cent = self._fill(done, self._minus(self._gaps(done, wlo, whi), excl), hmin)
             if self.verbose:
-                print(f"      level wave {waves}: {nshift} shifts so far, {len(cent)} new centre(s)", flush=True)
+                print(f"      level wave {waves}: {nshift} shifts so far, {len(cent)} new centre(s)"
+                      + (f", {len(watched)} watched region(s) left out" if watched else ''), flush=True)
         # one top per region: estimates within 1e-3 of a higher one are the same
         # region (the members' own spacing in missed_peaks)
         kept = []
@@ -1046,13 +1209,79 @@ class LatticeOracle:
             if all(abs(w_ - k_[0]) > 1e-3 for k_ in kept):
                 kept.append((w_, v_))
         cross = kept
-        gaps = self._gaps(done, wlo, whi)
+        gaps = self._minus(self._gaps(done, wlo, whi), excl if not cross else [])
         uncovered = float(sum(b_ - a_ for a_, b_ in gaps))
         if not cross:
             self.level_prev = sorted(self._cover(done, wlo, whi))
-        return dict(clear=bool(not cross and uncovered <= 0.0), cross=cross, shifts=nshift, waves=waves,
+        clear = bool(not cross and uncovered <= 0.0)
+        outcome = 'region' if cross else ('inconclusive' if not clear else ('watched' if watched else 'clear'))
+        return dict(clear=clear, cross=cross, shifts=nshift, waves=waves,
                     uncovered=uncovered, cg_max=max((c['cg_max'] for c in done.values()), default=0),
-                    pencil=int(sum(c['pencil'] for c in done.values())))
+                    pencil=int(sum(c['pencil'] for c in done.values())), outcome=outcome,
+                    watched=[dict(w=float(r_['w']), v=float(r_['v']), lo=float(r_['lo']), hi=float(r_['hi']),
+                                  by_w=float(r_['by'][0]), by_v=float(r_['by'][1])) for r_ in watched])
+
+    @staticmethod
+    def _regions(done, conf, gam):
+        """The regions above gam the level set's waves show so far (_level):
+        done its centres (sigma_1 each), conf its confirmed crossings (w ->
+        sigma_1 and slope there).  In w order an upward crossing (slope > 0) or a
+        centre above gam opens a region, a downward crossing or a centre below
+        gam closes it.  Each: dict(w, v) the top estimate (the highest centre,
+        or the cubic Hermite fit on the bracketing pair, whichever is higher; a
+        lone crossing its own point), (lo, hi) the extent seen."""
+        pts = sorted([(float(th), 0, c) for th, c in done.items()] + [(float(w_), 1, e_) for w_, e_ in conf.items()],
+                     key=lambda p_: (p_[0], p_[1]))
+        out, cur = [], None
+        for w_, kind, o in pts:
+            if kind == 0:
+                if o['sigma'] >= gam:
+                    if cur is None:
+                        cur = dict(lo=w_, hi=w_, up=None, dn=None, cen=[])
+                    cur['cen'].append((w_, float(o['sigma']))); cur['hi'] = w_
+                elif cur is not None:
+                    out.append(cur); cur = None
+            elif o['gprime'] > 0.0:
+                if cur is not None:
+                    out.append(cur)
+                cur = dict(lo=w_, hi=w_, up=(w_, o), dn=None, cen=[])
+            else:
+                if cur is None:
+                    cur = dict(lo=w_, hi=w_, up=None, dn=None, cen=[])
+                cur['dn'] = (w_, o); cur['hi'] = w_
+                out.append(cur); cur = None
+        if cur is not None:
+            out.append(cur)
+        res = []
+        for rg in out:
+            cands = list(rg['cen'])
+            if rg['up'] is not None and rg['dn'] is not None:
+                (wa, ea), (wb, eb) = rg['up'], rg['dn']
+                wt, ft, _ = _hermite_top(wa, wb, ea['sigma'], eb['sigma'], ea['gprime'], eb['gprime'])
+                cands.append((float(wt), float(max(ft, ea['sigma'], eb['sigma']))))
+            elif not cands:
+                q_ = rg['up'] if rg['up'] is not None else rg['dn']
+                cands.append((float(q_[0]), float(q_[1]['sigma'])))
+            w_, v_ = max(cands, key=lambda c_: c_[1])
+            res.append(dict(w=w_, v=v_, lo=float(rg['lo']), hi=float(rg['hi'])))
+        return res
+
+    @staticmethod
+    def _minus(gaps, excl):
+        """The gaps of a cover without the intervals excl (the watched regions)."""
+        out = list(gaps)
+        for a_, b_ in excl:
+            nxt = []
+            for c_, d_ in out:
+                if d_ <= a_ or c_ >= b_:
+                    nxt.append((c_, d_))
+                    continue
+                if c_ < a_:
+                    nxt.append((c_, a_))
+                if d_ > b_:
+                    nxt.append((b_, d_))
+            out = nxt
+        return out
 
     # ------------------------------------------------------------------- strip
     def _strip(self, eps, wlo, whi, d, R):

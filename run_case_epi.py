@@ -1454,13 +1454,15 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
     _peak_ref = nsw <= 0 and ro_ is not None and ro_.dim > 0
     if nsw <= 0 and not _peak_ref:
         nsw = 241                      # no reduced model yet: the frozen reference
+    _lat_lev = None                    # the lattice reference sweep's level (its peaks then located at their tops)
     if getattr(certified_norm, 'sampled', 0) and not _peak_ref:
         ws, gs = cands, vals           # BFS sampled mode: its grid is the reference (no 241-point sweep)
     elif not _peak_ref and getattr(certified_norm, 'lattice', None) is not None:
         # --oracle lattice: the reference sweep on lattice points of 2^-SWEEP_LEVEL
         import lattice as _lt
         _lc = certified_norm.lattice
-        ws = _lc.grid(wlo, whi, _lt.SWEEP_LEVEL if _lt.SWEEP_LEVEL > 0 else 5)
+        _lat_lev = _lt.SWEEP_LEVEL if _lt.SWEEP_LEVEL > 0 else 5
+        ws = _lc.grid(wlo, whi, _lat_lev)
         gs = _lc.sigmas(z, ws)
     elif not _peak_ref:
         ws = np.linspace(wlo, whi, nsw)
@@ -1488,6 +1490,24 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
         i = np.arange(1, len(gs) - 1)
         loc = i[(gs[i] >= gs[i - 1]) & (gs[i] >= gs[i + 1])]
         peaks = _enrol_peaks(ws, gs, None, rel=float(getattr(certified_norm, 'enroll_rel', 0.0)))
+        if _lat_lev is not None and peaks:
+            # AT THEIR TOPS on the lattice too (20261010j, missed-peaks.md P6): each
+            # grid maximum located by the followed members' Newton (value and slope,
+            # window one grid step either side, all side by side) -- the reduced
+            # path's golden section of 2026-09-22 had been lost here, and members
+            # were enrolled at grid points k/32 (4.03125 in 770632, whose top stood
+            # 0.15 away when its window ran out a round later).  Tops within 1e-3 of
+            # a higher one, or of the witness, are that peak.
+            _pt0 = _lc.peak_tops(z, peaks, 2.0 ** -_lat_lev)
+            _pt = sorted(_pt0, key=lambda q_: -q_[1])
+            _kp = []
+            for _x, _v in _pt:
+                if all(abs(_x - q_) > 1e-3 for q_ in _kp) and not (w is not None and np.isfinite(w) and abs(_x - float(w)) <= 1e-3):
+                    _kp.append(float(_x))
+            print(f"    certificate peaks at their tops: {len(peaks)} grid maxima, moved by up to "
+                  f"{max(abs(x_ - p_) for (x_, _), p_ in zip(_pt0, peaks)):.4f}; {len(_kp)} distinct "
+                  f"(none within 1e-3 of the witness)", flush=True)
+            peaks = _kp
     # STAGE 5: the sweep is 241 full-model evaluations already paid for; the
     # projected oracle compares itself against it to decide where to anchor
     certified_norm.last_sweep = (ws.copy(), gs.copy())
@@ -3283,6 +3303,7 @@ def main():
     gbest, zbest, albest = g0, z.copy(), None
     _wind_best = None       # (design, acceptance-time winding count right of -eps) of the best design
     _allw_best = None       # (design, level, acceptance-time all-w certificate) of the best design
+    _t_best = None          # the SQP's t, smax and rows at the best design's round (the record's activity vs t, 20261010j)
     # ---- continuation anchor ----
     # The whole stability argument is a chain: stable start, then no crossing
     # on any accepted step.  The chain is only as good as its anchor, so the
@@ -3794,7 +3815,13 @@ def main():
                           + f"; {_cr['full_step']} at a full step", flush=True)
                 print(f"    lattice: level set {_li['level_calls']} call(s), up to {_li['level_shifts_max']} shifts "
                       f"({_li['level_pencil_max']} with pencil eigenvalues, the rest norm disks) / {_li['level_waves_max']} "
-                      f"waves, {_li['level_not_clear']} inconclusive, inner CG up to {_li['level_cg_max']} iterations", flush=True)
+                      f"waves, {_li['level_not_clear']} inconclusive, {_li.get('level_watched', 0)} on watched regions "
+                      f"only, inner CG up to {_li['level_cg_max']} iterations", flush=True)
+                # the followed members' windows (P3) and shared tops (P4), 20261010j
+                print(f"    lattice: followed members: {_li.get('follow_ext', 0)} window re-centring(s), "
+                      f"{_li.get('follow_edge', 0)} stop(s) on a window's edge after them "
+                      f"({_li.get('follow_edge_last', 0)} at the last evaluation); "
+                      f"{inner_stats.get('dedup', 0)} restart(s) from their own base (shared tops)", flush=True)
             # STALL RECOVERY (2026-09-25): a solve that ended on a collapsed radius
             # (code 6) or with failed subproblems hands its quasi-Newton matrix and
             # radius to the next round no more.  The ne=100 K+B+C run sat at
@@ -3875,10 +3902,40 @@ def main():
             _bb_, _cc_, *_ = D.bc(_xa_, _xs_, _va_, _vs_)
             _rcf = _ro.make_cl(_bb_, _cc_, D.r, D.mc) if _ro is not None else None
             _wst = inner_stats.get('w_star') or {}
-            _moved = 0; _newO = set(Omega)
+            _wtop = inner_stats.get('w_top') or {}
+            _moved = 0; _newO = set(Omega); _nottop = 0; _shared = 0; _dropped = set()
+            if _rcf is None:
+                # MEMBERS TRULY ON ONE TOP (lattice, 20261010j, missed-peaks.md P4): the
+                # tops at the candidate (after the solve's dedup restarts) agreeing within
+                # 1e-4 are one peak -- one member keeps it (a peak member, followed next
+                # round, before an in-solve addition, which would be a fixed row; then
+                # the one whose base is nearest), the others leave Omega.  The 1e-3 merge
+                # below never caught them: a member whose top lies within 1e-3 of another
+                # member is not moved (eval-waves.md).  Every member followed in the
+                # solve counts (the in-solve additions too: they have tops in w_star)
+                _grp = sorted((round(float(_wst[round(float(_w), 6)]), 6), round(float(_w), 6), _w) for _w in Omega
+                              if round(float(_w), 6) in _wst and _wtop.get(round(float(_w), 6), True))
+                _g = []
+                for _tp, _k, _w in _grp + [(np.inf, None, None)]:
+                    if _g and _tp - _g[-1][0] > 1e-4:
+                        if len(_g) > 1:
+                            _kw = min(_g, key=lambda q_: (q_[1] not in _peakset, abs(q_[1] - q_[0])))[1]
+                            for _, _k2, _w2 in _g:
+                                if _k2 != _kw:
+                                    _newO.discard(_w2); _peakset.discard(_k2); _dropped.add(_k2); _shared += 1
+                        _g = []
+                    _g.append((_tp, _k, _w))
             for _w in list(_follow_dict):
+                if round(float(_w), 6) in _dropped:
+                    continue                                   # on another member's top: dropped just above
                 if _rcf is None:
                     _ws = _wst.get(round(float(_w), 6), _w)
+                    if not _wtop.get(round(float(_w), 6), True):
+                        # NOT A TOP (P3): stopped on a window's edge or still climbing --
+                        # never a member's new place (770632 r11 moved the member onto the
+                        # edge point 4.13125, slope +284); it stays where it is
+                        _nottop += 1
+                        continue
                 else:
                     _ws, _ = _follow(_rcf, _w, _aa_, _nn_, _KK_, float(a.follow_radius))
                 _ws = round(float(_ws), 6)
@@ -3896,8 +3953,10 @@ def main():
                 _merged.append(_q)
             _nmerge = len(_newO) - len(_merged)
             Omega = _merged
-            if _moved or _nmerge:
-                print(f"    peak-following: {_moved} member(s) moved to their tops, {_nmerge} merged", flush=True)
+            if _moved or _nmerge or _shared or _nottop:
+                print(f"    peak-following: {_moved} member(s) moved to their tops, {_nmerge} merged"
+                      + (f", {_shared} on another member's top dropped" if _shared else '')
+                      + (f", {_nottop} not at a top (edge or slope) left in place" if _nottop else ''), flush=True)
         # BUNDLE-STYLE STEP GOVERNOR (proximity control, Apkarian-Noll).  In
         # the proximity-control bundle method the parameter tau bounds the
         # trial step and is the load-bearing piece of the convergence theory;
@@ -4390,6 +4449,10 @@ def main():
                 gbest_cert, zbest_cert = float(g), zc.copy()
         if improved:
             gbest, zbest, albest = g, zc.copy(), float(al_c)
+            if best.get('z') is not None and np.array_equal(np.asarray(best['z'], float), zc):
+                _t_best = dict(z=zc.copy(), t=float(best['t']), smax=float(best['g']), rows=(inner_stats or {}).get('rows_best'))
+            else:
+                _t_best = None                              # the step was clipped: not the SQP's design
             _wind_best = (zbest.copy(), _wind_done) if (_wind_done is not None and _wind_done.get('ok') and _wind_done.get('count') == 0) else None
             _aw = getattr(certified_norm, 'last_all_w', None)
             _allw_best = (zbest.copy(), float(g), dict(_aw)) if (_aw and _aw.get('ok')) else None
@@ -4460,11 +4523,24 @@ def main():
                 trust = max(trust * 0.4, 0.02)
         newf = [x for x in ([w] + peaks)
                 if all(abs(x - q) > 1e-3 for q in Omega)]
+        _excess = None
         if np.isfinite(g) and np.isfinite(best['t']) and g > best['t'] * (1.0 + 10 * a.rtol):
-            # REFUSAL DIAGNOSIS (2026-09-22): where the certificate's witness sits
-            # relative to Omega, and whether its nearest member was a followed peak
+            # EXCESS DIAGNOSIS (2026-09-22, as 'refusal:'): where the certificate's
+            # witness sits relative to Omega, and whether its nearest member was a
+            # followed peak.  20261010j (missed-peaks.md P7): not a refusal -- all
+            # eight such rounds of 20261010g were accepted, they only gained less
+            # than claimed -- and two different things: 't lag' when the rows knew
+            # the value (certified within 1e-6 of the SQP's smax, best['g']: the
+            # epigraph t lagged its rows), 'missed peak' when the certified value
+            # exceeds smax (1 + tol), tol the in-solve level set's (--sqp-refine),
+            # 'within tol' in between.  Greppable words, the line otherwise as before.
             _Oa = np.asarray(Omega, float); _jn = int(np.argmin(np.abs(_Oa - w))); _wn = float(_Oa[_jn])
-            print(f"    refusal: witness w={w:+.4f} (certified {g:.6f} vs t {best['t']:.6f}); nearest member "
+            _sm = float(best.get('g', np.nan))
+            _tolx = float(a.sqp_refine) if a.sqp_refine > 0 else 10 * a.rtol
+            _excess = ('t lag' if np.isfinite(_sm) and g <= _sm * (1.0 + 1e-6) else
+                       ('missed peak' if (not np.isfinite(_sm) or g > _sm * (1.0 + _tolx)) else 'within tol'))
+            print(f"    {_excess}: witness w={w:+.4f} (certified {g:.6f} vs t {best['t']:.6f}, smax {_sm:.6f}: "
+                  f"certified/smax - 1 = {g / _sm - 1.0:+.2e}); nearest member "
                   f"{_wn:+.4f} (distance {abs(_wn - w):.4f}), "
                   f"{'FOLLOWED peak' if round(_wn, 6) in _peakset else 'NOT a peak member'}", flush=True)
         _last_peaks = [float(w)] + [float(x) for x in peaks]
@@ -4504,6 +4580,12 @@ def main():
             _oracle_log[-1].update(sweep_max_rel=_sweep_anchor(zc))
         hist.append(dict(outer=it, inner_calls=ncalls, trust=float(trust), gamma_certified=float(g),
                          gamma_best=float(gbest), t=float(best['t']),
+                         # the SQP's own maximum of its rows at the returned design, and what the
+                         # certificate's excess over t was (20261010j, P7); the in-solve level-set
+                         # decisions (last 40: level, outcome, regions, watching rows, additions)
+                         smax=(float(best['g']) if best.get('g') is not None and np.isfinite(best['g']) else None),
+                         excess=_excess,
+                         refine_log=(inner_stats or {}).get('refine_log'),
                          nOmega=len(Omega), added=len(newf),
                          # stage-0 instrumentation, cheap enough to be always
                          # on: these come from the pyGRANSO solution object,
@@ -4563,7 +4645,7 @@ def main():
                     _lu_prev = _luc.snapshot()
             except Exception as _e:
                 print(f"    dump failed: {type(_e).__name__}: {_e}", flush=True)
-        print(f"  outer {it}: |Omega|={len(Omega)}  t={best['t']:.6f}  "
+        print(f"  outer {it}: |Omega|={len(Omega)}  t={best['t']:.6f}  smax={best['g']:.6f}  "
               f"certified={g:.6f}  best={gbest:.6f}  "
               f"(+{len(newf)} freq, {ncalls} calls)", flush=True)
         if a.field_basis != 'none' or a.field_atoms:       # STAGE5 32: the fields' shape, every round
@@ -5034,6 +5116,38 @@ def main():
         _i = np.arange(1, len(gain) - 1)
         _loc = _i[(gain[_i] >= gain[_i - 1]) & (gain[_i] >= gain[_i + 1])]
         nact = int(np.count_nonzero(gain[_loc] >= gain.max() * (1 - 2e-3))) if _loc.size else 1
+    # ACTIVITY RELATIVE TO t, END POINTS INCLUDED (20261010j; omega-growth.md P5,
+    # missed-peaks.md P7).  n_active (kept as it was) counts INTERIOR grid maxima
+    # within 2e-3 of the curve's maximum: 770632's record read 1 (one excursion at
+    # 1.045 t over a plateau of 8 ripple tops at 0.99-1.0 t), 770629's 0 (its
+    # maximum sits at the end point w = 0).  Here: the grid's local maxima with
+    # the end points, within 2e-3 of gamma and of the SQP's t at the best design's
+    # round, and the rows within 1e-3 / 1e-2 of that t.
+    active = None
+    try:
+        _gn = np.asarray(gain, float); _wsn = np.asarray(ws, float)
+        _j = np.arange(len(_gn))
+        _lm = _j[((_j == 0) | (_gn >= np.roll(_gn, 1))) & ((_j == len(_gn) - 1) | (_gn >= np.roll(_gn, -1)))]
+        active = dict(grid_max_w=[round(float(x), 6) for x in _wsn[_lm[np.argsort(-_gn[_lm])][:12]]],
+                      grid_max_v=[round(float(x), 6) for x in np.sort(_gn[_lm])[::-1][:12]],
+                      n_gamma=int(np.count_nonzero(_gn[_lm] >= gam * (1 - 2e-3))),
+                      ends=[round(float(_gn[0]), 6), round(float(_gn[-1]), 6)])
+        if _t_best is not None and np.array_equal(_t_best['z'], zbest):
+            _tt = float(_t_best['t'])
+            active.update(t=_tt, smax=float(_t_best['smax']),
+                          n_t=int(np.count_nonzero(_gn[_lm] >= _tt * (1 - 2e-3))))
+            _rb = _t_best.get('rows')
+            if _rb and _rb.get('s'):
+                _sv = np.asarray(_rb['s'], float)
+                active.update(rows_1e3=int(np.count_nonzero(_sv >= _tt * (1 - 1e-3))),
+                              rows_1e2=int(np.count_nonzero(_sv >= _tt * (1 - 1e-2))), rows=int(_sv.size))
+        print(f"activity: {active['n_gamma']} grid maxima (end points included) within 0.2 % of gamma"
+              + (f", {active['n_t']} of t = {active['t']:.6f}" if 't' in active else '')
+              + (f"; rows within 0.1 % / 1 % of t: {active['rows_1e3']} / {active['rows_1e2']} of {active['rows']}"
+                 if 'rows' in active else '')
+              + f"; sigma at the band's ends {active['ends'][0]:.6f}, {active['ends'][1]:.6f}", flush=True)
+    except Exception as _e:
+        active = dict(error=f"{type(_e).__name__}: {str(_e)[:60]}")
     gam = max(gam, gbest)
     # DENSE ALL-FREQUENCY CHECK (STAGE6 6.7) -- check only, like the dense save
     # veto on alpha.  The loop certifies gamma over its band; the band follows the
@@ -5182,7 +5296,7 @@ def main():
                 sym=bool(a.sym),
                 sym_branch=(float(flags.get('sym_branch', 1.0))
                             if a.sym else None),
-                n_active=int(nact),
+                n_active=int(nact), active=active,
                 calls=int(sum(h['inner_calls'] for h in hist)),
                 # What stopped the inner solve, recorded so a reader can tell a
                 # reproducible row from one the clock decided.  A row with
