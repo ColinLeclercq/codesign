@@ -3,6 +3,9 @@
 Short by design: one line per item, current state only. The history -- what was
 tried, measured, reverted and why -- is in STAGE0-6.md (by date and section), the
 row-by-row log in TRACKER.md, the code removals in CLEANUP.md.
+**Before proposing or building anything, search LESSONS.md** (2026-10-14): every
+negative result, bug and rule from all these files in one place, by topic, with its
+sources and an evidence tag; its section 17 is the refactor inventory.
 
 **Where the plan comes from.** The stages 0-7 are in `HANDOFF_implementation.md`
 section 5 (the upload of 2026-09-07; TRACKER.md section A mirrors them). The items
