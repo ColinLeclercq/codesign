@@ -20,9 +20,10 @@ set -eo pipefail
 cd "$SLURM_SUBMIT_DIR"
 mkdir -p logs
 source ./env.sh
+python bfs/version_check.py || { echo "*** mixed code versions (bfs/version_check.py): stop"; exit 1; }
 LAUNCHER=${LAUNCHER:-mpiexec}
 [ -n "${REC:-}" ] || { echo "check_lattice.slurm: set REC=record.npz"; exit 2; }
-ARGS=("$REC" --ops "${OPS:-bfs/data/ops_coarse.npz}" --cap "${LATTICE_CAP:-24}")
+ARGS=("$REC" --ops "${OPS:-$(python bfs/plant_id.py --dir coarse)/ops_coarse.npz}" --cap "${LATTICE_CAP:-24}")
 [ -n "${MIMO:-}" ] && ARGS+=(--mimo $MIMO)
 [ "${LEVEL_REF:-1}" = 1 ] && ARGS+=(--level-ref)
 time $LAUNCHER -n "${SLURM_NTASKS:-96}" python -u tools/check_lattice.py "${ARGS[@]}"

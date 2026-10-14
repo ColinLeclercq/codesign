@@ -48,6 +48,13 @@ FLOOR_X0 = 2.0                         # the floor y = 0 starts at the end of th
 POS_MARGIN = 0.05                      # centres / windows this far inside (BFS.md 2; --bfs-margin)
 
 
+
+# The version of the certified range and pole data (range_data, plant_poles,
+# bfs/mfree.py, sparse_spectrum.py): part of the plant files' id
+# (bfs/plant_id.py), so a change of how they are computed makes new files
+# instead of reusing the cached ones.  Bump it with every such change.
+RANGE_VERSION = 1
+
 class BFSPlant(FECoDesign):
     pos_dims = {'a': 2, 's': 1}      # actuator centre (x, y); sensor window start x_s
     real_plant = True

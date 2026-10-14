@@ -100,16 +100,27 @@ NAME=$(printf "%s_%03d" "$KIND" "$IDX")
 RUN=$OUT/${KIND}${SUF}_$(printf "%03d" "$IDX")
 echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none} (array ${SLURM_ARRAY_JOB_ID:-}_$IDX)  $(date -Is) ==="
 echo "=== python: $(command -v python) ($(python -V 2>&1)); start $NAME (seed $SEED, order $R) -> $RUN ==="
-[ -f bfs/data/ops_fx.npz ] || { echo "*** bfs/data/ops_fx.npz missing: run bfs/slurm/smoke.slurm first"; exit 1; }
-[ -f bfs/data/ops_fx_range.npz ] || { echo "*** bfs/data/ops_fx_range.npz missing: run bfs/slurm/plant_cert.slurm first"; exit 1; }
-# bfs/data is shared by every code version (bfs/home.sh): files made by other
-# generators are refused (rerun smoke.slurm step 1 and plant_cert.slurm; STAMP_OK=1 runs anyway)
-bash bfs/data_stamp.sh check fx || [ "${STAMP_OK:-0}" = 1 ] || { echo "*** bfs/data/ops_fx*.npz were built by other generators (bfs/data_stamp.sh): rebuild them, or STAMP_OK=1"; exit 1; }
+# the full mesh's plant files: their content-id directory (bfs/plant_id.py,
+# 20261010j), made by smoke.slurm (operators) and plant_cert.slurm (range, poles)
+PD=$(python bfs/plant_id.py --dir fx)
+OPS=$PD/ops_fx.npz
+[ -f "$OPS" ] || { echo "*** $OPS missing: run bfs/slurm/smoke.slurm first (this code's plant id)"; exit 1; }
+[ -f "$PD/ops_fx_range.npz" ] || { echo "*** $PD/ops_fx_range.npz missing: run bfs/slurm/plant_cert.slurm first"; exit 1; }
+source bfs/lib.sh
 post() {      # the figures and data of the saved record (bfs/postproc.py, BFS.md 7)
-    timeout 3600 $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/postproc.py --ops bfs/data/ops_fx.npz --rec "$RUN/$TAG.npz" \
+    timeout 3600 $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/postproc.py --ops "$OPS" --rec "$RUN/$TAG.npz" \
         || echo "*** postproc failed (the record is saved; rerun: sbatch the same array)"
 }
 CONT=()
+# the run directories are shared by every code version (bfs/home.sh): a
+# checkpoint left by ANOTHER version is not resumed silently (the STAGE0 17.1
+# rule): RESUME=1 (or CONTINUE=1) says so; every job notes its version in
+# RUN/code_versions.txt
+VER=$(sed -n 's/^# version //p' bfs/MANIFEST)
+if [ -f "$RUN/${TAG}_ckpt.npz" ] && [ -f "$RUN/code_versions.txt" ] && [ "${RESUME:-0}" != 1 ] && [ "${CONTINUE:-0}" != 1 ] \
+        && [ "$(tail -1 "$RUN/code_versions.txt" | awk '{print $2}')" != "$VER" ]; then
+    echo "*** $RUN holds a checkpoint of code version $(tail -1 "$RUN/code_versions.txt" | awk '{print $2}'), this is $VER: RESUME=1 resumes it"; exit 1
+fi
 if [ -f "$RUN/$TAG.json" ] && [ ! -f "$RUN/${TAG}_ckpt.npz" ]; then
     if [ "${CONTINUE:-0}" = "1" ]; then
         echo "start $NAME finished: CONTINUE=1, OUTER more rounds from its record"
@@ -123,11 +134,14 @@ fi
 # the catalogue is deterministic in (SEED, NSTART): every array task draws the
 # same set into its own directory and takes its own entry
 mkdir -p "$RUN"
-python bfs/hifoo_init.py --ops bfs/data/ops_fx.npz --n "$NSTART" --seed "$SEED" --kind "$KIND" --r "$R" --m "$M" --p "$P" --struct "$STRUCT" --out "$RUN/catalogue" > "$RUN.catalogue.json"
+run_lock "$RUN" || exit 1
+trap 'drop_lock "$RUN/.job.lockd"' EXIT
+echo "$(date -Is) $VER $(git rev-parse --short HEAD 2>/dev/null || echo -) ${SLURM_JOB_ID:-none}" >> "$RUN/code_versions.txt"
+python bfs/hifoo_init.py --ops "$OPS" --n "$NSTART" --seed "$SEED" --kind "$KIND" --r "$R" --m "$M" --p "$P" --struct "$STRUCT" --out "$RUN/catalogue" > "$RUN.catalogue.json"
 # the deadline from the job's own end time (any --time): 45 min kept after the
 # driver's last round for the figures, on top of its own 30 min for the final
 # certificate and count (bfs/slurm_remaining.py)
-export OPS=bfs/data/ops_fx.npz OUTER=${OUTER:-40} DEADLINE=${DEADLINE:-$(python bfs/slurm_remaining.py --reserve 2700)} PY=python
+export OPS OUTER=${OUTER:-40} DEADLINE=${DEADLINE:-$(python bfs/slurm_remaining.py --reserve 2700)} PY=python
 export LAUNCH="$LAUNCHER -n ${SLURM_NTASKS:-24}"
 bash bfs/run_bfs.sh "$RUN" "$RUN/catalogue/$NAME.npz" "${CONT[@]}"
 # the figures: made by the driver itself (--post 1); a bounded second launch only if missing

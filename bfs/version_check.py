@@ -47,17 +47,46 @@ def write(label):
     print(f"{MAN}: {len(rows)} files, version {label}")
 
 
-def _git_line():
-    """The commit, when the code directory is a git clone (bfs/home.sh, 20261010h)."""
+def _git(*a):
+    """git output, or None when git fails (no repository, no git)."""
     try:
-        run = lambda *a: subprocess.run(['git', *a], cwd=ROOT, capture_output=True, text=True, timeout=20).stdout.strip()
-        head = run('rev-parse', '--short', 'HEAD')
-        if head:
-            dirty = [l for l in run('status', '--porcelain', '--untracked-files=no').splitlines() if l.strip()]
-            print(f"version_check: git {run('rev-parse', '--abbrev-ref', 'HEAD')} {head}"
-                  + (f", {len(dirty)} tracked file(s) modified" if dirty else ", clean"))
+        r = subprocess.run(['git', '--no-optional-locks', *a], cwd=ROOT, stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL, universal_newlines=True, timeout=20)
+        return r.stdout.strip() if r.returncode == 0 else None
     except Exception:
-        pass
+        return None
+
+
+def _git_line():
+    """The commit, when the code directory is a git clone or worktree (bfs/home.sh, 20261010i)."""
+    head = _git('rev-parse', '--short', 'HEAD')
+    if not head:
+        return
+    st = _git('status', '--porcelain', '--untracked-files=no')
+    where = _git('rev-parse', '--abbrev-ref', 'HEAD')
+    print(f"version_check: git {where} {head}"
+          + (", git status failed" if st is None else
+             (f", {len([l for l in st.splitlines() if l.strip()])} tracked file(s) modified" if st else ", clean")))
+
+
+def _main_clone_under_home():
+    """True when this is the MAIN clone of a BFS_HOME layout (bfs/stage.sh): jobs
+    are submitted from the per-version worktrees BFS/v/<version>, never from
+    the clone that git pull updates (20261010j)."""
+    gd, cd = _git('rev-parse', '--absolute-git-dir'), _git('rev-parse', '--git-common-dir')
+    if not gd or not cd:
+        return False
+    cd = os.path.abspath(os.path.join(ROOT, cd)) if not os.path.isabs(cd) else cd
+    if os.path.realpath(gd) != os.path.realpath(cd):
+        return False                     # a linked worktree
+    d = ROOT
+    while True:
+        if os.path.isfile(os.path.join(d, '.bfs_home')):
+            return True
+        up = os.path.dirname(d)
+        if up == d:
+            return False
+        d = up
 
 
 def check():
@@ -80,6 +109,10 @@ def check():
     if not bad:
         print(f"version_check: code version {label}, {n} files consistent")
         _git_line()
+        if _main_clone_under_home() and os.environ.get('ALLOW_CLONE') != '1':
+            print("version_check: this is the git clone that git pull updates: submit from its per-version worktree")
+            print("   (bash bfs/stage.sh prints it; ALLOW_CLONE=1 runs here anyway)")
+            return 1
         return 0
     print(f"version_check: this checkout is NOT the code version {label}: {len(bad)} of {n} files differ")
     for b in bad:

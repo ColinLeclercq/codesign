@@ -24,11 +24,9 @@ mkdir -p logs
 source ./env.sh
 python bfs/version_check.py || { echo "*** mixed code versions (bfs/version_check.py): stop"; exit 1; }
 LAUNCHER=${LAUNCHER:-mpiexec}
-OPS=${OPS:-bfs/data/ops_fx.npz}
+OPS=${OPS:-$(python bfs/plant_id.py --dir fx)/ops_fx.npz}     # this code's plant id (bfs/plant_id.py)
 echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none}  $(date -Is)  ops $OPS ==="
 [ -f "$OPS" ] || { echo "*** $OPS missing: run bfs/slurm/smoke.slurm first"; exit 1; }
 time $LAUNCHER -n "${SLURM_NTASKS:-48}" python -u bfs/plant_cert.py --ops "$OPS" --eps 0.05
 ls -la "${OPS%.npz}"_range*.npz
-# the stamp of the shared plant files (bfs/data_stamp.sh, bfs/home.sh)
-case "$OPS" in bfs/data/ops_fx.npz) bash bfs/data_stamp.sh write fx ;; bfs/data/ops_coarse.npz) bash bfs/data_stamp.sh write coarse ;; esac
 echo "=== done $(date -Is) ==="

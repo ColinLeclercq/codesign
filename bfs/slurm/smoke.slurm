@@ -41,30 +41,48 @@ LAUNCHER=${LAUNCHER:-mpiexec}
 python -c "import clarabel, qdldl, matplotlib" || { echo "*** clarabel / qdldl / matplotlib missing: run bash bfs/setup_cluster.sh on the login node"; exit 1; }
 
 echo "=== 1. operators (dolfinx, nsforms.py) ==="
-# always rebuilt (seconds): the file format grows with the code (the shear trace
-# and the stiffness were added on 2026-10-02); a stale range cache goes with it
-python bfs/ops_dolfinx.py --data bfs/archive_dsr/fx_data --baseflow baseflow_fenicsx.npz --out bfs/data/ops_fx.npz
-[ -f bfs/data/coarse/mesh.xdmf ] || python bfs/mesh_coarse.py
-python bfs/ops_dolfinx.py --data bfs/data/coarse --baseflow baseflow.npz --out bfs/data/ops_coarse.npz
-rm -f bfs/data/ops_coarse_range*.npz
+# into their content-id directories (bfs/plant_id.py, 20261010j): built once
+# per id (seconds), never rebuilt in place -- the id changes with the
+# generators, so a new file format makes a new directory -- under the build
+# lock of bfs/lib.sh, written under private names and renamed whole
+source bfs/lib.sh
+export HDF5_USE_FILE_LOCKING=FALSE
+PDF=$(python bfs/plant_id.py --dir fx); PDC=$(python bfs/plant_id.py --dir coarse)
+OPSF=$PDF/ops_fx.npz; OPSC=$PDC/ops_coarse.npz
+mkdir -p "$PDF" "$PDC"
+echo "=== plant files: $PDF, $PDC ==="
+take_lock "$PDF/.build.lockd" "full mesh operators"
+[ -f "$OPSF" ] || { python bfs/ops_dolfinx.py --data bfs/archive_dsr/fx_data --baseflow baseflow_fenicsx.npz --out "$PDF/.ops.$$.npz"; mv "$PDF/.ops.$$.npz" "$OPSF"; }
+drop_lock "$PDF/.build.lockd"
+take_lock "$PDC/.build.lockd" "test plant's files"
+if [ ! -f "$PDC/coarse/mesh.xdmf" ]; then
+    rm -rf "$PDC/.coarse.$$"; python bfs/mesh_coarse.py --out "$PDC/.coarse.$$"
+    [ -e "$PDC/coarse" ] && mv "$PDC/coarse" "$PDC/.coarse.broken.$$"
+    mv "$PDC/.coarse.$$" "$PDC/coarse"
+fi
+[ -f "$OPSC" ] || { python bfs/ops_dolfinx.py --data "$PDC/coarse" --baseflow baseflow.npz --out "$PDC/.ops.$$.npz"; mv "$PDC/.ops.$$.npz" "$OPSC"; }
 
 echo "=== 2. gains vs the archive (MUMPS) ==="
 time python bfs/check_gains.py --omegas 0.75 2.0
 
 echo "=== 3. MUMPS, 96 ranks at once, n = 191,720 ==="
-time $LAUNCHER -n 96 python bfs/bench_mumps.py --ops bfs/data/ops_fx.npz
+time $LAUNCHER -n 96 python bfs/bench_mumps.py --ops "$OPSF"
 
 echo "=== 4. the test plant's certified range and poles (bfs/plant_cert.py), 24 ranks ==="
-time $LAUNCHER -n 24 python -u bfs/plant_cert.py --ops bfs/data/ops_coarse.npz
-bash bfs/data_stamp.sh write coarse      # bfs/data is shared across code versions (bfs/home.sh)
+[ -f "$PDC/ops_coarse_range.npz" ] || time $LAUNCHER -n 24 python -u bfs/plant_cert.py --ops "$OPSC"
+drop_lock "$PDC/.build.lockd"
 
 echo "=== 5. one start end to end on the test plant, 24 ranks: feasible start, one round with gamma"
 echo "===    certified on [0, 10], the all-frequency winding count at the end ==="
-python bfs/hifoo_init.py --ops bfs/data/ops_coarse.npz --n 1 --seed 0 --out smoke_bfs/starts
-export OPS=bfs/data/ops_coarse.npz OUTER=1 LAUNCH="$LAUNCHER -n 24" PY=python
-time bash bfs/run_bfs.sh smoke_bfs/run smoke_bfs/starts/hifoo_000.npz
+# its own directory per job (smoke_bfs is shared by every code version since
+# 20261010i: a previous version's record must not be re-validated)
+SM=smoke_bfs/$(sed -n 's/^# version //p' bfs/MANIFEST)_${SLURM_JOB_ID:-$$}
+echo "=== -> $SM ==="
+python bfs/hifoo_init.py --ops "$OPSC" --n 1 --seed 0 --out "$SM/starts"
+export OPS=$OPSC OUTER=1 LAUNCH="$LAUNCHER -n 24" PY=python
+time bash bfs/run_bfs.sh "$SM/run" "$SM/starts/hifoo_000.npz"
 
 echo "=== 6. its figures (bfs/postproc.py), 24 ranks: singular values with/without control, modes, Bode ==="
-time $LAUNCHER -n 24 python -u bfs/postproc.py --ops bfs/data/ops_coarse.npz --rec smoke_bfs/run/K_B_C_s0_bfs.npz
-ls smoke_bfs/run/K_B_C_s0_bfs_post
+time $LAUNCHER -n 24 python -u bfs/postproc.py --ops "$OPSC" --rec "$SM/run/K_B_C_s0_bfs.npz"
+ls "$SM/run/K_B_C_s0_bfs_post"
 echo "=== smoke test done $(date -Is) ==="

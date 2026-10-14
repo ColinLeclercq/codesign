@@ -95,50 +95,42 @@ fi
 NAME=$(printf "%s_%03d" "$KIND" "$IDX")
 TAG=K_B_C_s0_bfs                                       # the driver's record name
 if [ "$MIMO" = 1 ]; then TAG=K_B_C_s0_bfs_mimo${M}x${P}_${STRUCT}; fi
-OPS=bfs/data/ops_coarse.npz
-echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none}  $(date -Is)  $KIND start $IDX, ${M}x${P} $([ "$MIMO" = 1 ] && echo "$STRUCT "), order $R, $OUTER rounds -> $OUT ==="
-python -c "import clarabel, qdldl, matplotlib" || { echo "*** clarabel / qdldl / matplotlib missing: run bash bfs/setup_cluster.sh on the login node"; exit 1; }
-# The plant's files are built once per code directory, by the first job that
-# needs them; the others WAIT (2026-10-08: jobs 765560-765562, submitted
-# together into a fresh directory, built bfs/data/coarse at the same time and
-# corrupted each other's mesh.h5 -- "file signature not found").  The lock is a
-# DIRECTORY (mkdir is atomic on a shared file system, across nodes; flock was
-# node-local on sator and job 766730 hit the same error behind it), taken over
-# when older than 3 h (a job killed while holding it).  Each file is written
-# under a private name and renamed into place whole, so a reader never sees a
-# half-written mesh or operator file.
+# The test plant's files (mesh, operators, certified range and poles) live in
+# a directory named by their content id (bfs/plant_id.py, 20261010j): built
+# once per id, never rebuilt in place, shared by every code version with the
+# same generators (BFS_HOME/data/coarse-<id>, bfs/home.sh), and a version with
+# other generators gets its own directory.  The builder holds a lock directory
+# (mkdir is atomic on the shared file system, across nodes; 2026-10-08: jobs
+# 765560-765562 built the same files at once and corrupted mesh.h5; 766730:
+# flock was node-local) with its job id in it (bfs/lib.sh: a dead owner's
+# lock is taken over, a live one waited for).  Each file is written under a
+# private name and renamed into place whole.
+source bfs/lib.sh
 export HDF5_USE_FILE_LOCKING=FALSE
-mkdir -p bfs/data
-LOCKD=bfs/data/.build.lockd
-until mkdir "$LOCKD" 2>/dev/null; do
-    if [ -n "$(find "$LOCKD" -maxdepth 0 -mmin +180 2>/dev/null)" ]; then
-        echo "=== stale build lock (older than 3 h) taken over ==="; rmdir "$LOCKD" 2>/dev/null || true; continue
-    fi
-    echo "=== waiting for another job to build the test plant's files ($(date -Is)) ==="; sleep 30
-done
-trap 'rmdir "$LOCKD" 2>/dev/null || true' EXIT
-# bfs/data is shared by every code version since 20261010h (bfs/home.sh): the
-# files are rebuilt when their generators changed (bfs/data_stamp.sh)
-STALE=0
-bash bfs/data_stamp.sh check coarse || STALE=1
-if [ "$STALE" = 1 ] || ! python -c "import numpy as np, sys; sys.exit(0 if 'shear_S_data' in np.load('$OPS').files else 1)" 2>/dev/null; then
-    echo "=== test plant operators (missing, without the shear trace, or built by other generators: bfs/data_stamp.sh) ==="
-    if [ "$STALE" = 1 ] || ! python -c "import h5py, numpy as np; [h5py.File(f'bfs/data/coarse/{f}.h5', 'r') for f in ('mesh', 'facets')]; np.load('bfs/data/coarse/baseflow.npz')" 2>/dev/null; then
-        TMPD=bfs/data/.coarse.$$
+PD=$(python bfs/plant_id.py --dir coarse)
+OPS=$PD/ops_coarse.npz
+mkdir -p "$PD"
+echo "=== test plant files: $PD ==="
+LOCKD=$PD/.build.lockd
+take_lock "$LOCKD" "test plant's files"
+trap 'drop_lock "$LOCKD"' EXIT
+if ! python -c "import numpy as np, sys; sys.exit(0 if 'shear_S_data' in np.load('$OPS').files else 1)" 2>/dev/null; then
+    echo "=== test plant operators (missing or without the shear trace) ==="
+    if ! python -c "import h5py, numpy as np; [h5py.File(f'$PD/coarse/{f}.h5', 'r') for f in ('mesh', 'facets')]; np.load('$PD/coarse/baseflow.npz')" 2>/dev/null; then
+        TMPD=$PD/.coarse.$$
         rm -rf "$TMPD"
         python bfs/mesh_coarse.py --out "$TMPD"
-        rm -rf bfs/data/coarse && mv "$TMPD" bfs/data/coarse
+        [ -e "$PD/coarse" ] && mv "$PD/coarse" "$PD/.coarse.broken.$$"
+        mv "$TMPD" "$PD/coarse"
     fi
-    python bfs/ops_dolfinx.py --data bfs/data/coarse --baseflow baseflow.npz --out "bfs/data/.ops.$$.npz"
-    mv "bfs/data/.ops.$$.npz" "$OPS"
-    rm -f bfs/data/ops_coarse_range*.npz
+    python bfs/ops_dolfinx.py --data "$PD/coarse" --baseflow baseflow.npz --out "$PD/.ops.$$.npz"
+    mv "$PD/.ops.$$.npz" "$OPS"
 fi
-if [ ! -f bfs/data/ops_coarse_range.npz ]; then
+if [ ! -f "$PD/ops_coarse_range.npz" ]; then
     echo "=== the test plant's certified range and poles (bfs/plant_cert.py) ==="
     time $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/plant_cert.py --ops "$OPS"
 fi
-bash bfs/data_stamp.sh check coarse || bash bfs/data_stamp.sh write coarse
-rmdir "$LOCKD" 2>/dev/null || true
+drop_lock "$LOCKD"
 trap - EXIT
 # NEVER delete a run (2026-10-06: CONTINUE=1, codesign.slurm's word, was not
 # read here, and the directory of a 12.5 h run was started over): RESUME=1 or
@@ -164,6 +156,11 @@ else
     mkdir -p "$OUT"
     python bfs/hifoo_init.py --ops "$OPS" --n "$NSTART" --seed "$SEED" --kind "$KIND" --r "$R" --m "$M" --p "$P" --struct "$STRUCT" --out "$OUT/starts" > "$OUT/starts.json"
 fi
+# one driver per run directory (bfs/lib.sh run_lock; the directories are
+# shared by every code version since 20261010i)
+run_lock "$OUT" || exit 1
+trap 'drop_lock "$OUT/.job.lockd"' EXIT
+echo "$(date -Is) $(sed -n 's/^# version //p' bfs/MANIFEST) $(git rev-parse --short HEAD 2>/dev/null || echo -) ${SLURM_JOB_ID:-none}" >> "$OUT/code_versions.txt"
 # the deadline from the job's own end time (any --time): no round starts that
 # would not end, 5 min kept for the figures (bfs/slurm_remaining.py)
 export DEADLINE=${DEADLINE:-$(python bfs/slurm_remaining.py --reserve 300)}
