@@ -1,0 +1,50 @@
+{
+ "rec": "/tmp_user/sator/cleclerc/BFS/20261010g/codesign_bfs/testplant_bfs/zero_o10_lat_s0_r300/run/K_B_C_s0_bfs.npz",
+ "n": 33593,
+ "band": [
+  0.0,
+  10.0
+ ],
+ "nfreq": 315,
+ "gamma_record": 554.9696357664119,
+ "peak_open": {
+  "omega": 0.74,
+  "sigma": [
+   1463.8688220460972,
+   32.60347198527213,
+   24.947719900192787
+  ]
+ },
+ "peak_closed": {
+  "omega": 0.137722,
+  "sigma": [
+   554.9696357659986,
+   36.17915728458888,
+   24.801498937137534
+  ]
+ },
+ "closed_over_gamma": 0.9999999999992554,
+ "vec_omega": [
+  0.74,
+  0.137722,
+  0.3,
+  1.5
+ ],
+ "sigma1_vec_open": [
+  1463.8688220460965,
+  174.86966647364096,
+  531.979149653323,
+  347.2591027531005
+ ],
+ "sigma1_vec_closed": [
+  545.6817315849912,
+  554.9696357659988,
+  546.2124599425616,
+  503.9400194651487
+ ],
+ "seconds": {
+  "curves": 12.0,
+  "vectors": 2.1
+ },
+ "pool": "full-model pool (96 workers): 1887 tasks in 99 calls, 7193.7 s of task time in 753.4 s wall (x9.55; on 11 / 23 / 95 workers ~874.0 / 781.4 / 736.1 s)"
+}

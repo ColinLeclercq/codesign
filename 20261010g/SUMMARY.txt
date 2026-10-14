@@ -1,0 +1,449 @@
+report 2026-10-14T09:23:53+02:00 from /tmp_user/sator/cleclerc/BFS/20261010g/codesign_bfs
+version_check: code version 20261010g, 66 files consistent
+jobs still queued or running:
+
+================ logs/bfs_testplant_770564.log (2026-10-13 14:01:26)
+=== host n946  job 770564  2026-10-13T13:42:22+02:00  zero start 0, 1x1 , order 10, 300 rounds -> testplant_bfs/zero_o10_lat_s0_r300 ===
+[2026-10-13T14:01:21.916] error: *** STEP 770564.0 ON n946 CANCELLED AT 2026-10-13T14:01:21 DUE to SIGNAL Terminated ***
+[2026-10-13T14:01:21.929] error: *** JOB 770564 ON n946 CANCELLED AT 2026-10-13T14:01:21 DUE to SIGNAL Terminated ***
+State: CANCELLED (exit code 0)
+Job Wall-clock time: 00:19:18
+
+================ logs/bfs_testplant_770565.log (2026-10-13 13:42:09)
+State: CANCELLED (exit code 15)
+Job Wall-clock time: 00:00:06
+
+================ logs/bfs_testplant_770566.log (2026-10-13 14:01:26)
+=== host n1061  job 770566  2026-10-13T13:42:22+02:00  zero start 0, 2x2 decentral , order 10, 300 rounds -> testplant_bfs/zero_m2p2_decentral_o10_lat_s0_r300 ===
+[2026-10-13T14:01:21.916] error: *** STEP 770566.0 ON n1061 CANCELLED AT 2026-10-13T14:01:21 DUE to SIGNAL Terminated ***
+[2026-10-13T14:01:21.929] error: *** JOB 770566 ON n1061 CANCELLED AT 2026-10-13T14:01:21 DUE to SIGNAL Terminated ***
+State: CANCELLED (exit code 0)
+Job Wall-clock time: 00:19:18
+
+================ logs/bfs_testplant_770567.log (2026-10-13 13:42:09)
+State: CANCELLED (exit code 15)
+Job Wall-clock time: 00:00:06
+
+================ logs/bfs_testplant_770568.log (2026-10-13 14:01:26)
+=== host n907  job 770568  2026-10-13T13:42:22+02:00  zero start 0, 2x2 central , order 10, 300 rounds -> testplant_bfs/zero_m2p2_central_o10_lat_nostrip_s0_r300 ===
+[2026-10-13T14:01:21.978] error: *** STEP 770568.1 ON n907 CANCELLED AT 2026-10-13T14:01:21 DUE to SIGNAL Terminated ***
+[2026-10-13T14:01:21.994] error: *** JOB 770568 ON n907 CANCELLED AT 2026-10-13T14:01:21 DUE to SIGNAL Terminated ***
+State: CANCELLED (exit code 0)
+Job Wall-clock time: 00:19:18
+
+================ logs/bfs_testplant_770569.log (2026-10-13 14:01:26)
+=== host n907  job 770569  2026-10-13T13:42:40+02:00  zero start 0, 2x2 decentral , order 10, 300 rounds -> testplant_bfs/zero_m2p2_decentral_o10_lat_nostrip_s0_r300 ===
+[2026-10-13T14:01:21.967] error: *** STEP 770569.0 ON n907 CANCELLED AT 2026-10-13T14:01:21 DUE to SIGNAL Terminated ***
+[2026-10-13T14:01:21.981] error: *** JOB 770569 ON n907 CANCELLED AT 2026-10-13T14:01:21 DUE to SIGNAL Terminated ***
+State: CANCELLED (exit code 0)
+Job Wall-clock time: 00:18:48
+
+================ logs/bfs_testplant_770610.log (2026-10-13 14:06:29)
+=== host n1300  job 770610  2026-10-13T14:01:40+02:00  zero start 0, 1x1 , order 10, 300 rounds -> testplant_bfs/zero_o10_lat_s0_r300 ===
+*** FAILED: line 166: bash bfs/run_bfs.sh "$OUT/run" "$OUT/starts/$NAME.npz" --deadline-final 600 "${CONT[@]}" (exit 255)
+State: FAILED (exit code 255)
+Job Wall-clock time: 00:05:03
+
+================ logs/bfs_testplant_770611.log (2026-10-13 14:01:32)
+State: CANCELLED (exit code 15)
+Job Wall-clock time: 00:00:06
+
+================ logs/bfs_testplant_770612.log (2026-10-13 14:01:32)
+State: RUNNING
+Job Wall-clock time: 00:00:06
+
+================ logs/bfs_testplant_770613.log (2026-10-13 14:01:32)
+State: RUNNING
+Job Wall-clock time: 00:00:06
+
+================ logs/bfs_testplant_770614.log (2026-10-13 14:06:22)
+=== host n921  job 770614  2026-10-13T14:01:40+02:00  zero start 0, 2x2 central , order 10, 300 rounds -> testplant_bfs/zero_m2p2_central_o10_lat_nostrip_s0_r300 ===
+*** FAILED: line 166: bash bfs/run_bfs.sh "$OUT/run" "$OUT/starts/$NAME.npz" --deadline-final 600 "${CONT[@]}" (exit 255)
+State: FAILED (exit code 255)
+Job Wall-clock time: 00:04:56
+
+================ logs/bfs_testplant_770615.log (2026-10-13 14:01:32)
+State: CANCELLED (exit code 15)
+Job Wall-clock time: 00:00:06
+
+================ logs/bfs_testplant_770622.log (2026-10-13 14:09:13)
+=== host n1278  job 770622  2026-10-13T14:06:23+02:00  zero start 0, 2x2 central , order 10, 300 rounds -> testplant_bfs/zero_m2p2_central_o10_lat_s0_r300 ===
+[2026-10-13T14:09:08.853] error: *** JOB 770622 ON n1278 CANCELLED AT 2026-10-13T14:09:08 DUE to SIGNAL Terminated ***
+[2026-10-13T14:09:08.853] error: *** STEP 770622.0 ON n1278 CANCELLED AT 2026-10-13T14:09:08 DUE to SIGNAL Terminated ***
+State: CANCELLED (exit code 0)
+Job Wall-clock time: 00:03:00
+
+================ logs/bfs_testplant_770623.log (2026-10-13 14:09:13)
+=== host n1279  job 770623  2026-10-13T14:06:23+02:00  zero start 0, 2x2 decentral , order 10, 300 rounds -> testplant_bfs/zero_m2p2_decentral_o10_lat_nostrip_s0_r300 ===
+[2026-10-13T14:09:08.852] error: *** STEP 770623.0 ON n1279 CANCELLED AT 2026-10-13T14:09:08 DUE to SIGNAL Terminated ***
+[2026-10-13T14:09:08.853] error: *** JOB 770623 ON n1279 CANCELLED AT 2026-10-13T14:09:08 DUE to SIGNAL Terminated ***
+State: CANCELLED (exit code 0)
+Job Wall-clock time: 00:02:59
+
+================ logs/bfs_testplant_770628.log (2026-10-13 16:11:28)
+=== host n1227  job 770628  2026-10-13T14:09:33+02:00  zero start 0, 1x1 , order 10, 300 rounds -> testplant_bfs/zero_o10_lat_s0_r300 ===
+    lattice: 41 evaluations, 4435 sigma evaluations (Newton: at most 36 per member); line 2297 shifts (at most 2 waves, 0 not clear); strip up to 531 shifts, 0 incomplete; up to 26 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 10 call(s), up to 93 shifts (33 with pencil eigenvalues, the rest norm disks) / 4 waves, 0 inconclusive, inner CG up to 9 iterations
+  outer 0: |Omega|=72  t=571.807808  certified=571.807808  best=571.807808  (+1 freq, 41 calls)
+    lattice: 63 evaluations, 6609 sigma evaluations (Newton: at most 33 per member); line 3532 shifts (at most 2 waves, 0 not clear); strip up to 462 shifts, 0 incomplete; up to 28 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 20 call(s), up to 82 shifts (23 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 9 iterations
+    refusal: witness w=+0.1468 (certified 570.769033 vs t 569.437792); nearest member +0.1465 (distance 0.0003), NOT a peak member
+  outer 1: |Omega|=73  t=569.437792  certified=570.769033  best=570.769033  (+1 freq, 63 calls)
+    lattice: 131 evaluations, 17975 sigma evaluations (Newton: at most 36 per member); line 7395 shifts (at most 2 waves, 0 not clear); strip up to 362 shifts, 0 incomplete; up to 28 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 40 call(s), up to 80 shifts (20 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 9 iterations
+  outer 2: |Omega|=76  t=555.247021  certified=555.247021  best=555.247021  (+2 freq, 131 calls)
+    lattice: 11 evaluations, 1583 sigma evaluations (Newton: at most 27 per member); line 612 shifts (at most 2 waves, 0 not clear); strip up to 552 shifts, 0 incomplete; up to 26 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 1 call(s), up to 80 shifts (20 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 8 iterations
+  outer 3: |Omega|=78  t=555.160062  certified=555.160062  best=555.160062  (+0 freq, 11 calls)
+    lattice: 11 evaluations, 1553 sigma evaluations (Newton: at most 27 per member); line 609 shifts (at most 2 waves, 0 not clear); strip up to 552 shifts, 0 incomplete; up to 26 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 1 call(s), up to 80 shifts (20 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 6 iterations
+  outer 4: |Omega|=78  t=555.063349  certified=555.063349  best=555.063349  (+1 freq, 11 calls)
+    lattice: 11 evaluations, 1619 sigma evaluations (Newton: at most 33 per member); line 609 shifts (at most 2 waves, 0 not clear); strip up to 364 shifts, 0 incomplete; up to 26 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 1 call(s), up to 80 shifts (20 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 6 iterations
+  outer 5: |Omega|=79  t=554.969636  certified=554.969636  best=554.969636  (+0 freq, 11 calls)
+best gamma after each round: [571.8078, 570.769, 555.247, 555.1601, 555.0633, 554.9696] (candidates certified: [571.8078, 570.769, 555.247, 555.1601, 555.0633, 554.9696] )
+final gamma 554.969636, open-loop peak 1463.868822 (ratio 0.3791); wind_count 0; xa [5.125450849607827, 0.6438019893383832] xs [6.30113695060961]
+=== done 2026-10-13T16:11:28+02:00 ===
+State: COMPLETED (exit code 0)
+Job Wall-clock time: 02:02:09
+
+================ logs/bfs_testplant_770629.log (2026-10-14 02:56:43)
+=== host n1339  job 770629  2026-10-13T14:09:33+02:00  zero start 0, 2x2 central , order 10, 300 rounds -> testplant_bfs/zero_m2p2_central_o10_lat_s0_r300 ===
+      crossing (it 1, alpha 0.5, |step| 8.48e-02): -0.04940+0.00000j at the trial; nearest row eigenvalue at the iterate -0.08247-0.00000j, its row predicted Re -0.082373
+      crossing (it 2, alpha 0.5, |step| 8.48e-02): -0.04348-0.00000j at the trial; nearest row eigenvalue at the iterate -0.07074-0.00000j, its row predicted Re -0.075629
+      crossing (it 3, alpha 0.5, |step| 8.48e-02): -0.04329+0.00000j at the trial; nearest row eigenvalue at the iterate -0.06221+0.00000j, its row predicted Re -0.068795
+    lattice: 132 evaluations, 61612 sigma evaluations (Newton: at most 39 per member); line 7021 shifts (at most 2 waves, 35 not clear); strip up to 530 shifts, 0 incomplete; up to 62 stability rows; 28 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate; 1 return(s) to the last admissible iterate
+    lattice: crossings: past the line by up to 3.80e-02 (median 2.73e-03); 28 had a row, whose linearisation predicted a median -1.53e-02 past it (0 > 0: the step gave the row up); 6 at a full step
+    lattice: level set 40 call(s), up to 48 shifts (17 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 11 iterations
+  outer 0: |Omega|=157  t=231.155573  certified=231.155573  best=231.155573  (+4 freq, 132 calls)
+      crossing (it 13, alpha 0.5, |step| 4.24e-02): -0.04080+0.00000j at the trial; nearest row eigenvalue at the iterate -0.05845-0.00000j, its row predicted Re -0.063411
+      crossing (it 17, alpha 0.25, |step| 2.12e-02): -0.04362-0.00000j at the trial; nearest row eigenvalue at the iterate -0.05422-0.00000j, its row predicted Re -0.057174
+      crossing (it 23, alpha 0.5, |step| 4.24e-02): -0.04948+0.00000j at the trial; nearest row eigenvalue at the iterate -0.05422+0.00000j, its row predicted Re -0.059174
+    lattice: 134 evaluations, 56553 sigma evaluations (Newton: at most 39 per member); line 7001 shifts (at most 2 waves, 8 not clear); strip up to 637 shifts, 0 incomplete; up to 50 stability rows; 3 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 9.20e-03 (median 6.38e-03); 3 had a row, whose linearisation predicted a median -9.17e-03 past it (0 > 0: the step gave the row up); 0 at a full step
+    lattice: level set 40 call(s), up to 48 shifts (19 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 10 iterations
+    refusal: witness w=+3.1109 (certified 224.299116 vs t 215.584981); nearest member +3.1746 (distance 0.0637), NOT a peak member
+  outer 1: |Omega|=161  t=215.584981  certified=224.299116  best=224.299116  (+4 freq, 134 calls)
+      crossing (it 1, alpha 1, |step| 1.70e-01): 0.05335+0.99147j at the trial; nearest row eigenvalue at the iterate -0.24548+1.00016j (no row within 0.05)
+      crossing (it 20, alpha 0.5, |step| 8.48e-02): -0.04788+0.00000j at the trial; nearest row eigenvalue at the iterate -0.05551-0.00000j, its row predicted Re -0.069155
+    lattice: 131 evaluations, 70706 sigma evaluations (Newton: at most 45 per member); line 6835 shifts (at most 3 waves, 2 not clear); strip up to 608 shifts, 0 incomplete; up to 53 stability rows; 2 trial(s) across the line from an admissible iterate (weighed by the merit), 1 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 1.03e-01 (median 5.27e-02); 1 had a row, whose linearisation predicted a median -1.92e-02 past it (0 > 0: the step gave the row up); 1 at a full step
+    lattice: level set 40 call(s), up to 48 shifts (20 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 2: |Omega|=165  t=206.068302  certified=206.068302  best=206.068302  (+5 freq, 131 calls)
+      crossing (it 0, alpha 1, |step| 1.70e-01): 0.08279+0.94111j at the trial; nearest row eigenvalue at the iterate -0.25758+0.93665j (no row within 0.05)
+      crossing (it 0, alpha 0.5, |step| 8.48e-02): -0.04305+0.07008j at the trial; nearest row eigenvalue at the iterate -0.08212+0.09037j, its row predicted Re -0.085522
+    lattice: 142 evaluations, 74682 sigma evaluations (Newton: at most 42 per member); line 7387 shifts (at most 2 waves, 2 not clear); strip up to 674 shifts, 0 incomplete; up to 34 stability rows; 2 trial(s) across the line from an admissible iterate (weighed by the merit), 1 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 1.33e-01 (median 6.99e-02); 1 had a row, whose linearisation predicted a median -3.55e-02 past it (0 > 0: the step gave the row up); 1 at a full step
+    lattice: level set 40 call(s), up to 48 shifts (21 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 9 iterations
+  outer 3: |Omega|=179  t=201.967601  certified=201.967601  best=201.967601  (+2 freq, 142 calls)
+      crossing (it 1, alpha 1, |step| 1.70e-01): -0.03163-0.00000j at the trial; nearest row eigenvalue at the iterate -0.07285+0.03480j (no row within 0.05)
+    lattice: 136 evaluations, 66159 sigma evaluations (Newton: at most 45 per member); line 7067 shifts (at most 2 waves, 1 not clear); strip up to 616 shifts, 0 incomplete; up to 34 stability rows; 1 trial(s) across the line from an admissible iterate (weighed by the merit), 1 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 1.84e-02 (median 1.84e-02); 0 had a row, whose linearisation predicted nothing; 1 at a full step
+    lattice: level set 40 call(s), up to 48 shifts (22 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 11 iterations
+  outer 4: |Omega|=181  t=195.678806  certified=195.678806  best=195.678806  (+6 freq, 136 calls)
+      crossing (it 0, alpha 1, |step| 1.70e-01): -0.03934-0.00000j at the trial; nearest row eigenvalue at the iterate -0.07264+0.02605j, its row predicted Re -0.073339
+    lattice: 127 evaluations, 62238 sigma evaluations (Newton: at most 36 per member); line 6600 shifts (at most 2 waves, 1 not clear); strip up to 679 shifts, 0 incomplete; up to 38 stability rows; 1 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 1.07e-02 (median 1.07e-02); 1 had a row, whose linearisation predicted a median -2.33e-02 past it (0 > 0: the step gave the row up); 1 at a full step
+    lattice: level set 40 call(s), up to 48 shifts (22 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 9 iterations
+    refusal: witness w=+2.4191 (certified 194.966324 vs t 194.037166); nearest member +2.4191 (distance 0.0000), FOLLOWED peak
+  outer 5: |Omega|=187  t=194.037166  certified=194.966324  best=194.966324  (+3 freq, 127 calls)
+    lattice: 126 evaluations, 77280 sigma evaluations (Newton: at most 45 per member); line 6489 shifts (at most 2 waves, 0 not clear); strip up to 552 shifts, 0 incomplete; up to 38 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 40 call(s), up to 48 shifts (21 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 10 iterations
+    refusal: witness w=+2.4088 (certified 192.994858 vs t 189.964369); nearest member +2.4088 (distance 0.0000), FOLLOWED peak
+  outer 6: |Omega|=190  t=189.964369  certified=192.994858  best=192.994858  (+4 freq, 126 calls)
+      crossing (it 0, alpha 1, |step| 1.70e-01): -0.04852+0.05773j at the trial; nearest row eigenvalue at the iterate -0.08259+0.07555j, its row predicted Re -0.082269
+      crossing (it 37, alpha 0.5, |step| 8.48e-02): -0.03889-0.00000j at the trial; nearest row eigenvalue at the iterate -0.07162+0.00000j, its row predicted Re -0.068531
+    lattice: 137 evaluations, 81868 sigma evaluations (Newton: at most 39 per member); line 6994 shifts (at most 2 waves, 2 not clear); strip up to 649 shifts, 0 incomplete; up to 37 stability rows; 2 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 1.11e-02 (median 6.29e-03); 2 had a row, whose linearisation predicted a median -2.54e-02 past it (0 > 0: the step gave the row up); 1 at a full step
+    lattice: level set 40 call(s), up to 48 shifts (21 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 11 iterations
+  outer 7: |Omega|=197  t=176.711239  certified=176.711239  best=176.711239  (+4 freq, 137 calls)
+best gamma after each round: [231.1556, 224.2991, 206.0683, 201.9676, 195.6788, 194.9663, 192.9949, 176.7112] (candidates certified: [231.1556, 224.2991, 206.0683, 201.9676, 195.6788, 194.9663, 192.9949, 176.7112] )
+final gamma 176.711239, open-loop peak 1464.358495 (ratio 0.1207); wind_count 0; xa [[3.048174734598681, 0.05036587090956988], [5.082065754254893, 0.05000004684260747]] xs [[4.815013789965081], [6.948375462271287]]
+=== done 2026-10-14T02:56:43+02:00 ===
+State: COMPLETED (exit code 0)
+Job Wall-clock time: 12:47:24
+
+================ logs/bfs_testplant_770630.log (2026-10-14 02:51:12)
+=== host n1380  job 770630  2026-10-13T14:09:33+02:00  zero start 0, 2x2 decentral , order 10, 300 rounds -> testplant_bfs/zero_m2p2_decentral_o10_lat_s0_r300 ===
+      crossing (it 4, alpha 1, |step| 1.60e-01): -0.04968+0.22168j at the trial; nearest row eigenvalue at the iterate -0.05507+0.21398j, its row predicted Re -0.050389
+    lattice: 33 evaluations, 6118 sigma evaluations (Newton: at most 39 per member); line 1793 shifts (at most 2 waves, 7 not clear); strip up to 603 shifts, 0 incomplete; up to 37 stability rows; 1 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate; 1 return(s) to the last admissible iterate
+    lattice: crossings: past the line by up to 3.21e-04 (median 3.21e-04); 1 had a row, whose linearisation predicted a median -3.89e-04 past it (0 > 0: the step gave the row up); 1 at a full step
+    lattice: level set 10 call(s), up to 48 shifts (12 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 8 iterations
+  outer 0: |Omega|=90  t=518.715088  certified=518.715088  best=518.715088  (+3 freq, 33 calls)
+      crossing (it 0, alpha 1, |step| 1.60e-01): -0.04933+0.21804j at the trial; nearest row eigenvalue at the iterate -0.05013+0.21113j, its row predicted Re -0.050100
+      crossing (it 1, alpha 0.5, |step| 8.00e-02): -0.04987+0.21317j at the trial; nearest row eigenvalue at the iterate -0.05008+0.21287j, its row predicted Re -0.050088
+      crossing (it 3, alpha 1, |step| 3.20e-01): -0.04910+0.22688j at the trial; nearest row eigenvalue at the iterate -0.05021+0.22882j, its row predicted Re -0.050222
+    lattice: 62 evaluations, 11870 sigma evaluations (Newton: at most 39 per member); line 3660 shifts (at most 5 waves, 19 not clear); strip up to 538 shifts, 0 incomplete; up to 36 stability rows; 5 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate; 2 return(s) to the last admissible iterate
+    lattice: crossings: past the line by up to 9.00e-04 (median 2.99e-04); 5 had a row, whose linearisation predicted a median -1.23e-04 past it (0 > 0: the step gave the row up); 3 at a full step
+    lattice: level set 20 call(s), up to 84 shifts (24 with pencil eigenvalues, the rest norm disks) / 4 waves, 0 inconclusive, inner CG up to 9 iterations
+  outer 1: |Omega|=97  t=499.870425  certified=499.870425  best=499.870425  (+4 freq, 62 calls)
+      crossing (it 0, alpha 1, |step| 8.00e-02): -0.05004+0.22622j at the trial; nearest row eigenvalue at the iterate -0.05017+0.22637j, its row predicted Re -0.050100
+      crossing (it 5, alpha 1, |step| 8.00e-02): -0.05004+0.22612j at the trial; nearest row eigenvalue at the iterate -0.05010+0.22852j, its row predicted Re -0.050115
+      crossing (it 8, alpha 1, |step| 8.00e-02): -0.05002+0.23215j at the trial; nearest row eigenvalue at the iterate -0.05010+0.22852j, its row predicted Re -0.050100
+    lattice: 105 evaluations, 27677 sigma evaluations (Newton: at most 36 per member); line 6468 shifts (at most 6 waves, 55 not clear); strip up to 607 shifts, 0 incomplete; up to 39 stability rows; 13 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate; 12 return(s) to the last admissible iterate
+    lattice: crossings: past the line by up to -1.11e-06 (median -2.84e-05); 13 had a row, whose linearisation predicted a median -1.00e-04 past it (0 > 0: the step gave the row up); 13 at a full step
+    lattice: level set 40 call(s), up to 90 shifts (30 with pencil eigenvalues, the rest norm disks) / 2 waves, 0 inconclusive, inner CG up to 9 iterations
+  outer 2: |Omega|=107  t=498.957226  certified=498.957226  best=498.957226  (+2 freq, 105 calls)
+      crossing (it 0, alpha 1, |step| 3.20e-01): -0.04880+0.23121j at the trial; nearest row eigenvalue at the iterate -0.05010+0.22852j, its row predicted Re -0.050100
+      crossing (it 0, alpha 0.5, |step| 1.60e-01): -0.04977+0.23000j at the trial; nearest row eigenvalue at the iterate -0.05010+0.22852j, its row predicted Re -0.050101
+      crossing (it 4, alpha 1, |step| 8.00e-02): -0.05002+0.22968j at the trial; nearest row eigenvalue at the iterate -0.05009+0.23038j, its row predicted Re -0.050101
+    lattice: 110 evaluations, 31923 sigma evaluations (Newton: at most 39 per member); line 6650 shifts (at most 6 waves, 54 not clear); strip up to 660 shifts, 0 incomplete; up to 37 stability rows; 14 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate; 8 return(s) to the last admissible iterate
+    lattice: crossings: past the line by up to 1.59e-03 (median 7.13e-05); 14 had a row, whose linearisation predicted a median -1.00e-04 past it (0 > 0: the step gave the row up); 8 at a full step
+    lattice: level set 40 call(s), up to 89 shifts (28 with pencil eigenvalues, the rest norm disks) / 3 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 3: |Omega|=113  t=483.343714  certified=483.343714  best=483.343714  (+3 freq, 110 calls)
+      crossing (it 0, alpha 1, |step| 8.00e-02): -0.04948+0.24125j at the trial; nearest row eigenvalue at the iterate -0.05008+0.24513j, its row predicted Re -0.050100
+      crossing (it 0, alpha 0.5, |step| 4.00e-02): -0.04994+0.24330j at the trial; nearest row eigenvalue at the iterate -0.05008+0.24513j, its row predicted Re -0.050092
+      crossing (it 2, alpha 1, |step| 8.00e-02): -0.05001+0.24707j at the trial; nearest row eigenvalue at the iterate -0.05007+0.24608j, its row predicted Re -0.050102
+    lattice: 115 evaluations, 35884 sigma evaluations (Newton: at most 36 per member); line 7179 shifts (at most 6 waves, 37 not clear); strip up to 510 shifts, 0 incomplete; up to 42 stability rows; 18 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate; 7 return(s) to the last admissible iterate
+    lattice: crossings: past the line by up to 5.81e-04 (median 1.78e-05); 18 had a row, whose linearisation predicted a median -9.99e-05 past it (0 > 0: the step gave the row up); 9 at a full step
+    lattice: level set 40 call(s), up to 83 shifts (21 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 9 iterations
+  outer 4: |Omega|=119  t=474.341085  certified=474.341085  best=474.341085  (+3 freq, 115 calls)
+      crossing (it 0, alpha 1, |step| 4.00e-02): -0.04997+0.25646j at the trial; nearest row eigenvalue at the iterate -0.05007+0.25994j, its row predicted Re -0.050100
+      crossing (it 2, alpha 1, |step| 4.00e-02): -0.04998+0.25452j at the trial; nearest row eigenvalue at the iterate -0.05007+0.25810j, its row predicted Re -0.050120
+      crossing (it 5, alpha 1, |step| 1.60e-01): -0.04992+0.26589j at the trial; nearest row eigenvalue at the iterate -0.05009+0.26362j, its row predicted Re -0.050107
+    lattice: 112 evaluations, 34683 sigma evaluations (Newton: at most 39 per member); line 6788 shifts (at most 5 waves, 35 not clear); strip up to 663 shifts, 0 incomplete; up to 35 stability rows; 15 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate; 3 return(s) to the last admissible iterate
+    lattice: crossings: past the line by up to 1.39e-03 (median 2.57e-05); 15 had a row, whose linearisation predicted a median -1.08e-04 past it (0 > 0: the step gave the row up); 8 at a full step
+    lattice: level set 40 call(s), up to 91 shifts (28 with pencil eigenvalues, the rest norm disks) / 2 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 5: |Omega|=128  t=464.044930  certified=464.044930  best=464.044930  (+3 freq, 112 calls)
+      crossing (it 0, alpha 1, |step| 1.60e-01): -0.05002+0.28268j at the trial; nearest row eigenvalue at the iterate -0.05006+0.27879j, its row predicted Re -0.050111
+    lattice: 132 evaluations, 47097 sigma evaluations (Newton: at most 36 per member); line 7439 shifts (at most 4 waves, 4 not clear); strip up to 724 shifts, 0 incomplete; up to 41 stability rows; 1 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to -2.34e-05 (median -2.34e-05); 1 had a row, whose linearisation predicted a median -1.11e-04 past it (0 > 0: the step gave the row up); 1 at a full step
+    lattice: level set 40 call(s), up to 91 shifts (47 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 9 iterations
+  outer 6: |Omega|=133  t=424.279114  certified=424.279114  best=424.279114  (+5 freq, 132 calls)
+    lattice: 164 evaluations, 62068 sigma evaluations (Newton: at most 39 per member); line 9089 shifts (at most 2 waves, 0 not clear); strip up to 706 shifts, 0 incomplete; up to 37 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 33 call(s), up to 91 shifts (54 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 7: |Omega|=139  t=418.693317  certified=418.693317  best=418.693317  (+4 freq, 164 calls)
+    lattice: 131 evaluations, 50922 sigma evaluations (Newton: at most 39 per member); line 7205 shifts (at most 1 waves, 0 not clear); strip up to 707 shifts, 0 incomplete; up to 36 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 40 call(s), up to 111 shifts (74 with pencil eigenvalues, the rest norm disks) / 4 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 8: |Omega|=147  t=417.498700  certified=417.498700  best=417.498700  (+0 freq, 131 calls)
+    lattice: 131 evaluations, 50131 sigma evaluations (Newton: at most 39 per member); line 7256 shifts (at most 2 waves, 0 not clear); strip up to 709 shifts, 0 incomplete; up to 36 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 40 call(s), up to 69 shifts (37 with pencil eigenvalues, the rest norm disks) / 2 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 9: |Omega|=150  t=414.525027  certified=414.525027  best=414.525027  (+2 freq, 131 calls)
+    lattice: 134 evaluations, 58881 sigma evaluations (Newton: at most 45 per member); line 7383 shifts (at most 2 waves, 0 not clear); strip up to 714 shifts, 0 incomplete; up to 34 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 40 call(s), up to 70 shifts (36 with pencil eigenvalues, the rest norm disks) / 2 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 10: |Omega|=157  t=412.284543  certified=412.284543  best=412.284543  (+2 freq, 134 calls)
+best gamma after each round: [518.7151, 499.8704, 498.9572, 483.3437, 474.3411, 464.0449, 424.2791, 418.6933, 417.4987, 414.525, 412.2845] (candidates certified: [518.7151, 499.8704, 498.9572, 483.3437, 474.3411, 464.0449, 424.2791, 418.6933, 417.4987, 414.525, 412.2845] )
+final gamma 412.284543, open-loop peak 1464.350155 (ratio 0.2815); wind_count 0; xa [[1.9608344584465969, 0.5684712387848111], [3.8413227708658644, 0.23619573561033644]] xs [[3.1882552367470796], [5.073572188065348]]
+=== done 2026-10-14T02:51:11+02:00 ===
+State: COMPLETED (exit code 0)
+Job Wall-clock time: 12:41:49
+
+================ logs/bfs_testplant_770631.log (2026-10-13 18:03:26)
+=== host n1278  job 770631  2026-10-13T14:09:29+02:00  zero start 0, 1x1 , order 10, 300 rounds -> testplant_bfs/zero_o10_lat_nostrip_s0_r300 ===
+    lattice: 20 evaluations, 2635 sigma evaluations (Newton: at most 39 per member); line 1299 shifts (at most 5 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 6 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 10 call(s), up to 48 shifts (16 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 6 iterations
+    refusal: witness w=+1.6338 (certified 641.722820 vs t 637.667233); nearest member +1.6338 (distance 0.0000), FOLLOWED peak
+  outer 0: |Omega|=75  t=637.667233  certified=641.722820  best=641.722820  (+2 freq, 20 calls)
+      crossing (it 0, alpha 1, |step| 8.00e-02): -0.05003+3.30030j at the trial; nearest row eigenvalue at the iterate -0.05017+3.22842j (no row within 0.05)
+    lattice: 50 evaluations, 7675 sigma evaluations (Newton: at most 39 per member); line 3276 shifts (at most 5 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 5 stability rows; 1 trial(s) across the line from an admissible iterate (weighed by the merit), 1 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to -3.40e-05 (median -3.40e-05); 0 had a row, whose linearisation predicted nothing; 1 at a full step
+    lattice: level set 20 call(s), up to 48 shifts (17 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 6 iterations
+  outer 1: |Omega|=79  t=624.949084  certified=624.949084  best=624.949084  (+2 freq, 50 calls)
+      crossing (it 0, alpha 1, |step| 8.00e-02): -0.04989+3.57708j at the trial; nearest row eigenvalue at the iterate -0.05013+3.52497j (no row within 0.05)
+    lattice: 80 evaluations, 14286 sigma evaluations (Newton: at most 30 per member); line 5208 shifts (at most 5 waves, 1 not clear); strip up to 0 shifts, 0 incomplete; up to 7 stability rows; 1 trial(s) across the line from an admissible iterate (weighed by the merit), 1 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 1.10e-04 (median 1.10e-04); 0 had a row, whose linearisation predicted nothing; 1 at a full step
+    lattice: level set 35 call(s), up to 48 shifts (19 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 7 iterations
+  outer 2: |Omega|=84  t=607.069377  certified=607.069377  best=607.069377  (+2 freq, 80 calls)
+    lattice: 14 evaluations, 2945 sigma evaluations (Newton: at most 33 per member); line 867 shifts (at most 5 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 2 call(s), up to 85 shifts (42 with pencil eigenvalues, the rest norm disks) / 3 waves, 0 inconclusive, inner CG up to 8 iterations
+  outer 3: |Omega|=88  t=603.852365  certified=603.852365  best=603.852365  (+1 freq, 14 calls)
+    lattice: 11 evaluations, 2260 sigma evaluations (Newton: at most 28 per member); line 641 shifts (at most 4 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 1 call(s), up to 65 shifts (24 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 8 iterations
+  outer 4: |Omega|=90  t=603.845686  certified=603.845686  best=603.845686  (+0 freq, 11 calls)
+    lattice: 17 evaluations, 3336 sigma evaluations (Newton: at most 33 per member); line 980 shifts (at most 2 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 3 call(s), up to 66 shifts (25 with pencil eigenvalues, the rest norm disks) / 2 waves, 0 inconclusive, inner CG up to 8 iterations
+  outer 5: |Omega|=91  t=603.701108  certified=603.701108  best=603.701108  (+0 freq, 17 calls)
+    lattice: 23 evaluations, 4721 sigma evaluations (Newton: at most 36 per member); line 1329 shifts (at most 3 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 5 call(s), up to 65 shifts (24 with pencil eigenvalues, the rest norm disks) / 2 waves, 0 inconclusive, inner CG up to 9 iterations
+  outer 6: |Omega|=91  t=603.489068  certified=603.489068  best=603.489068  (+0 freq, 23 calls)
+    lattice: 46 evaluations, 8937 sigma evaluations (Newton: at most 37 per member); line 2724 shifts (at most 4 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 18 call(s), up to 65 shifts (24 with pencil eigenvalues, the rest norm disks) / 2 waves, 0 inconclusive, inner CG up to 8 iterations
+  outer 7: |Omega|=91  t=602.117617  certified=602.117617  best=602.117617  (+1 freq, 46 calls)
+    lattice: 40 evaluations, 7681 sigma evaluations (Newton: at most 33 per member); line 2399 shifts (at most 4 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 14 call(s), up to 64 shifts (23 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 8 iterations
+  outer 8: |Omega|=92  t=600.988267  certified=600.988267  best=600.988267  (+0 freq, 40 calls)
+    lattice: 15 evaluations, 2906 sigma evaluations (Newton: at most 30 per member); line 917 shifts (at most 4 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 2 call(s), up to 64 shifts (24 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 8 iterations
+  outer 9: |Omega|=92  t=600.897436  certified=600.897436  best=600.897436  (+0 freq, 15 calls)
+    lattice: 15 evaluations, 2913 sigma evaluations (Newton: at most 28 per member); line 894 shifts (at most 3 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 8 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 2 call(s), up to 64 shifts (24 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 8 iterations
+  outer 10: |Omega|=92  t=600.811922  certified=600.811922  best=600.811922  (+0 freq, 15 calls)
+    lattice: 61 evaluations, 12180 sigma evaluations (Newton: at most 39 per member); line 3705 shifts (at most 4 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 8 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 25 call(s), up to 64 shifts (24 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 8 iterations
+  outer 11: |Omega|=92  t=598.893297  certified=598.893297  best=598.893297  (+0 freq, 61 calls)
+      crossing (it 0, alpha 1, |step| 1.60e-01): -0.04988+4.28654j at the trial; nearest row eigenvalue at the iterate -0.05014+4.17395j (no row within 0.05)
+    lattice: 14 evaluations, 2757 sigma evaluations (Newton: at most 24 per member); line 862 shifts (at most 6 waves, 1 not clear); strip up to 0 shifts, 0 incomplete; up to 8 stability rows; 1 trial(s) across the line from an admissible iterate (weighed by the merit), 1 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 1.21e-04 (median 1.21e-04); 0 had a row, whose linearisation predicted nothing; 1 at a full step
+    lattice: level set 2 call(s), up to 64 shifts (25 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 8 iterations
+  outer 12: |Omega|=92  t=598.750863  certified=598.750863  best=598.750863  (+0 freq, 14 calls)
+      crossing (it 0, alpha 1, |step| 1.60e-01): -0.04973+4.28047j at the trial; nearest row eigenvalue at the iterate -0.05014+4.18114j (no row within 0.05)
+      crossing (it 0, alpha 0.5, |step| 8.00e-02): -0.05003+4.23151j at the trial; nearest row eigenvalue at the iterate -0.05014+4.18114j (no row within 0.05)
+    lattice: 25 evaluations, 5243 sigma evaluations (Newton: at most 30 per member); line 1520 shifts (at most 6 waves, 1 not clear); strip up to 0 shifts, 0 incomplete; up to 8 stability rows; 2 trial(s) across the line from an admissible iterate (weighed by the merit), 2 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 2.68e-04 (median 1.21e-04); 0 had a row, whose linearisation predicted nothing; 1 at a full step
+    lattice: level set 6 call(s), up to 64 shifts (25 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 8 iterations
+  outer 13: |Omega|=92  t=598.386840  certified=598.386840  best=598.386840  (+0 freq, 25 calls)
+      crossing (it 0, alpha 1, |step| 1.60e-01): -0.04953+4.23272j at the trial; nearest row eigenvalue at the iterate -0.05013+4.18960j, its row predicted Re -0.050100
+      crossing (it 0, alpha 0.5, |step| 8.00e-02): -0.04998+4.21223j at the trial; nearest row eigenvalue at the iterate -0.05013+4.18960j, its row predicted Re -0.050116
+    lattice: 24 evaluations, 4977 sigma evaluations (Newton: at most 39 per member); line 1459 shifts (at most 4 waves, 2 not clear); strip up to 0 shifts, 0 incomplete; up to 8 stability rows; 2 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 4.66e-04 (median 2.43e-04); 2 had a row, whose linearisation predicted a median -1.08e-04 past it (0 > 0: the step gave the row up); 1 at a full step
+    lattice: level set 6 call(s), up to 64 shifts (25 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 8 iterations
+  outer 14: |Omega|=92  t=598.106063  certified=598.106063  best=598.106063  (+0 freq, 24 calls)
+best gamma after each round: [641.7228, 624.9491, 607.0694, 603.8524, 603.8457, 603.7011, 603.4891, 602.1176, 600.9883, 600.8974, 600.8119, 598.8933, 598.7509, 598.3868, 598.1061] (candidates certified: [641.7228, 624.9491, 607.0694, 603.8524, 603.8457, 603.7011, 603.4891, 602.1176, 600.9883, 600.8974, 600.8119, 598.8933, 598.7509, 598.3868, 598.1061] )
+final gamma 598.106063, open-loop peak 1463.868822 (ratio 0.4086); wind_count 0; xa [2.4252212884644453, 0.7124999654960752] xs [4.153999847071578]
+=== done 2026-10-13T18:03:26+02:00 ===
+State: COMPLETED (exit code 0)
+Job Wall-clock time: 03:54:04
+
+================ logs/bfs_testplant_770632.log (2026-10-14 03:00:08)
+=== host n1279  job 770632  2026-10-13T14:09:29+02:00  zero start 0, 2x2 central , order 10, 300 rounds -> testplant_bfs/zero_m2p2_central_o10_lat_nostrip_s0_r300 ===
+    lattice: 28 evaluations, 5509 sigma evaluations (Newton: at most 30 per member); line 1852 shifts (at most 4 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 7 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 10 call(s), up to 48 shifts (13 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 0: |Omega|=115  t=381.437568  certified=381.437568  best=381.437568  (+4 freq, 28 calls)
+      crossing (it 0, alpha 1, |step| 4.00e-02): -0.04930+0.09232j at the trial; nearest row eigenvalue at the iterate -0.05290+0.09402j, its row predicted Re -0.050100
+      crossing (it 6, alpha 1, |step| 8.00e-02): -0.04485+2.39593j at the trial; nearest row eigenvalue at the iterate -0.05825+2.30653j (no row within 0.05)
+      crossing (it 11, alpha 1, |step| 8.00e-02): -0.04816+0.11583j at the trial; nearest row eigenvalue at the iterate -0.06025+0.10527j, its row predicted Re -0.053978
+    lattice: 51 evaluations, 13833 sigma evaluations (Newton: at most 39 per member); line 3030 shifts (at most 3 waves, 6 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 5 trial(s) across the line from an admissible iterate (weighed by the merit), 1 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 5.15e-03 (median 1.84e-03); 4 had a row, whose linearisation predicted a median -3.29e-03 past it (0 > 0: the step gave the row up); 4 at a full step
+    lattice: level set 20 call(s), up to 48 shifts (14 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 9 iterations
+  outer 1: |Omega|=123  t=355.441711  certified=355.441711  best=355.441711  (+3 freq, 51 calls)
+      crossing (it 0, alpha 1, |step| 1.60e-01): -0.00375-0.00000j at the trial; nearest row eigenvalue at the iterate -0.05323-0.02251j (no row within 0.05)
+      crossing (it 0, alpha 0.5, |step| 8.00e-02): -0.02901-0.00000j at the trial; nearest row eigenvalue at the iterate -0.05323-0.02251j, its row predicted Re -0.051665
+      crossing (it 6, alpha 1, |step| 1.60e-01): -0.03160-0.00000j at the trial; nearest row eigenvalue at the iterate -0.05735+0.02880j, its row predicted Re -0.057123
+    lattice: 101 evaluations, 28918 sigma evaluations (Newton: at most 36 per member); line 5622 shifts (at most 3 waves, 27 not clear); strip up to 0 shifts, 0 incomplete; up to 10 stability rows; 17 trial(s) across the line from an admissible iterate (weighed by the merit), 2 of them by an eigenvalue without a row at the iterate; 1 return(s) to the last admissible iterate
+    lattice: crossings: past the line by up to 4.62e-02 (median 1.00e-02); 15 had a row, whose linearisation predicted a median -1.59e-02 past it (0 > 0: the step gave the row up); 8 at a full step
+    lattice: level set 40 call(s), up to 75 shifts (23 with pencil eigenvalues, the rest norm disks) / 3 waves, 0 inconclusive, inner CG up to 9 iterations
+  outer 2: |Omega|=133  t=248.093597  certified=248.093597  best=248.093597  (+6 freq, 101 calls)
+      crossing (it 0, alpha 1, |step| 8.00e-02): -0.02706+0.05315j at the trial; nearest row eigenvalue at the iterate -0.06174+0.03864j, its row predicted Re -0.072769
+      crossing (it 0, alpha 0.5, |step| 4.00e-02): -0.04621+0.04479j at the trial; nearest row eigenvalue at the iterate -0.06174+0.03864j, its row predicted Re -0.067254
+    lattice: 97 evaluations, 30150 sigma evaluations (Newton: at most 45 per member); line 5335 shifts (at most 1 waves, 2 not clear); strip up to 0 shifts, 0 incomplete; up to 10 stability rows; 2 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 2.29e-02 (median 1.34e-02); 2 had a row, whose linearisation predicted a median -2.00e-02 past it (0 > 0: the step gave the row up); 1 at a full step
+    lattice: level set 40 call(s), up to 69 shifts (19 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 3: |Omega|=140  t=245.093596  certified=245.093596  best=245.093596  (+4 freq, 97 calls)
+      crossing (it 0, alpha 1, |step| 8.00e-02): -0.01238+0.06543j at the trial; nearest row eigenvalue at the iterate -0.06147+0.03789j (no row within 0.05)
+      crossing (it 0, alpha 0.5, |step| 4.00e-02): -0.02575-0.05533j at the trial; nearest row eigenvalue at the iterate -0.06147+0.03789j, its row predicted Re -0.067487
+      crossing (it 0, alpha 0.25, |step| 2.00e-02): -0.04256+0.04612j at the trial; nearest row eigenvalue at the iterate -0.06147+0.03789j, its row predicted Re -0.064478
+    lattice: 91 evaluations, 35618 sigma evaluations (Newton: at most 39 per member); line 4993 shifts (at most 4 waves, 25 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 15 trial(s) across the line from an admissible iterate (weighed by the merit), 1 of them by an eigenvalue without a row at the iterate; 2 return(s) to the last admissible iterate
+    lattice: crossings: past the line by up to 3.76e-02 (median 4.89e-03); 14 had a row, whose linearisation predicted a median -2.44e-02 past it (0 > 0: the step gave the row up); 10 at a full step
+    lattice: level set 40 call(s), up to 78 shifts (31 with pencil eigenvalues, the rest norm disks) / 3 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 4: |Omega|=147  t=218.667210  certified=218.673239  best=218.673239  (+6 freq, 91 calls)
+      crossing (it 0, alpha 1, |step| 1.60e-01): -0.02132+0.05470j at the trial; nearest row eigenvalue at the iterate -0.05891+0.02863j, its row predicted Re -0.075625
+      crossing (it 0, alpha 0.5, |step| 8.00e-02): -0.03406+0.04445j at the trial; nearest row eigenvalue at the iterate -0.05891+0.02863j, its row predicted Re -0.067266
+      crossing (it 0, alpha 0.25, |step| 4.00e-02): -0.04622+0.03627j at the trial; nearest row eigenvalue at the iterate -0.05891+0.02863j, its row predicted Re -0.063087
+    lattice: 97 evaluations, 42766 sigma evaluations (Newton: at most 36 per member); line 5064 shifts (at most 2 waves, 18 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 12 trial(s) across the line from an admissible iterate (weighed by the merit), 1 of them by an eigenvalue without a row at the iterate; 1 return(s) to the last admissible iterate
+    lattice: crossings: past the line by up to 2.87e-02 (median 5.57e-03); 11 had a row, whose linearisation predicted a median -1.65e-02 past it (0 > 0: the step gave the row up); 4 at a full step
+    lattice: level set 40 call(s), up to 81 shifts (30 with pencil eigenvalues, the rest norm disks) / 3 waves, 0 inconclusive, inner CG up to 11 iterations
+  outer 5: |Omega|=162  t=194.070457  certified=194.070457  best=194.070457  (+7 freq, 97 calls)
+      crossing (it 0, alpha 1, |step| 3.20e-01): -0.04210+0.04534j at the trial; nearest row eigenvalue at the iterate -0.06994+0.01517j, its row predicted Re -0.060046
+      crossing (it 1, alpha 0.5, |step| 1.60e-01): -0.04189+0.04451j at the trial; nearest row eigenvalue at the iterate -0.06572+0.02359j, its row predicted Re -0.062838
+    lattice: 96 evaluations, 39409 sigma evaluations (Newton: at most 42 per member); line 4902 shifts (at most 2 waves, 2 not clear); strip up to 0 shifts, 0 incomplete; up to 8 stability rows; 2 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 8.11e-03 (median 8.00e-03); 2 had a row, whose linearisation predicted a median -1.14e-02 past it (0 > 0: the step gave the row up); 1 at a full step
+    lattice: level set 40 call(s), up to 62 shifts (21 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 11 iterations
+  outer 6: |Omega|=170  t=190.088148  certified=190.152865  best=190.152865  (+5 freq, 96 calls)
+      crossing (it 0, alpha 1, |step| 3.20e-01): -0.03534+0.05063j at the trial; nearest row eigenvalue at the iterate -0.06053+0.02818j, its row predicted Re -0.069659
+    lattice: 94 evaluations, 48066 sigma evaluations (Newton: at most 39 per member); line 4800 shifts (at most 3 waves, 1 not clear); strip up to 0 shifts, 0 incomplete; up to 8 stability rows; 1 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 1.47e-02 (median 1.47e-02); 1 had a row, whose linearisation predicted a median -1.97e-02 past it (0 > 0: the step gave the row up); 1 at a full step
+    lattice: level set 40 call(s), up to 62 shifts (20 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 7: |Omega|=175  t=187.069866  certified=187.077957  best=187.077957  (+3 freq, 94 calls)
+      crossing (it 0, alpha 1, |step| 3.20e-01): -0.03627+2.04571j at the trial; nearest row eigenvalue at the iterate -0.22159+2.10257j (no row within 0.05)
+      crossing (it 0, alpha 0.5, |step| 1.60e-01): -0.04993+0.04081j at the trial; nearest row eigenvalue at the iterate -0.06152+0.02896j, its row predicted Re -0.061649
+      crossing (it 13, alpha 0.5, |step| 1.60e-01): -0.04999+0.03157j at the trial; nearest row eigenvalue at the iterate -0.05510+0.02848j, its row predicted Re -0.055113
+    lattice: 98 evaluations, 54221 sigma evaluations (Newton: at most 39 per member); line 5001 shifts (at most 2 waves, 5 not clear); strip up to 0 shifts, 0 incomplete; up to 11 stability rows; 5 trial(s) across the line from an admissible iterate (weighed by the merit), 1 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 2.60e-02 (median 1.69e-04); 4 had a row, whose linearisation predicted a median -8.38e-03 past it (0 > 0: the step gave the row up); 2 at a full step
+    lattice: level set 40 call(s), up to 62 shifts (25 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 11 iterations
+  outer 8: |Omega|=179  t=165.855547  certified=165.855547  best=165.855547  (+5 freq, 98 calls)
+    lattice: 96 evaluations, 51022 sigma evaluations (Newton: at most 36 per member); line 4813 shifts (at most 2 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 40 call(s), up to 62 shifts (28 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 11 iterations
+    refusal: witness w=+3.7562 (certified 160.670756 vs t 158.965204); nearest member +3.8095 (distance 0.0533), NOT a peak member
+  outer 9: |Omega|=186  t=158.965204  certified=160.670756  best=160.670756  (+6 freq, 96 calls)
+    lattice: 101 evaluations, 59994 sigma evaluations (Newton: at most 39 per member); line 5054 shifts (at most 2 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 10 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 40 call(s), up to 62 shifts (32 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 11 iterations
+  outer 10: |Omega|=200  t=151.726288  certified=151.726288  best=151.726288  (+8 freq, 101 calls)
+    lattice: 97 evaluations, 70000 sigma evaluations (Newton: at most 42 per member); line 4916 shifts (at most 2 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 10 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 40 call(s), up to 62 shifts (34 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 12 iterations
+    refusal: witness w=+4.1806 (certified 151.477500 vs t 144.774250); nearest member +4.1312 (distance 0.0494), FOLLOWED peak
+  outer 11: |Omega|=211  t=144.774250  certified=151.477500  best=151.477500  (+3 freq, 97 calls)
+best gamma after each round: [381.4376, 355.4417, 248.0936, 245.0936, 218.6732, 194.0705, 190.1529, 187.078, 165.8555, 160.6708, 151.7263, 151.4775] (candidates certified: [381.4376, 355.4417, 248.0936, 245.0936, 218.6732, 194.0705, 190.1529, 187.078, 165.8555, 160.6708, 151.7263, 151.4775] )
+final gamma 151.477500, open-loop peak 1464.358495 (ratio 0.1034); wind_count 0; xa [[2.652878154905088, 0.30585325197638374], [4.994878557784695, 0.050000000019259826]] xs [[4.763433038562808], [7.211129835221945]]
+=== done 2026-10-14T03:00:08+02:00 ===
+State: COMPLETED (exit code 0)
+Job Wall-clock time: 12:50:46
+
+================ logs/bfs_testplant_770633.log (2026-10-14 04:00:59)
+=== host n1265  job 770633  2026-10-13T14:10:47+02:00  zero start 0, 2x2 decentral , order 10, 300 rounds -> testplant_bfs/zero_m2p2_decentral_o10_lat_nostrip_s0_r300 ===
+      crossing (it 1, alpha 1, |step| 2.00e-02): -0.05001+2.14814j at the trial; nearest row eigenvalue at the iterate -0.05008+2.14937j, its row predicted Re -0.050100
+      crossing (it 3, alpha 1, |step| 8.00e-02): -0.04958+2.14790j at the trial; nearest row eigenvalue at the iterate -0.05015+2.15074j, its row predicted Re -0.050100
+      crossing (it 6, alpha 1, |step| 3.20e-01): -0.04751+2.18294j at the trial; nearest row eigenvalue at the iterate -0.05105+2.16525j, its row predicted Re -0.050100
+    lattice: 25 evaluations, 5972 sigma evaluations (Newton: at most 30 per member); line 1789 shifts (at most 4 waves, 9 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 4 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate; 1 return(s) to the last admissible iterate
+    lattice: crossings: past the line by up to 2.49e-03 (median 2.89e-04); 4 had a row, whose linearisation predicted a median -1.00e-04 past it (0 > 0: the step gave the row up); 3 at a full step
+    lattice: level set 10 call(s), up to 48 shifts (12 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 8 iterations
+  outer 0: |Omega|=153  t=504.812111  certified=504.812111  best=504.812111  (+5 freq, 25 calls)
+      crossing (it 0, alpha 1, |step| 1.60e-01): -0.04907+2.17643j at the trial; nearest row eigenvalue at the iterate -0.05032+2.16914j, its row predicted Re -0.050100
+      crossing (it 2, alpha 1, |step| 3.20e-01): -0.05002+0.00000j at the trial; nearest row eigenvalue at the iterate -0.05010-0.00000j, its row predicted Re -0.050100
+      crossing (it 3, alpha 1, |step| 3.20e-01): -0.04769+2.20958j at the trial; nearest row eigenvalue at the iterate -0.05178+2.19820j, its row predicted Re -0.050100
+    lattice: 56 evaluations, 18755 sigma evaluations (Newton: at most 36 per member); line 3437 shifts (at most 3 waves, 8 not clear); strip up to 0 shifts, 0 incomplete; up to 10 stability rows; 7 trial(s) across the line from an admissible iterate (weighed by the merit), 2 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 3.83e-02 (median 1.38e-03); 5 had a row, whose linearisation predicted a median -1.00e-04 past it (0 > 0: the step gave the row up); 6 at a full step
+    lattice: level set 20 call(s), up to 89 shifts (26 with pencil eigenvalues, the rest norm disks) / 4 waves, 0 inconclusive, inner CG up to 9 iterations
+  outer 1: |Omega|=162  t=430.888720  certified=430.888720  best=504.812111  (+6 freq, 56 calls)
+      crossing (it 0, alpha 1, |step| 1.28e+00): 0.03163+1.53521j at the trial; nearest row eigenvalue at the iterate -0.18550+1.69787j (no row within 0.05)
+      crossing (it 0, alpha 0.5, |step| 6.40e-01): -0.04985+2.16805j at the trial; nearest row eigenvalue at the iterate -0.05032+2.16914j, its row predicted Re -0.050210
+      crossing (it 3, alpha 0.5, |step| 3.97e-01): -0.04947+2.20441j at the trial; nearest row eigenvalue at the iterate -0.05008+2.18766j, its row predicted Re -0.050092
+    lattice: 92 evaluations, 33936 sigma evaluations (Newton: at most 39 per member); line 5803 shifts (at most 5 waves, 6 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 5 trial(s) across the line from an admissible iterate (weighed by the merit), 2 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 8.16e-02 (median 5.34e-04); 3 had a row, whose linearisation predicted a median -9.19e-05 past it (0 > 0: the step gave the row up); 2 at a full step
+    lattice: level set 40 call(s), up to 80 shifts (20 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 9 iterations
+    refusal: witness w=+0.0705 (certified 461.622107 vs t 458.985468); nearest member +0.0705 (distance 0.0000), FOLLOWED peak
+  outer 2: |Omega|=170  t=458.985468  certified=461.622107  best=461.622107  (+4 freq, 92 calls)
+      crossing (it 0, alpha 1, |step| 1.28e+00): 0.11166+1.88327j at the trial; nearest row eigenvalue at the iterate -0.09966+1.89898j (no row within 0.05)
+      crossing (it 0, alpha 0.5, |step| 6.40e-01): -0.04148+1.91105j at the trial; nearest row eigenvalue at the iterate -0.09966+1.89898j (no row within 0.05)
+      crossing (it 13, alpha 1, |step| 4.51e-01): -0.03963+2.23170j at the trial; nearest row eigenvalue at the iterate -0.05350+2.29264j (no row within 0.05)
+    lattice: 91 evaluations, 44347 sigma evaluations (Newton: at most 39 per member); line 5479 shifts (at most 4 waves, 10 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 9 trial(s) across the line from an admissible iterate (weighed by the merit), 5 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 1.62e-01 (median 8.52e-03); 4 had a row, whose linearisation predicted a median -1.85e-03 past it (0 > 0: the step gave the row up); 4 at a full step
+    lattice: level set 40 call(s), up to 120 shifts (58 with pencil eigenvalues, the rest norm disks) / 4 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 3: |Omega|=177  t=417.854397  certified=417.854397  best=417.854397  (+7 freq, 91 calls)
+      crossing (it 0, alpha 1, |step| 1.28e+00): -0.02867+2.00102j at the trial; nearest row eigenvalue at the iterate -0.09680+2.16019j (no row within 0.05)
+    lattice: 97 evaluations, 47019 sigma evaluations (Newton: at most 42 per member); line 5912 shifts (at most 4 waves, 1 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 1 trial(s) across the line from an admissible iterate (weighed by the merit), 1 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 2.13e-02 (median 2.13e-02); 0 had a row, whose linearisation predicted nothing; 1 at a full step
+    lattice: level set 40 call(s), up to 104 shifts (47 with pencil eigenvalues, the rest norm disks) / 2 waves, 0 inconclusive, inner CG up to 9 iterations
+  outer 4: |Omega|=189  t=393.070403  certified=393.070403  best=393.070403  (+6 freq, 97 calls)
+      crossing (it 6, alpha 1, |step| 1.28e+00): -0.05004+2.57679j at the trial; nearest row eigenvalue at the iterate -0.05071+2.55687j, its row predicted Re -0.050103
+      crossing (it 23, alpha 1, |step| 1.28e+00): -0.05005+2.68852j at the trial; nearest row eigenvalue at the iterate -0.05033+2.71167j, its row predicted Re -0.050107
+    lattice: 97 evaluations, 54247 sigma evaluations (Newton: at most 45 per member); line 6266 shifts (at most 5 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 2 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to -4.38e-05 (median -4.66e-05); 2 had a row, whose linearisation predicted a median -1.05e-04 past it (0 > 0: the step gave the row up); 2 at a full step
+    lattice: level set 40 call(s), up to 81 shifts (28 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 5: |Omega|=195  t=380.881427  certified=380.881427  best=380.881427  (+2 freq, 97 calls)
+    lattice: 91 evaluations, 45911 sigma evaluations (Newton: at most 42 per member); line 6134 shifts (at most 4 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 40 call(s), up to 92 shifts (40 with pencil eigenvalues, the rest norm disks) / 3 waves, 0 inconclusive, inner CG up to 9 iterations
+  outer 6: |Omega|=199  t=377.038945  certified=377.038945  best=377.038945  (+1 freq, 91 calls)
+    lattice: 98 evaluations, 55725 sigma evaluations (Newton: at most 39 per member); line 6575 shifts (at most 4 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 40 call(s), up to 86 shifts (38 with pencil eigenvalues, the rest norm disks) / 2 waves, 0 inconclusive, inner CG up to 11 iterations
+  outer 7: |Omega|=206  t=374.960476  certified=374.960476  best=374.960476  (+4 freq, 98 calls)
+      crossing (it 1, alpha 1, |step| 4.72e-01): -0.04989+2.28203j at the trial; nearest row eigenvalue at the iterate -0.05016+2.27138j, its row predicted Re -0.050113
+    lattice: 95 evaluations, 60558 sigma evaluations (Newton: at most 39 per member); line 6208 shifts (at most 4 waves, 1 not clear); strip up to 0 shifts, 0 incomplete; up to 9 stability rows; 1 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: crossings: past the line by up to 1.12e-04 (median 1.12e-04); 1 had a row, whose linearisation predicted a median -1.13e-04 past it (0 > 0: the step gave the row up); 1 at a full step
+    lattice: level set 40 call(s), up to 93 shifts (44 with pencil eigenvalues, the rest norm disks) / 3 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 8: |Omega|=210  t=372.490505  certified=372.490505  best=372.490505  (+3 freq, 95 calls)
+    lattice: 95 evaluations, 47890 sigma evaluations (Newton: at most 39 per member); line 6087 shifts (at most 2 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 8 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 40 call(s), up to 101 shifts (50 with pencil eigenvalues, the rest norm disks) / 4 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 9: |Omega|=214  t=371.906038  certified=371.906038  best=371.906038  (+2 freq, 95 calls)
+    lattice: 93 evaluations, 53109 sigma evaluations (Newton: at most 45 per member); line 5880 shifts (at most 3 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 8 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 40 call(s), up to 86 shifts (43 with pencil eigenvalues, the rest norm disks) / 2 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 10: |Omega|=216  t=371.629960  certified=371.629960  best=371.629960  (+1 freq, 93 calls)
+    lattice: 93 evaluations, 56509 sigma evaluations (Newton: at most 45 per member); line 5856 shifts (at most 2 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 8 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 40 call(s), up to 83 shifts (40 with pencil eigenvalues, the rest norm disks) / 2 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 11: |Omega|=217  t=371.075502  certified=371.075502  best=371.075502  (+1 freq, 93 calls)
+    lattice: 89 evaluations, 44374 sigma evaluations (Newton: at most 45 per member); line 5634 shifts (at most 2 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 8 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 40 call(s), up to 82 shifts (39 with pencil eigenvalues, the rest norm disks) / 1 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 12: |Omega|=218  t=370.424229  certified=370.562640  best=370.562640  (+1 freq, 89 calls)
+    lattice: 89 evaluations, 42908 sigma evaluations (Newton: at most 42 per member); line 5615 shifts (at most 3 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 8 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 40 call(s), up to 91 shifts (47 with pencil eigenvalues, the rest norm disks) / 2 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 13: |Omega|=219  t=370.467548  certified=370.529509  best=370.529509  (+0 freq, 89 calls)
+    lattice: 106 evaluations, 68018 sigma evaluations (Newton: at most 42 per member); line 6643 shifts (at most 3 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 10 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 38 call(s), up to 93 shifts (48 with pencil eigenvalues, the rest norm disks) / 2 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 14: |Omega|=221  t=370.165086  certified=370.165086  best=370.165086  (+0 freq, 106 calls)
+    lattice: 92 evaluations, 57883 sigma evaluations (Newton: at most 42 per member); line 5732 shifts (at most 2 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 8 stability rows; 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 40 call(s), up to 90 shifts (45 with pencil eigenvalues, the rest norm disks) / 2 waves, 0 inconclusive, inner CG up to 10 iterations
+  outer 15: |Omega|=221  t=369.868896  certified=369.868896  best=369.868896  (+0 freq, 92 calls)
+best gamma after each round: [504.8121, 504.8121, 461.6221, 417.8544, 393.0704, 380.8814, 377.0389, 374.9605, 372.4905, 371.906, 371.63, 371.0755, 370.5626, 370.5295, 370.1651, 369.8689] (candidates certified: [504.8121, 430.8887, 461.6221, 417.8544, 393.0704, 380.8814, 377.0389, 374.9605, 372.4905, 371.906, 371.63, 371.0755, 370.5626, 370.5295, 370.1651, 369.8689] )
+final gamma 369.868896, open-loop peak 1463.868822 (ratio 0.2527); wind_count 0; xa [[4.5428584864191155, 0.43841074438044314], [2.3679590273372204, 0.43387984415709363]] xs [[5.904450340635163], [5.903226068544748]]
+=== done 2026-10-14T04:00:59+02:00 ===
+State: COMPLETED (exit code 0)
+Job Wall-clock time: 13:50:25

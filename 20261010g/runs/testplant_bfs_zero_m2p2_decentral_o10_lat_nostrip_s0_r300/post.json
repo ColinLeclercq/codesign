@@ -1,0 +1,50 @@
+{
+ "rec": "/tmp_user/sator/cleclerc/BFS/20261010g/codesign_bfs/testplant_bfs/zero_m2p2_decentral_o10_lat_nostrip_s0_r300/run/K_B_C_s0_bfs_mimo2x2_decentral.npz",
+ "n": 33593,
+ "band": [
+  0.0,
+  10.0
+ ],
+ "nfreq": 457,
+ "gamma_record": 369.8688964550338,
+ "peak_open": {
+  "omega": 0.74,
+  "sigma": [
+   1463.8688220460972,
+   32.60347198527213,
+   24.947719900192787
+  ]
+ },
+ "peak_closed": {
+  "omega": 0.218535,
+  "sigma": [
+   369.8688960867853,
+   46.90399843633135,
+   35.69620657208668
+  ]
+ },
+ "closed_over_gamma": 0.999999999004381,
+ "vec_omega": [
+  0.74,
+  0.218535,
+  0.3,
+  1.5
+ ],
+ "sigma1_vec_open": [
+  1463.8688220460965,
+  329.2463243291321,
+  531.979149653323,
+  347.2591027531005
+ ],
+ "sigma1_vec_closed": [
+  365.1434572561523,
+  369.86889608678814,
+  358.1564687643691,
+  365.7677468459349
+ ],
+ "seconds": {
+  "curves": 16.3,
+  "vectors": 2.2
+ },
+ "pool": "full-model pool (96 workers): 6203 tasks in 630 calls, 18172.5 s of task time in 2382.3 s wall (x7.63; on 11 / 23 / 95 workers ~2541.4 / 2426.1 / 2364.7 s)"
+}
