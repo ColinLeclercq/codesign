@@ -119,8 +119,10 @@ def adopt(kind, src=None):
             if os.path.abspath(d) == want:
                 continue
             files = sorted(os.listdir(d))
-            ok = f"ops_{kind}.npz" in files and f"ops_{kind}_range.npz" in files
-            print(f"  candidate {d}: {'complete (operators + range)' if ok else 'incomplete'}; {len(files)} entries")
+            poles = [f"ops_{kind}_range_poles_{x}.npz" for x in ('-0.050000', '-0.025000')]
+            ok = all(f in files for f in [f"ops_{kind}.npz", f"ops_{kind}_range.npz"] + poles)
+            lock = ', build lock present (a job may still write it)' if '.build.lockd' in files else ''
+            print(f"  candidate {d}: {'complete (operators, range, poles)' if ok else 'incomplete'}{lock}; {len(files)} entries")
         print(f"adopt one: python bfs/plant_id.py --adopt {kind} <directory>")
         return 0
     src = os.path.abspath(src)
