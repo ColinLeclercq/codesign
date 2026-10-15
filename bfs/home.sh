@@ -51,9 +51,17 @@ echo "BFS_HOME:       $HOME_DIR"
 busy_in() {
     local dir=$1
     command -v squeue > /dev/null 2>&1 || return 1
-    squeue -h -u "$USER" -o '%i %Z' 2>/dev/null | awk -v d="$dir" '$2 == d || index($2, d "/") == 1 {print $1}' | grep -q .
+    local id wd
+    while read -r id wd; do
+        wd=$(readlink -f "$wd" 2>/dev/null || echo "$wd")
+        [ "$wd" = "$dir" ] || [ "${wd#"$dir"/}" != "$wd" ] && return 0
+    done < <(squeue -h -u "$USER" -o '%i %Z' 2>/dev/null || true)
+    return 1
 }
-for d in "$CODE" ${FROM:+"$(cd "$FROM" && pwd)"}; do
+# only where something would MOVE: re-linking a directory jobs run from is harmless
+_moves=0
+for name in testplant_bfs results_bfs smoke_bfs logs; do [ -d "$CODE/$name" ] && [ ! -L "$CODE/$name" ] && _moves=1; done
+for d in $([ "$_moves" = 1 ] && readlink -f "$CODE") ${FROM:+"$(readlink -f "$FROM")"}; do
     if busy_in "$d" && [ "${FORCE:-0}" != 1 ]; then
         echo "*** jobs are queued or running from $d (squeue -o '%i %Z'): wait for them (or FORCE=1)"; exit 1
     fi

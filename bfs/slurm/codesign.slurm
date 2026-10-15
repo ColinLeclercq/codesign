@@ -136,7 +136,12 @@ fi
 mkdir -p "$RUN"
 run_lock "$RUN" || exit 1
 trap 'drop_lock "$RUN/.job.lockd"' EXIT
-echo "$(date -Is) $VER $(git rev-parse --short HEAD 2>/dev/null || echo -) ${SLURM_JOB_ID:-none}" >> "$RUN/code_versions.txt"
+PID=$(basename "$PD")
+LASTP=$( [ -f "$RUN/code_versions.txt" ] && awk 'NF >= 5 {p = $5} END {print p}' "$RUN/code_versions.txt" || true)
+if [ -f "$RUN/${TAG}_ckpt.npz" -o -f "$RUN/$TAG.json" ] && [ -n "$LASTP" ] && [ "$LASTP" != "$PID" ] && [ "${PLANT_CHANGED:-0}" != 1 ]; then
+    echo "*** $RUN was run on the plant $LASTP, this code's is $PID (bfs/plant_id.py): PLANT_CHANGED=1 continues it on the new plant"; exit 1
+fi
+echo "$(date -Is) $VER $(git rev-parse --short HEAD 2>/dev/null || echo -) ${SLURM_JOB_ID:-none} $PID" >> "$RUN/code_versions.txt"
 python bfs/hifoo_init.py --ops "$OPS" --n "$NSTART" --seed "$SEED" --kind "$KIND" --r "$R" --m "$M" --p "$P" --struct "$STRUCT" --out "$RUN/catalogue" > "$RUN.catalogue.json"
 # the deadline from the job's own end time (any --time): 45 min kept after the
 # driver's last round for the figures, on top of its own 30 min for the final

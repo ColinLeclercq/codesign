@@ -25,5 +25,6 @@ python bfs/version_check.py || { echo "*** mixed code versions (bfs/version_chec
 [ -n "$REC" ] && [ -f "$REC" ] || { echo "*** REC=<record .npz> required (got '$REC')"; exit 1; }
 OPS=${OPS:-$(python bfs/plant_id.py --dir coarse)/ops_coarse.npz}     # the test plant of this code's plant id
 echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none}  $(date -Is)  $REC on $OPS ==="
+case "$REC" in */run/*) echo "=== -> ${REC%%/run/*} ===" ;; esac      # its run directory, for bfs/report.sh
 time ${LAUNCHER:-mpiexec} -n "${SLURM_NTASKS:-24}" python -u bfs/postproc.py --ops "$OPS" --rec "$REC"
 echo "=== done $(date -Is) ==="

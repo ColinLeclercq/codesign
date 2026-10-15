@@ -50,6 +50,13 @@
 #   ORACLE=lattice SHRINK=1 ... sbatch ...
 #        (trust radius 2 alpha |d| after a partial step, --sqp-partial-shrink on;
 #         off by default since 20261008c; the directories get _shr)
+#   ORACLE=lattice ASYNC=1 STRIP=0 ... sbatch ...
+#        (the no-strip level set beside the next SQP iteration, --lattice-async on,
+#         20261010j: the same iterates as without, bit for bit in the sandbox; a
+#         wall-time measurement; the directories get _async)
+#   bash bfs/abcopy.sh testplant_bfs/<run> testplant_bfs/<copy>; CONTINUE=1 OUT=testplant_bfs/<copy> ... sbatch ...
+#        (an A/B arm from a shared parent, BFS.md 8: the copy carries the
+#         parent's checkpoint or record and its loop state)
 #   ORACLE=lattice RETIRE=0.95:3 ... sbatch ...
 #        (members of Omega below 0.95 gamma for 3 rounds retire, --omega-retire;
 #         the directories get _ret, e.g. zero_m2p2_central_o10_lat_ret_s0_r300)
@@ -83,7 +90,13 @@ if [ "${ORACLE:-reduced}" = lattice ] && [ "${SHRINK:-0}" = 1 ]; then SUF="${SUF
 if [ "${ORACLE:-reduced}" = lattice ] && [ "${LATTICE_K:-1}" != 1 ]; then SUF="${SUF}_k${LATTICE_K}"; fi
 if [ "${ORACLE:-reduced}" = lattice ] && [ "${STRIP:-1}" = 0 ]; then SUF="${SUF}_nostrip"; fi
 if [ "${ORACLE:-reduced}" = lattice ] && [ "${CROSS:-merit}" = cut ]; then SUF="${SUF}_cut"; fi
+if [ "${ORACLE:-reduced}" = lattice ] && [ "${ASYNC:-0}" = 1 ]; then SUF="${SUF}_async"; fi
 export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-24} RETIRE=${RETIRE:-} SHRINK=${SHRINK:-0} LATTICE_K=${LATTICE_K:-1} STRIP=${STRIP:-1} CROSS=${CROSS:-merit}
+# ASYNC=1: the no-strip level set beside the next SQP iteration (--lattice-async on,
+# 20261010j stage D: the same iterates as off, bit for bit in the sandbox; off by
+# default until a cluster run has measured the wall time; directories get _async)
+EXTRA=()
+if [ "${ORACLE:-reduced}" = lattice ] && [ "${ASYNC:-0}" = 1 ]; then EXTRA+=(--lattice-async on); fi
 IDX=${SLURM_ARRAY_TASK_ID:-}                           # array job: the start index (catalogue entry)
 NSTART=${NSTART:-64}
 if [ -n "$IDX" ]; then
@@ -160,7 +173,15 @@ fi
 # shared by every code version since 20261010i)
 run_lock "$OUT" || exit 1
 trap 'drop_lock "$OUT/.job.lockd"' EXIT
-echo "$(date -Is) $(sed -n 's/^# version //p' bfs/MANIFEST) $(git rev-parse --short HEAD 2>/dev/null || echo -) ${SLURM_JOB_ID:-none}" >> "$OUT/code_versions.txt"
+# a run continues on the plant it was made on: the plant id is noted with the
+# code version, and a RESUME/CONTINUE on another plant id is refused
+# (PLANT_CHANGED=1 moves it on purpose); lines before 20261010j carry no id
+PID=$(basename "$PD")
+LASTP=$( [ -f "$OUT/code_versions.txt" ] && awk 'NF >= 5 {p = $5} END {print p}' "$OUT/code_versions.txt" || true)
+if [ ${#CONT[@]} -gt 0 ] && [ -n "$LASTP" ] && [ "$LASTP" != "$PID" ] && [ "${PLANT_CHANGED:-0}" != 1 ]; then
+    echo "*** $OUT was run on the plant $LASTP, this code's is $PID (bfs/plant_id.py): PLANT_CHANGED=1 continues it on the new plant"; exit 1
+fi
+echo "$(date -Is) $(sed -n 's/^# version //p' bfs/MANIFEST) $(git rev-parse --short HEAD 2>/dev/null || echo -) ${SLURM_JOB_ID:-none} $PID" >> "$OUT/code_versions.txt"
 # the deadline from the job's own end time (any --time): no round starts that
 # would not end, 5 min kept for the figures (bfs/slurm_remaining.py)
 export DEADLINE=${DEADLINE:-$(python bfs/slurm_remaining.py --reserve 300)}
@@ -169,7 +190,7 @@ export OPS OUTER PY=python LAUNCH="$LAUNCHER -n ${SLURM_NTASKS:-24}"
 # save counts right of -eps with the absolute step floor (the 369.87 record: 5434
 # points against 3208 right of -eps/2) and a veto counts up to --veto-counts more
 # designs while the deadline holds one
-time bash bfs/run_bfs.sh "$OUT/run" "$OUT/starts/$NAME.npz" --deadline-final 1200 "${CONT[@]}"
+time bash bfs/run_bfs.sh "$OUT/run" "$OUT/starts/$NAME.npz" --deadline-final 1200 "${CONT[@]}" "${EXTRA[@]}"
 # the figures are made by the driver itself (--post 1, same job and pool); a
 # second launch only if they are missing, bounded in time (a launch that hangs
 # must not hold the allocation to its limit)
