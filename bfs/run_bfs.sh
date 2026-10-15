@@ -98,6 +98,14 @@ if [ "${ORACLE:-reduced}" = "lattice" ]; then
     # CROSS=cut: a trial across the closed loop's line from an admissible iterate
     # is halved (2026-10-06 to 20261010c); default merit (sqp_inner.LAT_CROSS)
     ORC+=(--lattice-cross "${CROSS:-merit}")
+    # 20261010j stage C and its review: the base grid fixed at 48 centres whatever
+    # the ranks, static task costs (placement by measured solves is opt-in: the
+    # seconds made it differ from run to run), the row requests memoised for 2
+    # designs, the duplicate stability rows counted but NOT merged (no effect shown
+    # yet, strip-ab.md AB3) -- passed explicitly, so the configuration is the
+    # script's, not the code defaults' (LESSONS 18 rule 3).  No knobs: an A/B of one
+    # of them needs its own directory suffix first (testplant.slurm, codesign.slurm)
+    ORC+=(--lattice-base 48 --lattice-costs static --lattice-memo 2 --lattice-row-merge 0)
 elif [ "${ORACLE:-reduced}" != "reduced" ]; then
     echo "run_bfs.sh: ORACLE must be reduced or lattice (got ${ORACLE})"; exit 2
 fi

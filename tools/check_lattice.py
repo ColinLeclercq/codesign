@@ -50,7 +50,8 @@ ap.add_argument('--whi', type=float, default=10.0)
 ap.add_argument('--level-ref', dest='level_ref', action='store_true',
                 help='the level set also against the 2n certificate (certify_greater; minutes per decision)')
 # 20261010j stage C: the run's settings (run_case_epi --lattice-base / -costs / -memo / -row-merge); --base 4
-# --row-merge 0 is the code before it on 4 ranks (base grid ranks/2 = 4, rows merged within 1e-8)
+# is the code before it on 4 ranks (base grid ranks/2 = 4); the defaults are static costs and rows merged
+# within 1e-8 (the review of stage C), --row-merge 1e-6 the opt-in merge of strip-ab.md AB3
 ap.add_argument('--base', type=int, default=None, help='lattice.LINE_BASE (default: its value, 48)')
 ap.add_argument('--costs', choices=['measured', 'static'], default=None, help='lattice.TASK_COSTS')
 ap.add_argument('--memo', type=int, default=None, help='lattice.REQ_MEMO')
@@ -88,6 +89,7 @@ print(f"record {a.record}: order {R}, {'MIMO ' + str(a.mimo) if a.mimo else 'SIS
       f"base grid {len(lat.base_grid(0.0, a.whi))}, costs {lattice.TASK_COSTS}, memo {lattice.REQ_MEMO}, "
       f"row merge {lattice.ROW_MERGE:g}", flush=True)
 out = {}
+_dup_lab = ("merged beyond 1e-8" if lattice.ROW_MERGE > 1e-8 else f"within {lattice.ROW_DUP:g}, kept and tagged")
 
 
 def direct(zz, w):
@@ -184,7 +186,7 @@ t0 = time.perf_counter(); L = lat.line(z0, a.eps, 0.0, a.whi); t1 = time.perf_co
 print(f"line (lattice): clear {L['clear']}, alpha {L['alpha']:+.10f}, {L['nshift']} shifts in {L['waves']} waves "
       f"(cover kept: {len(lat.line_prev.get(round(a.eps, 12), []))} centres), "
       f"{t1 - t0:.1f} s; {len(L['rows'])} rows within {lattice.ROW_REACH} of the line ({L.get('rows_dup', 0)} copies "
-      f"merged beyond 1e-8), rightmost {L['rows'][0]['lam'] if L['rows'] else None}", flush=True)
+      f"{_dup_lab}), rightmost {L['rows'][0]['lam'] if L['rows'] else None}", flush=True)
 arow_, nvec_, K_, xa_, xs_, _, _ = pk.unpack(z0)
 b_, c_, pa_, ps_, na_, ns_ = D.bc(xa_, xs_)
 t0 = time.perf_counter()
@@ -208,7 +210,7 @@ st = LS['strip']
 inside = [l_ for l_ in LS['seen'] if -a.eps - lattice.ROW_REACH <= l_.real <= -a.eps]
 print(f"strip [{-a.eps - lattice.ROW_REACH:.3f}, {-a.eps:.3f}] x [0, {a.whi:g}]: {'complete' if st['complete'] else 'INCOMPLETE'}, "
       f"{st['shifts']} shifts in {st['waves']} waves, {t1 - t0:.1f} s; {len(inside)} eigenvalues in it, {len(LS['rows'])} rows "
-      f"({LS.get('rows_dup', 0)} copies merged beyond 1e-8)", flush=True)
+      f"({LS.get('rows_dup', 0)} copies {_dup_lab})", flush=True)
 dref = lattice._design(lat.design(z0))
 ref = []
 for th in np.arange(0.0, a.whi + 1e-9, 0.5):

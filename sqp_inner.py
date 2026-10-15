@@ -620,7 +620,7 @@ class Evaluator:
             clr = bool(lr['clear']); al_line = float(lr['alpha'])
             lat_eigs = ([complex(r_['lam']) for r_ in lr['rows']], [complex(l_) for l_ in lr['seen']], lr['witness'])
             pairs = [dict(lam=r_['lam'], g=np.asarray(pk.grad(r_['g']), float), eta=r_['eta'], theta=r_['theta'],
-                          rank=r_['rank']) for r_ in lr['rows']]
+                          rank=r_['rank'], dup=bool(r_.get('dup', False))) for r_ in lr['rows']]
             if self.cl_block and len(pairs) >= 2:
                 for pr_, vec_ in zip(pairs[:2], self.lattice.vectors(z, lr['rows'][:2])):
                     if vec_ is not None:
@@ -829,9 +829,13 @@ class Evaluator:
         if self.lattice is not None:
             follow_rows = [(float(self.w_star[round(float(w_), 6)]), float(s[i_])) for i_, w_ in enumerate(W)
                            if (self.follow or {}).get(round(float(w_), 6)) and round(float(w_), 6) in self.w_star]
+        # the lattice's copies of one eigenvalue among the QP's rows (lattice.ROW_DUP, tagged with the
+        # merge off; the review of stage C): read by the QP stability rows' diagnostics only
+        al_dup = [bool(p_.get('dup', False)) for p_ in pairs] if self.lattice is not None else []
+        al_dup = (al_dup + [False] * len(al_rows))[:len(al_rows)][len(al_rows) - len(al_rows_qp):]
         return dict(s=s, Gs=Gs, smax=float(s.max()), blocks=blocks, tops=(dict(self.w_star) if DEBUG_LS else {}), field_rows=field_rows,
                     pos_rows=pos_rows, follow_rows=follow_rows,
-                    al=float(al), ga=ga, clr=bool(clr), al_rows=al_rows_qp, al_rows_all=al_rows,
+                    al=float(al), ga=ga, clr=bool(clr), al_rows=al_rows_qp, al_rows_all=al_rows, al_dup=al_dup,
                     al_ctrl=al_ctrl, al_ctrl_rest=al_ctrl_rest, ctrl_rows=ctrl_rows, lmi=lmi, hermite=hermite, pair=pair,
                     hermite_cl=hermite_cl, lat_eigs=lat_eigs, lat_strip=(self.lattice is None or self.lat_strip or not LAT_STRIP), z=z.copy())
 
@@ -1109,8 +1113,11 @@ def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, di
     # ev['al_rows'] its value Re lambda, active (no slack left, or a multiplier),
     # given up (its elastic slack used), |g|_inf, and the trust radius at which it
     # can first bind, b / ||g||_1 for the box (b / ||g||_2 for the ball; 0 when
-    # violated already).  Reads the solution only: the step is the same
+    # violated already), and whether it is a lattice copy of another row's
+    # eigenvalue (lattice.ROW_DUP, the review of stage C: does a copy ever bind or
+    # get given up?).  Reads the solution only: the step is the same
     _ad = []
+    _dup = ev.get('al_dup') or ()
     for k_, (al_j, g_j) in enumerate(ev['al_rows']):
         b_j = -(al_j + eps + mg_row)
         el_j = float(x[iel + k_])
@@ -1118,7 +1125,8 @@ def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, di
         gn = float(np.linalg.norm(g_j) if use_ball else np.sum(np.abs(g_j)))
         _ad.append((float(al_j), bool(s_j <= 1e-9 + 1e-7 * abs(b_j) or abs(zdual[stab_rows[k_]]) > 1e-8),
                     bool(el_j > PEN_SLACK_TOL), float(np.max(np.abs(g_j))) if len(g_j) else 0.0,
-                    (b_j / gn if gn > 0.0 else np.inf) if b_j > 0.0 else 0.0))
+                    (b_j / gn if gn > 0.0 else np.inf) if b_j > 0.0 else 0.0,
+                    bool(_dup[k_]) if k_ < len(_dup) else False))
     out['al_diag'] = _ad
     if use_h:
         hd = zdual[len(zdual) - n_pair - n_h: len(zdual) - n_pair]; off = 0; duals = []
@@ -1214,7 +1222,9 @@ def _box_stats(box_log):
     rows given up, the deepest active row's Re lambda and the largest |g|_inf of
     an active row, the median radius at which the active rows bind against the
     median trust radius, the steps on the trust region's boundary, the accepted
-    alphas and steps."""
+    alphas and steps; the copies of one eigenvalue among the rows (lattice.ROW_DUP,
+    not merged by default): how many, the QPs with an active copy, the copies
+    given up (the review of stage C: the evidence the merge waits for)."""
     if not box_log:
         return None
     act = [b_ for b_ in box_log if b_['act']]
@@ -1228,7 +1238,11 @@ def _box_stats(box_log):
                 in_box_med=med([b_['n_in'] for b_ in box_log]),
                 Delta_med=med([b_['Delta'] for b_ in box_log]), on_box=int(sum(b_['on_box'] for b_ in box_log)),
                 herm=int(sum(b_['herm'] > 0 for b_ in box_log)),
-                alpha_med=med([b_['alpha'] for b_ in acc]), step_med=med([b_['step'] for b_ in acc]))
+                alpha_med=med([b_['alpha'] for b_ in acc]), step_med=med([b_['step'] for b_ in acc]),
+                dup_max=int(max(b_.get('ndup', 0) for b_ in box_log)),
+                with_act_dup=int(sum(b_.get('act_dup', 0) > 0 for b_ in box_log)),
+                act_dup_max=int(max(b_.get('act_dup', 0) for b_ in box_log)),
+                el_dup=int(sum(b_.get('el_dup', 0) for b_ in box_log)))
 
 
 def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
@@ -1650,6 +1664,8 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             _ad = sub.get('al_diag') or []
             _act = [q_ for q_ in _ad if q_[1]]
             box_log.append(dict(n=len(_ad), act=len(_act), el=int(sum(q_[2] for q_ in _ad)),
+                                ndup=int(sum(q_[5] for q_ in _ad)), act_dup=int(sum(q_[5] for q_ in _act)),
+                                el_dup=int(sum(q_[2] and q_[5] for q_ in _ad)),
                                 deep=min((q_[0] for q_ in _act), default=None),
                                 gact=max((q_[3] for q_ in _act), default=0.0),
                                 rb_act=min((q_[4] for q_ in _act), default=None),

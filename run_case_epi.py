@@ -1231,7 +1231,11 @@ def _round_lattice_lines(li):
               f"{f_(b['deep'], '+.4f')} (|g| up to {b['gact']:.1e}); the active rows bind at radius {f_(b['rb_act_med'], '.1e')} "
               f"(median) against the trust radius {f_(b['Delta_med'], '.1e')} ({f_(b['in_box_med'], 'g')} rows could bind inside it), "
               f"{b['on_box']} steps on its boundary, a Hermite block active in {b['herm']}; accepted alpha "
-              f"{f_(b['alpha_med'], 'g')}, step {f_(b['step_med'], '.1e')} (medians)", flush=True)
+              f"{f_(b['alpha_med'], 'g')}, step {f_(b['step_med'], '.1e')} (medians); "
+              + (f"copies of one eigenvalue (within {_lm.ROW_DUP:g}, not merged; the review of stage C): up to "
+                 f"{b.get('dup_max', 0)} in a QP, active in {b.get('with_act_dup', 0)} QPs (up to {b.get('act_dup_max', 0)}), "
+                 f"{b.get('el_dup', 0)} given up" if _lm.ROW_MERGE <= 1e-8 else f"copies merged within {_lm.ROW_MERGE:g}"),
+              flush=True)
 
 
 _CODE_VERSION = []
@@ -2122,17 +2126,20 @@ def main():
                     help='--oracle lattice: the line\'s and the level set\'s base grid, this many equispaced centres '
                          'whatever the number of ranks (lattice.LINE_BASE; the same as ranks/2 at 96 ranks); 0 = ranks/2 '
                          '(the rule of 2026-10-09: 24 centres at 48 ranks)')
-    ap.add_argument('--lattice-costs', dest='lattice_costs', choices=['measured', 'static'], default='measured',
-                    help='--oracle lattice: the batches balanced on the seconds each kind of request took, longest first '
-                         '(measured), or on the static units in request order as before (lattice.TASK_COSTS); placement '
-                         'only')
+    ap.add_argument('--lattice-costs', dest='lattice_costs', choices=['measured', 'static'], default='static',
+                    help='--oracle lattice: the batches balanced on the static units in request order (static, the default, '
+                         'as since 2026-10-08), or on the MUMPS solves each kind of request took, a factorisation '
+                         'lattice.LU_SOLVES solves, longest first (measured; counts, not seconds, so that every run of a '
+                         'job places alike; lattice.TASK_COSTS).  Placement only, but a task\'s result depends on its rank '
+                         'at rounding level (driver vs worker 7e-13): another placement is another MIMO path')
     ap.add_argument('--lattice-memo', dest='lattice_memo', type=int, default=2,
                     help='--oracle lattice: designs whose row requests are kept for the next evaluation of the same design '
                          '(the strip arm\'s accepted trial, the refine\'s re-evaluation; lattice.REQ_MEMO); 0 = off')
-    ap.add_argument('--lattice-row-merge', dest='lattice_row_merge', type=float, default=1e-6,
-                    help='--oracle lattice: stability rows whose eigenvalues agree within this x max(1, |lambda|) are one '
-                         'row, the copy from the nearest shift kept (lattice.ROW_MERGE); <= 1e-8: 1e-8 and the first copy, '
-                         'as before (changes the QP\'s rows, hence the path)')
+    ap.add_argument('--lattice-row-merge', dest='lattice_row_merge', type=float, default=0.0,
+                    help='--oracle lattice: > 1e-8: stability rows whose eigenvalues agree within this x max(1, |lambda|) '
+                         'are one row, the copy from the nearest shift kept (lattice.ROW_MERGE; strip-ab.md AB3, e.g. '
+                         '1e-6; changes the QP\'s rows, hence the path); <= 1e-8 (default 0): 1e-8 and the first copy, as '
+                         'before, the copies within lattice.ROW_DUP counted and tagged in the QP rows\' line')
     ap.add_argument('--oracle-nvec', dest='oracle_nvec', type=int, default=3,
                     help='singular pairs per anchor')
     ap.add_argument('--oracle-tol', dest='oracle_tol', type=float, default=1e-3,
@@ -3901,9 +3908,12 @@ def main():
               + f"; rows aimed {1 + _sqi.LAT_CUSHION:g} mg inside the line, trials across it "
               + ("cut back" if _sqi.LAT_CROSS == 'cut' else "weighed by the merit")
               + f"; {_lat_mod.LINE_K} eigenvalue(s) per disk; batches by "
-              + ("measured costs, longest first" if _lat_mod.TASK_COSTS == 'measured' else "static costs")
+              + (f"the solves counted, a factorisation {_lat_mod.LU_SOLVES:g}, longest first" if _lat_mod.TASK_COSTS == 'measured'
+                 else "static costs")
               + (f", row requests kept for {_lat_mod.REQ_MEMO} design(s)" if _lat_mod.REQ_MEMO > 0 else ", no request memo")
-              + f"; rows merged within {max(_lat_mod.ROW_MERGE, 1e-8):g})", flush=True)
+              + (f"; rows merged within {_lat_mod.ROW_MERGE:g}, the nearest shift's copy kept" if _lat_mod.ROW_MERGE > 1e-8
+                 else f"; rows merged within 1e-8 (copies within {_lat_mod.ROW_DUP:g} counted, not merged)") + ")",
+              flush=True)
         # the ports' positions behind every (b, c) this process builds: the gates
         # call D.alpha_certified with b and c, and the ranks build them from the
         # positions
@@ -4393,7 +4403,9 @@ def main():
                       f"most {_li['newton_max']} per member); line {_li['line_shifts']} shifts (at most "
                       f"{_li['line_waves_max']} waves, {_li['line_not_clear']} not clear); strip up to "
                       f"{_li['strip_shifts_max']} shifts, {_li['strip_incomplete']} incomplete; up to {_li['stab_rows_max']} "
-                      f"stability rows (up to {_li.get('rows_dup_max', 0)} copies merged beyond 1e-8); "
+                      f"stability rows (up to {_li.get('rows_dup_max', 0)} copies "
+                      + (f"merged beyond 1e-8" if _lat_mod.ROW_MERGE > 1e-8 else f"within {_lat_mod.ROW_DUP:g}, kept")
+                      + "); "
                       f"{_li['stab_cuts']} trial(s) across the line from an admissible iterate ("
                       + ("cut back" if _li.get('cross_policy') == 'cut' else "weighed by the merit")
                       + f"), {_li['stab_cuts_unseen']} of them by an eigenvalue without a row at the iterate"
