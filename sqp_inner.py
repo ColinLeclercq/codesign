@@ -27,6 +27,10 @@ compensator inside the margin, lowest sigma_max).  Same return contract as
 solve_epigraph: (best, ncalls, H, stats).
 """
 from __future__ import annotations
+import io
+import json
+import os
+import sys
 import time
 import numpy as np
 import scipy.sparse as sp
@@ -73,6 +77,42 @@ FOLLOW_SCAN = 21        # value-only window scan points per followed member per 
 FIELD_KMAX2 = None      # FB/FC shape constraint (v^H K v)/(v^H M v) <= this (squared RMS wavenumber; driver --field-kmax; STAGE5 32)
 FIELD_ORDER = 1         # 1: H^1 form v^H K v; 2: H^2 form v^H K M^-1 K v <= kmax^4 v^H M v (driver --field-order; STAGE5 32)
 FOLLOW_DEDUP = True     # members sharing a top: all but the nearest restart from their own base (2026-09-26)
+LAT_ASYNC = 'off'       # lattice, no strip: the missed-peak level set after an accepted step BESIDE the next iteration
+                        # (--lattice-async; 20261010j stage D, level-set-waves.md LS3 with its verifier's corrections,
+                        # eval-waves.md P5, driver-serial.md P3).  'on': its disks on the worker ranks while the next QP and
+                        # line-search trials run on the others (the look-ahead); kept when the call adds no member (the
+                        # look-ahead WAS the synchronous continuation), else everything it changed put back and the
+                        # synchronous continuation taken.  'redo': every look-ahead discarded and redone (the restore's own
+                        # test: the iterates must not change).  'off' (default): the synchronous call, as before
+_SP_OUT = []            # (the real stdout, the lattice, the look-ahead's captured output) while a look-ahead is out
+
+
+class _Its:
+    """range(n) for the SQP's iterations, which the asynchronous level set can
+    rewind (20261010j stage D): a discarded look-ahead resumes at the iteration
+    it started in.  on_end(): called when the iterations run out (a look-ahead
+    still out is joined there); True when it rewound them."""
+
+    def __init__(self, n, on_end=None):
+        self.n, self.i, self.on_end = int(n), 0, on_end
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.i >= self.n and not (self.on_end is not None and self.on_end()):
+            raise StopIteration
+        self.i += 1
+        return self.i - 1
+
+    def rewind(self, k):
+        self.i = int(k)
+
+
+def _zh(z):
+    """A design's fingerprint for the SQP trace (SQP_TRACE): sha1 of its bytes."""
+    import hashlib
+    return None if z is None else hashlib.sha1(np.ascontiguousarray(np.asarray(z, float)).tobytes()).hexdigest()[:16]
 
 try:
     import clarabel
@@ -299,6 +339,38 @@ class Evaluator:
         self.W = np.asarray(sorted(set(float(w) for w in W)), float)
         self.enroll = sorted(set(int(np.argmin(np.abs(self.W - f))) for f in enroll_freqs))
 
+    _LOOK_SHARED = ('D', 'pk', 'flags', 'ctl', 'oracle', 'lattice')    # objects held, never copied
+
+    def look_state(self):
+        """Everything an evaluation changes on this object, as at a look-ahead's
+        start (20261010j stage D; look_restore puts it back when the look-ahead
+        is discarded): EVERY attribute, its containers copied -- the hints
+        w_star, the members' carried state follow_state (one level deeper: each
+        member's dict is changed in place), W, the members and their radii, the
+        logs the round reads (lat_info, lat_line, level_log, refine_log, ...),
+        the counters, the scales fixed at a first call.  Copying all of them,
+        not a list of the ones known to change, so that a new attribute is
+        covered too (the verifier: w_star, follow_state, ... 'anything else')."""
+        S = {}
+        for k, v in self.__dict__.items():
+            if k in self._LOOK_SHARED:
+                S[k] = v
+            elif k == 'follow_state':
+                S[k] = {k_: dict(v_) for k_, v_ in v.items()}
+            elif isinstance(v, dict):
+                S[k] = dict(v)
+            elif isinstance(v, (list, set)):
+                S[k] = type(v)(v)
+            elif isinstance(v, np.ndarray):
+                S[k] = v.copy()
+            else:
+                S[k] = v
+        return S
+
+    def look_restore(self, S):
+        self.__dict__.clear()
+        self.__dict__.update(S)
+
     def missed_peaks(self, z, t, ws, tol, rows=None):
         """A-N on the reduced model: sweep sigma_1 on `ws` at z (cheap on the
         oracle), return the local maxima above t (1 + tol) not yet in W.
@@ -323,23 +395,40 @@ class Evaluator:
             # (770632 round 11, by elimination: the rest of the band unexamined).
             # A top near a FIXED member was and is new (20261009b: 0.0656 next to
             # the fixed 0.0664, refused).
-            gam = t * (1.0 + tol)
-            L = self.lattice.level(z, gam, float(ws[0]), float(ws[-1]), watch=(tol, rows or []))
-            out = list(L['cross'])
-            oc = L.get('outcome', 'region' if L['cross'] else ('clear' if L['clear'] else 'inconclusive'))
-            self.level_log.append(dict(shifts=L['shifts'], waves=L['waves'], clear=L['clear'], cross=len(L['cross']),
-                                       cg_max=L['cg_max'], pencil=L['pencil'], outcome=oc,
-                                       watched=len(L.get('watched') or []), disks=L.get('disks')))
-            # the decision, kept for the round's history (20261010j, P7: the round-11
-            # sequence of 770632 could only be inferred by elimination and replay)
-            self.refine_log.append(dict(t=float(t), gam=float(gam), outcome=oc, ok=bool(L['clear'] or L['cross']),
-                                        above=bool(out), level_shifts=int(L['shifts']), level_waves=int(L['waves']),
-                                        uncovered=float(L['uncovered']),
-                                        cross=[(round(float(w_), 6), round(float(v_), 6)) for w_, v_ in L['cross']],
-                                        watched=[(round(r_['w'], 6), round(r_['v'], 6), round(r_['by_w'], 6), round(r_['by_v'], 6))
-                                                 for r_ in (L.get('watched') or [])]))
-            out.sort(key=lambda p_: -p_[1])
-            return out
+            gam, wlo, whi, watch = self.level_args(t, ws, tol, rows)
+            L = self.lattice.level(z, gam, wlo, whi, watch=watch)
+            return self.level_post(L, t, gam)
+        return self._missed_reduced(z, t, ws, tol)
+
+    def level_args(self, t, ws, tol, rows=None):
+        """The lattice's level-set call of missed_peaks: (gam, wlo, whi, watch)."""
+        return t * (1.0 + tol), float(ws[0]), float(ws[-1]), (tol, rows or [])
+
+    def level_post(self, L, t, gam):
+        """missed_peaks' reading of the level set's result L (asked at gam for
+        t): the regions above, highest first; the call into level_log and
+        refine_log.  Kept apart from the call itself so that the asynchronous
+        level set (20261010j stage D) reads a result it joined beside the next
+        iteration exactly as the synchronous call does."""
+        out = list(L['cross'])
+        oc = L.get('outcome', 'region' if L['cross'] else ('clear' if L['clear'] else 'inconclusive'))
+        self.level_log.append(dict(shifts=L['shifts'], waves=L['waves'], clear=L['clear'], cross=len(L['cross']),
+                                   cg_max=L['cg_max'], pencil=L['pencil'], outcome=oc,
+                                   watched=len(L.get('watched') or []), disks=L.get('disks')))
+        # the decision, kept for the round's history (20261010j, P7: the round-11
+        # sequence of 770632 could only be inferred by elimination and replay)
+        self.refine_log.append(dict(t=float(t), gam=float(gam), outcome=oc, ok=bool(L['clear'] or L['cross']),
+                                    above=bool(out), level_shifts=int(L['shifts']), level_waves=int(L['waves']),
+                                    uncovered=float(L['uncovered']),
+                                    cross=[(round(float(w_), 6), round(float(v_), 6)) for w_, v_ in L['cross']],
+                                    watched=[(round(r_['w'], 6), round(r_['v'], 6), round(r_['by_w'], 6), round(r_['by_v'], 6))
+                                             for r_ in (L.get('watched') or [])]))
+        out.sort(key=lambda p_: -p_[1])
+        return out
+
+    def _missed_reduced(self, z, t, ws, tol):
+        """missed_peaks on the reduced model (the level set on its matrices, else
+        the sweep)."""
         if self.oracle is None:
             return []
         D, pk = self.D, self.pk
@@ -1245,7 +1334,26 @@ def _box_stats(box_log):
                 el_dup=int(sum(b_.get('el_dup', 0) for b_ in box_log)))
 
 
-def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
+def solve_epigraph_sqp(*args, **kw):
+    """The SQP (_solve_epigraph_sqp).  This wrapper only makes sure that an
+    error raised inside a look-ahead (LAT_ASYNC, 20261010j stage D) leaves no
+    captured output and no lattice task out behind it."""
+    try:
+        return _solve_epigraph_sqp(*args, **kw)
+    finally:
+        while _SP_OUT:
+            out_, lat_, buf_ = _SP_OUT.pop()
+            sys.stdout = out_
+            if buf_.getvalue():
+                out_.write("    [the look-ahead's lines when the solve failed -- not committed:]\n" + buf_.getvalue())
+                out_.flush()
+            try:
+                lat_.async_abort()
+            except Exception:
+                pass
+
+
+def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                        enroll=None, kink_block=True, trust0=None, tol=1e-6,
                        sel_margin=1e-3, verbose=False, H0=None, ctrl_lmi=False,
                        oracle=None, reach=1.0, res_tol=1e-4,
@@ -1632,223 +1740,361 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         best.update(g=e['smax'], z=z.copy(), al=e['al'], t=t, clr=e['clr'], w=_argw(e))
     if admissible(e):
         _last_adm[0] = (z.copy(), t)
-    for it in range(int(maxit)):
-        if _t_it is not None:
-            _it_wall = max(_it_wall, time.time() - _t_it)   # every way an iteration ends (continue included)
-        if deadline is not None and time.time() + _it_wall > deadline:
-            # out of time for another iteration: the solve returns what it has (code 4,
-            # as an exhausted iteration budget), the round's certificate and gate then fit
-            _deadline_hit = True
-            print(f"    sqp: deadline -- stopped after {it} iteration(s) (the longest {_it_wall:.0f} s), "
-                  f"{max(deadline - time.time(), 0.0):.0f} s before the solve's deadline", flush=True)
-            break
-        _t_it = time.time()
-        _disp = (z - z_start, float(max_disp)) if max_disp is not None else None
-        sub, status = _sub(e, t, H, Delta, _disp)
-        if sub is None:
-            # 2026-09-25: at the ne=100 K+B+C fixed point the subproblem failed
-            # (code 12) three rounds running, while the same subproblem with a
-            # fresh Hessian solves: reset the quasi-Newton matrix and retry once
-            sub_status_log.append(str(status))
-            H = np.eye(NZ) * max(float(np.mean(np.abs(np.diag(H)))), 1e-8)
+    # ---- THE LEVEL SET BESIDE THE NEXT ITERATION (20261010j stage D, LAT_ASYNC /
+    # --lattice-async; level-set-waves.md LS3 with its verifier's corrections,
+    # eval-waves.md P5, driver-serial.md P3).  Without the strip the missed-peak
+    # level set ran alone after every accepted step (central 770632: 65 % of the
+    # wall, ranks busy 8 %, 46-127 s a call), and at least 82-88 % of the calls
+    # added nothing.  Here, at the accepted step's C (the refine below), the call
+    # is SENT (lattice.level_start: its disks on the worker ranks) and the loop goes
+    # on as if it added nothing -- the rest of this iteration and the next one's
+    # BFGS, QP and line-search trials on the ranks the disks leave free (the
+    # LOOK-AHEAD) -- until the next C, a stop (break, the iterations run out) or
+    # nothing else to do; there the call is JOINED (_sp_join):
+    #   - it added no member: the look-ahead WAS the synchronous continuation
+    #     (nothing it did depends on the call, nor the call on it: the call reads
+    #     the design, level_prev and the watch rows of its C, and the look-ahead
+    #     never asks for a level set) -- KEPT, the call's record put where the
+    #     synchronous call made it, the look-ahead's printed lines after it;
+    #   - it found members (or 'redo'): DISCARDED -- every state the look-ahead
+    #     changed put back as it was at that C (the loop's own variables and lists,
+    #     the evaluator's every attribute, the lattice's tops / kept centres / memos,
+    #     the ranks' designs and line vectors), the iterations rewound to it, and the
+    #     synchronous continuation taken there with the call's result (_rb).
+    # The iterates are therefore those of the synchronous code, provided a task's
+    # result does not depend on the rank that computed it (lattice 'Determinism';
+    # the look-ahead's waves run on fewer ranks, the level disks never on rank 0).
+    # One look-ahead deep (a deeper one would change level_prev, the next call's
+    # first wave: eval-waves.md P5 verifier).  The strip arm keeps its level set in
+    # the accepted trial's re-evaluation (its look-ahead would hold a level set).
+    _asy = (lattice is not None and LAT_ASYNC in ('on', 'redo') and refine_tol is not None and not LAT_STRIP
+            and getattr(lattice, 'pool', None) is not None and int(getattr(lattice, 'size', 1)) > 1)
+    _sp = None                                            # the look-ahead out: the call's job, the state at its C
+    _rb = None                                            # a discarded look-ahead: resume at its C (state, result)
+    _trace = [] if os.environ.get('SQP_TRACE') else None  # the per-iteration trace (diagnostics; SQP_TRACE = a file)
+    _asy_wait0 = float(lattice._astat['wait']) if _asy else 0.0
+
+    def _tr_level(it_, z_, t_, smax_, mp_):
+        # the trace's record of a level-set call (refine_log's last entry, the members it adds in full)
+        rl_ = ev_fn.refine_log[-1]
+        return dict(k='level', it=int(it_), z=_zh(z_), t=float(t_), smax=float(smax_), gam=float(rl_['gam']),
+                    outcome=rl_.get('outcome'), cross=[list(c_) for c_ in rl_.get('cross', [])],
+                    shifts=int(rl_.get('level_shifts', 0)), waves=int(rl_.get('level_waves', 0)),
+                    added=[[float(w_), float(v_)] for w_, v_ in mp_], wall=round(time.time() - t_start, 3))
+
+    def _sp_state():
+        """The state at a C that the look-ahead may change: the loop's variables
+        (restored at the loop's top), its lists and dicts (copies), the
+        evaluator, the lattice driver's state (look_state)."""
+        return dict(loc=(z, t, e, H, Delta, nu, W, code, exit_info, _deadline_hit, _it_wall, _t_it, _alpha_prev,
+                         _last_pair_mu, _lev_at, alpha, accepted, d, dt, sub, status, gL, stat, pred, m0, en, zn, tn),
+                    lists={nm_: list(v_) for nm_, v_ in _sp_lists().items()}, box=[dict(b_) for b_ in box_log],
+                    best=dict(best), ev=ev_fn.look_state(), lat=lattice.look_state(),
+                    ntr=(len(_trace) if _trace is not None else 0))
+
+    def _sp_lists():
+        L_ = dict(hist=hist, path=path, path_info=path_info, _backs_at=_backs_at, pair_log=pair_log,
+                  sub_status_log=sub_status_log, stab_cross=stab_cross, cands=cands, added=added, n_soc=n_soc,
+                  n_ctrl_cut=n_ctrl_cut, n_stab_cut=n_stab_cut, n_stab_unseen=n_stab_unseen, _last_adm=_last_adm,
+                  _n_out=_n_out, n_back=n_back, _QP_DUMPED=_QP_DUMPED)   # (the QP dumps' count: theirs, not the look-ahead's)
+        if _trace is not None:
+            L_['_trace'] = _trace
+        return L_
+
+    def _sp_launch(it_, lev_):
+        """Send the level call of this C beside the look-ahead; None where it
+        cannot run so (the synchronous call then)."""
+        nonlocal _sp
+        gam_, wlo_, whi_, watch_ = ev_fn.level_args(lev_, refine_grid, refine_tol, e.get('follow_rows'))
+        S_ = _sp_state()
+        job_ = lattice.level_start(z, gam_, wlo_, whi_, watch=watch_)
+        if job_ is None:
+            return None
+        buf_ = io.StringIO()
+        _SP_OUT.append((sys.stdout, lattice, buf_))
+        sys.stdout = buf_                                  # the look-ahead's lines wait for its verdict
+        _sp = dict(job=job_, S=S_, it=int(it_), lev=lev_, gam=gam_, t=float(t), smax=float(e['smax']), z=z, buf=buf_)
+        return _sp
+
+    def _sp_join():
+        """Join the look-ahead's level call: False when the look-ahead is kept,
+        True when it is discarded (its state then put back, _rb set and the
+        iterations rewound to its C)."""
+        nonlocal _sp, _rb
+        S_, _sp = _sp, None
+        out_, _, buf_ = _SP_OUT.pop()
+        try:
+            L_ = lattice.level_join(S_['job'])
+        except BaseException:
+            lattice.async_abort()                          # every task still out received: none reaches a later call
+            raise
+        finally:
+            sys.stdout = out_
+            out_.write(S_['job'].buf.getvalue())           # the level set's own lines first (lattice.verbose)
+        mp_ = sorted(L_['cross'], key=lambda p_: -p_[1])[:refine_max]
+        if not mp_ and LAT_ASYNC != 'redo':
+            # KEPT: the call's record where the synchronous call made it, then the look-ahead's lines
+            ev_fn.level_post(L_, S_['lev'], S_['gam'])
+            ev_fn.refine_log[-1].update(it=int(S_['it']), t_epi=S_['t'], smax=S_['smax'], added=[])
+            if _trace is not None:
+                _trace.insert(S_['S']['ntr'], _tr_level(S_['it'], S_['z'], S_['t'], S_['smax'], mp_))
+            out_.write(buf_.getvalue()); out_.flush()
+            lattice.note_async('kept'); lattice.async_drop()
+            return False
+        # DISCARDED: back to its C -- the lists, the evaluator, the lattice and the ranks
+        # here, the loop's variables at the loop's top (_rb)
+        lattice.note_async('found' if mp_ else 'redo')
+        S0 = S_['S']
+        for nm_, v_ in _sp_lists().items():
+            v_[:] = S0['lists'][nm_]
+        box_log[:] = S0['box']
+        best.clear(); best.update(S0['best'])
+        ev_fn.look_restore(S0['ev']); lattice.look_restore(S0['lat']); lattice.async_restore()
+        _rb = dict(S=S0, L=L_, gam=S_['gam'], lev=S_['lev'], it=S_['it'])
+        _its.rewind(S_['it'])
+        return True
+
+    _its = _Its(int(maxit), on_end=lambda: _sp is not None and _sp_join())
+    for it in _its:
+        if _rb is not None:
+            # back at the C of a discarded look-ahead (its level call found members, or 'redo'):
+            # the loop's variables as they were there; the synchronous continuation follows
+            (z, t, e, H, Delta, nu, W, code, exit_info, _deadline_hit, _it_wall, _t_it, _alpha_prev,
+             _last_pair_mu, _lev_at, alpha, accepted, d, dt, sub, status, gL, stat, pred, m0, en, zn, tn) = _rb['S']['loc']
+            if it != _rb['it']:
+                raise RuntimeError(f"sqp: a discarded look-ahead resumed at iteration {it}, not at its own {_rb['it']}")
+        else:
+            if _t_it is not None:
+                _it_wall = max(_it_wall, time.time() - _t_it)   # every way an iteration ends (continue included)
+            if deadline is not None and time.time() + _it_wall > deadline:
+                # out of time for another iteration: the solve returns what it has (code 4,
+                # as an exhausted iteration budget), the round's certificate and gate then fit
+                _deadline_hit = True
+                print(f"    sqp: deadline -- stopped after {it} iteration(s) (the longest {_it_wall:.0f} s), "
+                      f"{max(deadline - time.time(), 0.0):.0f} s before the solve's deadline", flush=True)
+                if _sp is not None and _sp_join():
+                    continue                              # a discarded look-ahead's stop: back to its C
+                break
+            _t_it = time.time()
+            _disp = (z - z_start, float(max_disp)) if max_disp is not None else None
             sub, status = _sub(e, t, H, Delta, _disp)
             if sub is None:
-                sub_status_log.append(str(status) + ' (after reset)')
-                code = 12; hist.append(dict(it=it, status=status)); break
-        if ev_fn.pair_mode and sub.get('pair_dual') is not None:
-            _last_pair_mu = sub['pair_dual']
-        d, dt = sub['d'], sub['dt']
-        if lattice is not None:
-            # which stability rows bind at this QP's solution, and at what radius
-            # (20261010j stage C, strip-ab.md AB4; the round's line, _box_stats)
-            _ad = sub.get('al_diag') or []
-            _act = [q_ for q_ in _ad if q_[1]]
-            box_log.append(dict(n=len(_ad), act=len(_act), el=int(sum(q_[2] for q_ in _ad)),
-                                ndup=int(sum(q_[5] for q_ in _ad)), act_dup=int(sum(q_[5] for q_ in _act)),
-                                el_dup=int(sum(q_[2] and q_[5] for q_ in _ad)),
-                                deep=min((q_[0] for q_ in _act), default=None),
-                                gact=max((q_[3] for q_ in _act), default=0.0),
-                                rb_act=min((q_[4] for q_ in _act), default=None),
-                                n_in=int(sum(q_[4] <= Delta for q_ in _ad)), Delta=float(Delta),
-                                on_box=bool(_tnorm(d) >= 0.999 * Delta),
-                                herm=int(sum(float(np.linalg.norm(h_)) > 1e-8 for h_ in (sub.get('hermite_duals') or []))),
-                                alpha=None, step=None))
-        gL = grad_L(e, sub)
-        stat = float(np.linalg.norm(gL))
-        pred = merit(e, t) - (t + dt)                   # model merit at the QP step: t + dt (rows and stability rows linearly satisfied)
-        m0 = merit(e, t)
-        # WARM line search (2026-09-25): start at twice the last accepted alpha --
-        # in the tail every search walked down from 1 to 1/64 .. 1/128, six or
-        # seven evaluations per iteration (44 % of a round's evaluations)
-        # ... but not where the radius itself is shrunk to the accepted step (the
-        # pair's face): there the radius is the memory, and a warm alpha < 1 on
-        # top of it ratcheted both down (ne=100 round 11: radius 2.5e-7, alpha
-        # never back to 1; the same design from alpha = 1 moved 7.9285 -> 7.8808),
-        # nor anywhere with PARTIAL_SHRINK (the same ratchet)
-        _shrinking = (PAIR_BALL and ev_fn.pair_mode) or PARTIAL_SHRINK
-        alpha, accepted = (min(1.0, 2.0 * _alpha_prev) if (ALPHA_WARM and not _shrinking) else 1.0), False
-        _a0 = alpha
-        if DEBUG_LS:
-            # the QP's own view: elastic slacks, nu, and its compensator rows' prediction
-            _cr = [al_k + float(g_k @ d) for al_k, g_k in e['ctrl_rows']]
-            print(f"      qp it {it}: slack max {sub.get('slack_max', 0.0):.2e}, nu {nu:.3g}, dt {dt:+.3e}, |d| {_tnorm(d):.2e}; "
-                  f"compensator rows {len(_cr)} predicted max {max(_cr) if _cr else float('nan'):+.8f} (line {lim:+.5f}), "
-                  f"at z + d {_alc_cheap(z + d):+.8f}; hermite blocks {[k_ for k_ in ('hermite', 'hermite_cl') if e.get(k_) is not None]}",
-                  flush=True)
-        for _ls in range(8):
-            zn = z + alpha * d; tn = t + alpha * dt
-            if ev_fn.pair_mode:
-                zn, _rres = ev_fn.retract(zn)             # back onto the manifold (second order in the step)
-            _kc = 'al_ctrl_rest' if ev_fn.pair_mode else 'al_ctrl'
-            en = None
-            if (pen_adapt and flags.get('K') and e.get(_kc, -np.inf) <= lim + 1e-8
-                    and _alc_cheap(zn) > lim + 1e-8):
-                # the trial's compensator crossed its line (exact, r x r: checked
-                # before the plant is evaluated): back onto the line, or a shorter
-                # step -- the constraint is exact and costs nothing, so an
-                # admissible iterate never steps outside it (2026-10-06, test plant,
-                # order 10, round 1: a step of 2.2 in z took a pole to +0.17 for 87
-                # of sigma against a penalty of 22, and the solve sat on
-                # inadmissible iterates from there)
-                ev_fn.lat_strip = False           # a trial: the line only (strip and level set once accepted, below)
-                try:
-                    _rc = _ctrl_restore(zn, None)
-                finally:
-                    ev_fn.lat_strip = True
-                if _rc is not None:
-                    zn, en = _rc; n_soc[0] += 1
-                elif not _close_at_line(zn):
-                    n_ctrl_cut[0] += 1
-                    alpha *= 0.5
-                    continue
-                # a nearly double pole at the line off the face S: its crossing moves
-                # like the square root of the step, halving cannot bring it back --
-                # the merit decides, as before
-            if en is None:
-                # a trial: the line's certificate decides its admissibility; the
-                # strip (the rows of every eigenvalue near the line) is built for
-                # the iterate only, once accepted (below)
-                ev_fn.lat_strip = False
+                # 2026-09-25: at the ne=100 K+B+C fixed point the subproblem failed
+                # (code 12) three rounds running, while the same subproblem with a
+                # fresh Hessian solves: reset the quasi-Newton matrix and retry once
+                sub_status_log.append(str(status))
+                H = np.eye(NZ) * max(float(np.mean(np.abs(np.diag(H)))), 1e-8)
+                sub, status = _sub(e, t, H, Delta, _disp)
+                if sub is None:
+                    sub_status_log.append(str(status) + ' (after reset)')
+                    code = 12; hist.append(dict(it=it, status=status))
+                    if _sp is not None and _sp_join():
+                        continue
+                    break
+            if ev_fn.pair_mode and sub.get('pair_dual') is not None:
+                _last_pair_mu = sub['pair_dual']
+            d, dt = sub['d'], sub['dt']
+            if lattice is not None:
+                # which stability rows bind at this QP's solution, and at what radius
+                # (20261010j stage C, strip-ab.md AB4; the round's line, _box_stats)
+                _ad = sub.get('al_diag') or []
+                _act = [q_ for q_ in _ad if q_[1]]
+                box_log.append(dict(n=len(_ad), act=len(_act), el=int(sum(q_[2] for q_ in _ad)),
+                                    ndup=int(sum(q_[5] for q_ in _ad)), act_dup=int(sum(q_[5] for q_ in _act)),
+                                    el_dup=int(sum(q_[2] and q_[5] for q_ in _ad)),
+                                    deep=min((q_[0] for q_ in _act), default=None),
+                                    gact=max((q_[3] for q_ in _act), default=0.0),
+                                    rb_act=min((q_[4] for q_ in _act), default=None),
+                                    n_in=int(sum(q_[4] <= Delta for q_ in _ad)), Delta=float(Delta),
+                                    on_box=bool(_tnorm(d) >= 0.999 * Delta),
+                                    herm=int(sum(float(np.linalg.norm(h_)) > 1e-8 for h_ in (sub.get('hermite_duals') or []))),
+                                    alpha=None, step=None))
+            gL = grad_L(e, sub)
+            stat = float(np.linalg.norm(gL))
+            pred = merit(e, t) - (t + dt)                   # model merit at the QP step: t + dt (rows and stability rows linearly satisfied)
+            m0 = merit(e, t)
+            # WARM line search (2026-09-25): start at twice the last accepted alpha --
+            # in the tail every search walked down from 1 to 1/64 .. 1/128, six or
+            # seven evaluations per iteration (44 % of a round's evaluations)
+            # ... but not where the radius itself is shrunk to the accepted step (the
+            # pair's face): there the radius is the memory, and a warm alpha < 1 on
+            # top of it ratcheted both down (ne=100 round 11: radius 2.5e-7, alpha
+            # never back to 1; the same design from alpha = 1 moved 7.9285 -> 7.8808),
+            # nor anywhere with PARTIAL_SHRINK (the same ratchet)
+            _shrinking = (PAIR_BALL and ev_fn.pair_mode) or PARTIAL_SHRINK
+            alpha, accepted = (min(1.0, 2.0 * _alpha_prev) if (ALPHA_WARM and not _shrinking) else 1.0), False
+            _a0 = alpha
+            if DEBUG_LS:
+                # the QP's own view: elastic slacks, nu, and its compensator rows' prediction
+                _cr = [al_k + float(g_k @ d) for al_k, g_k in e['ctrl_rows']]
+                print(f"      qp it {it}: slack max {sub.get('slack_max', 0.0):.2e}, nu {nu:.3g}, dt {dt:+.3e}, |d| {_tnorm(d):.2e}; "
+                      f"compensator rows {len(_cr)} predicted max {max(_cr) if _cr else float('nan'):+.8f} (line {lim:+.5f}), "
+                      f"at z + d {_alc_cheap(z + d):+.8f}; hermite blocks {[k_ for k_ in ('hermite', 'hermite_cl') if e.get(k_) is not None]}",
+                      flush=True)
+            for _ls in range(8):
+                zn = z + alpha * d; tn = t + alpha * dt
+                if ev_fn.pair_mode:
+                    zn, _rres = ev_fn.retract(zn)             # back onto the manifold (second order in the step)
+                _kc = 'al_ctrl_rest' if ev_fn.pair_mode else 'al_ctrl'
+                en = None
+                if (pen_adapt and flags.get('K') and e.get(_kc, -np.inf) <= lim + 1e-8
+                        and _alc_cheap(zn) > lim + 1e-8):
+                    # the trial's compensator crossed its line (exact, r x r: checked
+                    # before the plant is evaluated): back onto the line, or a shorter
+                    # step -- the constraint is exact and costs nothing, so an
+                    # admissible iterate never steps outside it (2026-10-06, test plant,
+                    # order 10, round 1: a step of 2.2 in z took a pole to +0.17 for 87
+                    # of sigma against a penalty of 22, and the solve sat on
+                    # inadmissible iterates from there)
+                    ev_fn.lat_strip = False           # a trial: the line only (strip and level set once accepted, below)
+                    try:
+                        _rc = _ctrl_restore(zn, None)
+                    finally:
+                        ev_fn.lat_strip = True
+                    if _rc is not None:
+                        zn, en = _rc; n_soc[0] += 1
+                    elif not _close_at_line(zn):
+                        n_ctrl_cut[0] += 1
+                        alpha *= 0.5
+                        continue
+                    # a nearly double pole at the line off the face S: its crossing moves
+                    # like the square root of the step, halving cannot bring it back --
+                    # the merit decides, as before
+                if en is None:
+                    # a trial: the line's certificate decides its admissibility; the
+                    # strip (the rows of every eigenvalue near the line) is built for
+                    # the iterate only, once accepted (below)
+                    ev_fn.lat_strip = False
+                    try:
+                        en = ev_fn(zn)
+                    finally:
+                        ev_fn.lat_strip = True
+                if lattice is not None and admissible(e) and not admissible(en):
+                    # a trial across the closed loop's line from an admissible
+                    # iterate (lattice: every trial's line is certified on the full
+                    # model).  LAT_CROSS 'cut': a shorter step (2026-10-06, MIMO
+                    # central zero start: a step took an eigenvalue to -0.0496 for a
+                    # sigma decrease worth more than the penalty); 'merit': the merit
+                    # test below decides, as on the reduced path
+                    n_stab_cut[0] += 1
+                    _w, _j = _offender(e, en)
+                    if _w is not None and _j is None:
+                        n_stab_unseen[0] += 1
+                    if _w is not None:
+                        # how far past the line it went, and how far the iterate's
+                        # linearised row said it would go (> 0: the QP's step itself
+                        # gave the row up, its elastic slack; <= 0: the eigenvalue moved
+                        # further than its linearisation)
+                        _al_j, _g_j = e['al_rows_all'][_j] if _j is not None else (None, None)
+                        stab_cross.append(dict(depth=float(_w.real + eps), alpha=float(alpha),
+                                               pred=(None if _j is None else float(_al_j + alpha * float(_g_j @ d) + eps))))
+                        if len(stab_cross) <= 3:
+                            # the first few of each solve in full (in every log): which
+                            # eigenvalue, from where
+                            _q = (e['lat_eigs'][0][int(np.argmin([abs(_w - q_) for q_ in e['lat_eigs'][0]]))]
+                                  if e['lat_eigs'][0] else None)
+                            print(f"      crossing (it {it}, alpha {alpha:g}, |step| {alpha * _tnorm(d):.2e}): {_w:.5f} at the "
+                                  f"trial; nearest row eigenvalue at the iterate {_q if _q is None else f'{_q:.5f}'}"
+                                  + (f", its row predicted Re {stab_cross[-1]['pred'] - eps:+.6f}" if _j is not None else
+                                     " (no row within 0.05)"), flush=True)
+                    if LAT_CROSS == 'cut':
+                        alpha *= 0.5
+                        continue
+                if DEBUG_LS:
+                    # the row attaining the trial's max: actual value vs its linear model
+                    _i = int(np.argmax(en['s']))
+                    if len(en['s']) == len(e['s']):
+                        print(f"      ls it {it} a={alpha:.3g}: max row {_i} w={float(ev_fn.W[_i]):+.4f}"
+                              f"{' (kink block)' if _i in e['blocks'] else ''}: {en['s'][_i]:.7f} vs model "
+                              f"{e['s'][_i] + alpha * float(e['Gs'][_i] @ d):.7f} (was {e['s'][_i]:.7f}); "
+                              f"retraction moved {np.linalg.norm(zn - z - alpha * d):.2e} of {alpha * np.linalg.norm(d):.2e}", flush=True)
+                    _pp = en.get('pair')
+                    print(f"      ls it {it} a={alpha:.3g}: merit {merit(en, tn):.7f} vs {m0 - 1e-4 * alpha * max(pred, 0.0):.7f} "
+                          f"(t {tn:.7f} smax {en['smax']:.7f} al {en['al']:+.5f} alc {en['al_ctrl']:+.8f} "
+                          f"rest {en.get('al_ctrl_rest', np.nan):+.8f} pair {'-' if _pp is None else '%+.2e/%.1e' % (_pp['exc'], _pp['sep'])} "
+                          f"res {(_rres if ev_fn.pair_mode else 0.0):.1e} viol {viol(en, tn):.2e})", flush=True)
+                if merit(en, tn) <= m0 - 1e-4 * alpha * max(pred, 0.0):
+                    accepted = True; break
+                alpha *= 0.5
+            if DEBUG_LS and not accepted:
+                _er = ev_fn(z)
+                print(f"      ls it {it}: REJECTED; the current iterate re-evaluated: smax {_er['smax']:.7f} (recorded {e['smax']:.7f})", flush=True)
+                for _i in np.argsort(-np.abs(_er['s'] - e['s']))[:6]:
+                    _k = round(float(ev_fn.W[_i]), 6)
+                    print(f"        row {_i} w={_k:+.4f}: recorded {e['s'][_i]:.7f} at {e['tops'].get(_k, _k):+.6f}, "
+                          f"re-evaluated {_er['s'][_i]:.7f} at {_er['tops'].get(_k, _k):+.6f}", flush=True)
+            _alpha_prev = alpha if accepted else 1.0
+            if lattice is not None and accepted and box_log:
+                box_log[-1].update(alpha=float(alpha), step=float(_tnorm(alpha * d)))
+            hist.append(dict(it=it, t=t, smax=e['smax'], al=e['al'], stat=stat,
+                             step=float(np.linalg.norm(alpha * d)), alpha=alpha,
+                             Delta=Delta, accepted=accepted, nblk=len(e['blocks'])))
+            if _trace is not None:
+                # (diagnostics, SQP_TRACE) the iteration: its iterate and the trial it ended on, by fingerprint
+                _trace.append(dict(k='it', it=int(it), acc=bool(accepted), alpha=float(alpha), t=float(t),
+                                   smax=float(e['smax']), al=float(e['al']), Delta=float(Delta), nu=float(nu),
+                                   stat=float(stat), pred=float(pred), z=_zh(z), zn=_zh(zn),
+                                   tn=float(tn), smax_n=(float(en['smax']) if en is not None else None), nW=int(len(ev_fn.W)),
+                                   wall=round(time.time() - t_start, 3)))
+            if verbose:
+                print(f"    sqp {it:3d}: t={t:.6f} smax={e['smax']:.6f} al={e['al']:+.4f} alc={e['al_ctrl']:+.5f} "
+                      + (f"rest={e['al_ctrl_rest']:+.7f} exc={e['pair']['exc']:+.1e} " if e.get('pair') is not None else '') +
+                      f"{'adm' if admissible(e) else 'NOT adm'} stat={stat:.2e} step={np.linalg.norm(alpha*d):.2e} a={alpha:g} "
+                      f"D={Delta:.2e} nu={nu:.3g} {'ok' if accepted else 'REJ'}", flush=True)
+            if not accepted:
+                Delta *= 0.5
+                if Delta < 1e-10:
+                    code = 6
+                    if _sp is not None and _sp_join():
+                        continue
+                    break
+                continue
+            if not en.get('lat_strip', True):
+                # the accepted trial with its strip (the QP's rows) and, in the same
+                # waves, the level-set certificate the missed-peak check below asks
+                # for at this design and level (lattice memo).  The level from the
+                # rows' maximum, not the epigraph's t alone (20261010j, P1, below),
+                # the trial's own rows (the same design) watching
+                _lev_at = (zn.copy(), max(tn, en['smax']))
+                ev_fn.level_req = ((_lev_at[1] * (1.0 + refine_tol), float(refine_grid[0]), float(refine_grid[-1]))
+                                   if refine_tol is not None else None)
+                ev_fn.level_watch = (refine_tol, en.get('follow_rows') or []) if refine_tol is not None else None
                 try:
                     en = ev_fn(zn)
                 finally:
-                    ev_fn.lat_strip = True
-            if lattice is not None and admissible(e) and not admissible(en):
-                # a trial across the closed loop's line from an admissible
-                # iterate (lattice: every trial's line is certified on the full
-                # model).  LAT_CROSS 'cut': a shorter step (2026-10-06, MIMO
-                # central zero start: a step took an eigenvalue to -0.0496 for a
-                # sigma decrease worth more than the penalty); 'merit': the merit
-                # test below decides, as on the reduced path
-                n_stab_cut[0] += 1
-                _w, _j = _offender(e, en)
-                if _w is not None and _j is None:
-                    n_stab_unseen[0] += 1
-                if _w is not None:
-                    # how far past the line it went, and how far the iterate's
-                    # linearised row said it would go (> 0: the QP's step itself
-                    # gave the row up, its elastic slack; <= 0: the eigenvalue moved
-                    # further than its linearisation)
-                    _al_j, _g_j = e['al_rows_all'][_j] if _j is not None else (None, None)
-                    stab_cross.append(dict(depth=float(_w.real + eps), alpha=float(alpha),
-                                           pred=(None if _j is None else float(_al_j + alpha * float(_g_j @ d) + eps))))
-                    if len(stab_cross) <= 3:
-                        # the first few of each solve in full (in every log): which
-                        # eigenvalue, from where
-                        _q = (e['lat_eigs'][0][int(np.argmin([abs(_w - q_) for q_ in e['lat_eigs'][0]]))]
-                              if e['lat_eigs'][0] else None)
-                        print(f"      crossing (it {it}, alpha {alpha:g}, |step| {alpha * _tnorm(d):.2e}): {_w:.5f} at the "
-                              f"trial; nearest row eigenvalue at the iterate {_q if _q is None else f'{_q:.5f}'}"
-                              + (f", its row predicted Re {stab_cross[-1]['pred'] - eps:+.6f}" if _j is not None else
-                                 " (no row within 0.05)"), flush=True)
-                if LAT_CROSS == 'cut':
-                    alpha *= 0.5
-                    continue
-            if DEBUG_LS:
-                # the row attaining the trial's max: actual value vs its linear model
-                _i = int(np.argmax(en['s']))
-                if len(en['s']) == len(e['s']):
-                    print(f"      ls it {it} a={alpha:.3g}: max row {_i} w={float(ev_fn.W[_i]):+.4f}"
-                          f"{' (kink block)' if _i in e['blocks'] else ''}: {en['s'][_i]:.7f} vs model "
-                          f"{e['s'][_i] + alpha * float(e['Gs'][_i] @ d):.7f} (was {e['s'][_i]:.7f}); "
-                          f"retraction moved {np.linalg.norm(zn - z - alpha * d):.2e} of {alpha * np.linalg.norm(d):.2e}", flush=True)
-                _pp = en.get('pair')
-                print(f"      ls it {it} a={alpha:.3g}: merit {merit(en, tn):.7f} vs {m0 - 1e-4 * alpha * max(pred, 0.0):.7f} "
-                      f"(t {tn:.7f} smax {en['smax']:.7f} al {en['al']:+.5f} alc {en['al_ctrl']:+.8f} "
-                      f"rest {en.get('al_ctrl_rest', np.nan):+.8f} pair {'-' if _pp is None else '%+.2e/%.1e' % (_pp['exc'], _pp['sep'])} "
-                      f"res {(_rres if ev_fn.pair_mode else 0.0):.1e} viol {viol(en, tn):.2e})", flush=True)
-            if merit(en, tn) <= m0 - 1e-4 * alpha * max(pred, 0.0):
-                accepted = True; break
-            alpha *= 0.5
-        if DEBUG_LS and not accepted:
-            _er = ev_fn(z)
-            print(f"      ls it {it}: REJECTED; the current iterate re-evaluated: smax {_er['smax']:.7f} (recorded {e['smax']:.7f})", flush=True)
-            for _i in np.argsort(-np.abs(_er['s'] - e['s']))[:6]:
-                _k = round(float(ev_fn.W[_i]), 6)
-                print(f"        row {_i} w={_k:+.4f}: recorded {e['s'][_i]:.7f} at {e['tops'].get(_k, _k):+.6f}, "
-                      f"re-evaluated {_er['s'][_i]:.7f} at {_er['tops'].get(_k, _k):+.6f}", flush=True)
-        _alpha_prev = alpha if accepted else 1.0
-        if lattice is not None and accepted and box_log:
-            box_log[-1].update(alpha=float(alpha), step=float(_tnorm(alpha * d)))
-        hist.append(dict(it=it, t=t, smax=e['smax'], al=e['al'], stat=stat,
-                         step=float(np.linalg.norm(alpha * d)), alpha=alpha,
-                         Delta=Delta, accepted=accepted, nblk=len(e['blocks'])))
-        if verbose:
-            print(f"    sqp {it:3d}: t={t:.6f} smax={e['smax']:.6f} al={e['al']:+.4f} alc={e['al_ctrl']:+.5f} "
-                  + (f"rest={e['al_ctrl_rest']:+.7f} exc={e['pair']['exc']:+.1e} " if e.get('pair') is not None else '') +
-                  f"{'adm' if admissible(e) else 'NOT adm'} stat={stat:.2e} step={np.linalg.norm(alpha*d):.2e} a={alpha:g} "
-                  f"D={Delta:.2e} nu={nu:.3g} {'ok' if accepted else 'REJ'}", flush=True)
-        if not accepted:
-            Delta *= 0.5
-            if Delta < 1e-10:
-                code = 6; break
-            continue
-        if not en.get('lat_strip', True):
-            # the accepted trial with its strip (the QP's rows) and, in the same
-            # waves, the level-set certificate the missed-peak check below asks
-            # for at this design and level (lattice memo).  The level from the
-            # rows' maximum, not the epigraph's t alone (20261010j, P1, below),
-            # the trial's own rows (the same design) watching
-            _lev_at = (zn.copy(), max(tn, en['smax']))
-            ev_fn.level_req = ((_lev_at[1] * (1.0 + refine_tol), float(refine_grid[0]), float(refine_grid[-1]))
-                               if refine_tol is not None else None)
-            ev_fn.level_watch = (refine_tol, en.get('follow_rows') or []) if refine_tol is not None else None
-            try:
-                en = ev_fn(zn)
-            finally:
-                ev_fn.level_req = None; ev_fn.level_watch = None
-        # damped BFGS on the Lagrangian
-        subn, _ = subproblem(en, tn, H, Delta, eps, ctrl_max, kink_block,
-                             disp=((zn - z_start, float(max_disp)) if max_disp is not None else None), pen=nu / 100.0, relax=lattice is not None)
-        gLn = grad_L(en, subn) if subn is not None else gL
-        sv = zn - z; yv = gLn - gL
-        sHs = float(sv @ H @ sv); sy = float(sv @ yv)
-        if sHs > 0:
-            theta = 1.0 if sy >= 0.2 * sHs else 0.8 * sHs / (sHs - sy)
-            r_ = theta * yv + (1 - theta) * (H @ sv)
-            H = H - np.outer(H @ sv, H @ sv) / sHs + np.outer(r_, r_) / max(float(sv @ r_), 1e-16)
-        _adm_prev = bool(admissible(e))
-        z, t, e = zn, tn, en
-        if lattice is None or admissible(e):
-            path.append(z.copy())     # the gate's path: admissible iterates only (LAT_CROSS 'merit' may accept others)
-            path_info.append(_pinfo(e, it=int(it), alpha=float(alpha), prev_adm=_adm_prev, backs=int(n_back[0] - _backs_at[0])))
-            _backs_at[0] = n_back[0]
-        if _pair_ok and not ev_fn.pair_mode and not any(p_.get('event') == 'exit' for p_ in pair_log):
-            # entry DURING the solve too (2026-09-26): the ne=100 pair closed from
-            # 0.078 to 0.047 over rounds 12-15 and was let onto its face only at
-            # the next round's start (no re-entry after a release in this solve)
-            _zp = _try_enter(z, f'it {it}')
-            if _zp is not None:
-                ev_fn.pair_mode = True; z = _zp
-                e = ev_fn(z); t = max(t, e['smax']); _alpha_prev = 1.0
-                if lattice is None or admissible(e):
-                    path.append(z.copy())
-                    path_info.append(_pinfo(e, it=int(it), alpha=None, prev_adm=True, backs=0, how='pair entry'))
-        if (PARTIAL_SHRINK or (PAIR_BALL and ev_fn.pair_mode)) and alpha < 1.0:
-            # the line search found where the model holds: a radius of twice the
-            # accepted step (2 alpha failed), so the next QP picks its direction
-            # for the region it can use instead of a box corner cut by alpha
-            Delta = min(Delta, max(2.0 * alpha * _tnorm(d), 1e-10))
+                    ev_fn.level_req = None; ev_fn.level_watch = None
+            # damped BFGS on the Lagrangian
+            subn, _ = subproblem(en, tn, H, Delta, eps, ctrl_max, kink_block,
+                                 disp=((zn - z_start, float(max_disp)) if max_disp is not None else None), pen=nu / 100.0, relax=lattice is not None)
+            gLn = grad_L(en, subn) if subn is not None else gL
+            sv = zn - z; yv = gLn - gL
+            sHs = float(sv @ H @ sv); sy = float(sv @ yv)
+            if sHs > 0:
+                theta = 1.0 if sy >= 0.2 * sHs else 0.8 * sHs / (sHs - sy)
+                r_ = theta * yv + (1 - theta) * (H @ sv)
+                H = H - np.outer(H @ sv, H @ sv) / sHs + np.outer(r_, r_) / max(float(sv @ r_), 1e-16)
+            _adm_prev = bool(admissible(e))
+            z, t, e = zn, tn, en
+            if lattice is None or admissible(e):
+                path.append(z.copy())     # the gate's path: admissible iterates only (LAT_CROSS 'merit' may accept others)
+                path_info.append(_pinfo(e, it=int(it), alpha=float(alpha), prev_adm=_adm_prev, backs=int(n_back[0] - _backs_at[0])))
+                _backs_at[0] = n_back[0]
+            if _pair_ok and not ev_fn.pair_mode and not any(p_.get('event') == 'exit' for p_ in pair_log):
+                # entry DURING the solve too (2026-09-26): the ne=100 pair closed from
+                # 0.078 to 0.047 over rounds 12-15 and was let onto its face only at
+                # the next round's start (no re-entry after a release in this solve)
+                _zp = _try_enter(z, f'it {it}')
+                if _zp is not None:
+                    ev_fn.pair_mode = True; z = _zp
+                    e = ev_fn(z); t = max(t, e['smax']); _alpha_prev = 1.0
+                    if lattice is None or admissible(e):
+                        path.append(z.copy())
+                        path_info.append(_pinfo(e, it=int(it), alpha=None, prev_adm=True, backs=0, how='pair entry'))
+            if (PARTIAL_SHRINK or (PAIR_BALL and ev_fn.pair_mode)) and alpha < 1.0:
+                # the line search found where the model holds: a radius of twice the
+                # accepted step (2 alpha failed), so the next QP picks its direction
+                # for the region it can use instead of a box corner cut by alpha
+                Delta = min(Delta, max(2.0 * alpha * _tnorm(d), 1e-10))
         if (oracle is not None or lattice is not None) and refine_tol is not None:
             # exchange refinement INSIDE the inner solve: the reduced model
             # knows where the new design's peaks are; add the ones the working
@@ -1864,16 +2110,34 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
             # (the reduced path's dense certificate computes the maximum itself).
             # The strip arm asked for it above, from the trial's rows: the same
             # design, so its level (to 1e-9) and its memo
+            # (20261010j stage D) the look-ahead of an earlier C joined first: discarded, back to its C
+            if _sp is not None and _sp_join():
+                continue
             _lev = t
             if lattice is not None:
                 _lev = max(t, e['smax'])
                 if _lev_at is not None and np.array_equal(_lev_at[0], z) and _lev <= _lev_at[1] * (1.0 + 1e-9):
                     _lev = _lev_at[1]
             _lev_at = None
-            mp = ev_fn.missed_peaks(z, _lev, refine_grid, refine_tol, rows=e.get('follow_rows'))[:refine_max]
-            if lattice is not None and ev_fn.refine_log:
-                ev_fn.refine_log[-1].update(it=int(it), t_epi=float(t), smax=float(e['smax']),
-                                            added=[round(float(w_), 6) for w_, _ in mp])
+            _sp_here = None
+            if _rb is not None:
+                # resumed here: the call's result, joined beside the discarded look-ahead, read as missed_peaks reads it
+                if _lev != _rb['lev']:
+                    raise RuntimeError(f"sqp: a discarded look-ahead resumed at level {_lev!r}, not {_rb['lev']!r}")
+                mp = ev_fn.level_post(_rb['L'], _lev, _rb['gam'])[:refine_max]
+                _rb = None
+            elif _asy and it < int(maxit) - 1:
+                _sp_here = _sp_launch(it, _lev)            # the call sent, the look-ahead goes on as if it added nothing
+                mp = [] if _sp_here is not None else \
+                    ev_fn.missed_peaks(z, _lev, refine_grid, refine_tol, rows=e.get('follow_rows'))[:refine_max]
+            else:
+                mp = ev_fn.missed_peaks(z, _lev, refine_grid, refine_tol, rows=e.get('follow_rows'))[:refine_max]
+            if _sp_here is None:                           # (a look-ahead's call: recorded when it is joined)
+                if lattice is not None and ev_fn.refine_log:
+                    ev_fn.refine_log[-1].update(it=int(it), t_epi=float(t), smax=float(e['smax']),
+                                                added=[round(float(w_), 6) for w_, _ in mp])
+                if _trace is not None and lattice is not None and ev_fn.refine_log:
+                    _trace.append(_tr_level(it, z, t, e['smax'], mp))
             if mp:
                 enrolled_f = [float(ev_fn.W[i]) for i in ev_fn.enroll]
                 ev_fn.set_W(list(ev_fn.W) + [w for w, _ in mp], enrolled_f)
@@ -1954,7 +2218,11 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                 exit_info.update(row_w=float(ev_fn.W[_i]) if _i < len(ev_fn.W) else None,
                                  row_blocks={nm_: round(float(np.linalg.norm(_g[ix])), 6) for nm_, ix in pk.blocks()},
                                  stat_blocks={nm_: round(float(np.linalg.norm(_gl[ix])), 6) for nm_, ix in pk.blocks()})
+            if _sp is not None and _sp_join():
+                continue
             break
+    if _sp is not None or _rb is not None:
+        raise RuntimeError("sqp: a look-ahead of the asynchronous level set left out at the solve's end")
     _t_loop_end = time.time()                             # (deadline) the work below is the round's reserve's
     if (oracle is not None or lattice is not None) and added and cands:
         # the working set grew during the solve: a candidate's recorded smax is
@@ -2016,6 +2284,23 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
         print(f"    sqp: penalty nu = {nu:.3g} at the end; {n_soc[0]} compensator correction(s), "
               f"{n_ctrl_cut[0]} trial(s) cut back inside the compensator's line"
               + (f", {n_stab_cut[0]} inside the closed loop's (lattice)" if lattice is not None else ''), flush=True)
+    _asy_info = None
+    if _asy:
+        # the asynchronous level set's share of this solve (20261010j stage D): look-aheads kept / discarded,
+        # the joins' wait -- the level set's time NOT hidden behind the look-ahead
+        _a = lattice._astat
+        _asy_info = dict(mode=LAT_ASYNC, wait=float(_a['wait'] - _asy_wait0))
+        print(f"    sqp: level set beside the next iteration (--lattice-async {LAT_ASYNC}): look-aheads so far "
+              f"{_a['kept']} kept, {_a['found']} discarded (members found)"
+              + (f", {_a.get('redo', 0)} redone" if LAT_ASYNC == 'redo' else '')
+              + f"; this solve's joins waited {_asy_info['wait']:.0f} s of {time.time() - t_start:.0f} s", flush=True)
+    if _trace is not None:
+        _trace.append(dict(k='end', code=int(code), iters=len(hist), g=float(best['g']) if best['g'] is not None else None,
+                           z=_zh(best['z']), t=(float(best['t']) if best.get('t') is not None else None),
+                           W=[float(w_) for w_ in ev_fn.W], calls=int(ev_fn.ncalls), wall=round(time.time() - t_start, 3)))
+        with open(os.environ['SQP_TRACE'], 'a') as _f:
+            for _r in [dict(k='solve', maxit=int(maxit), lattice=lattice is not None, asy=LAT_ASYNC if _asy else 'off')] + _trace:
+                _f.write(json.dumps(_r) + '\n')
     stats = dict(iters=len(hist), fn_evals=_ncalls_pre, termination_code=code, exit_info=exit_info, certified_checks=code_cert,
                  nu_final=float(nu), ctrl_corrections=int(n_soc[0]), ctrl_cuts=int(n_ctrl_cut[0]), stab_cuts=int(n_stab_cut[0]),
                  stat_value=(hist[-1].get('stat') if hist else None),
@@ -2056,6 +2341,6 @@ def solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0,
                                # the level set's disks (LS1), the rows at the QP solutions (AB4)
                                rows_dup_max=int(max((l_.get('rows_dup', 0) for l_ in ev_fn.lat_line), default=0)),
                                members=_member_stats(ev_fn.lat_info), level_disks=_disk_stats(ev_fn.level_log),
-                               box=_box_stats(box_log))
+                               box=_box_stats(box_log), level_async=_asy_info)
                           if lattice is not None else None))
     return best, ev_fn.ncalls, H, stats

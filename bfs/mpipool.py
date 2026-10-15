@@ -22,6 +22,14 @@ worker, so a task computes exactly what it would in the driver's process.
     MPIPool.each(fn, {rank: arg}) / collect(ranks)
                              one task to each named rank, gathered later (the
                              driver computes its own share in between)
+    MPIPool.post(rank, fn, arg, tid) / recv_any()
+                             one task to an IDLE rank, its result tagged tid,
+                             gathered one at a time from whichever rank is done
+                             (the lattice's asynchronous level set, 20261010j
+                             stage D: each rank released as its task returns);
+                             map, set_context, each and collect refuse to run
+                             while such a task is out (they would block on, or
+                             steal the result of, a busy rank)
 
 Workers never return from serve(); rank 0 sends a stop message at exit.
 """
@@ -92,10 +100,20 @@ class MPIPool:
         self.nworkers = self.size - 1
         atexit.register(self.stop)
         self._stopped = False
+        self._posted = 0                 # post()ed tasks whose results recv_any() has not returned yet
+
+    def _idle(self, what):
+        """The blocking calls below assume no post()ed task is out: map and
+        set_context would wait on (send to) a rank still busy with it, collect
+        would take its result for theirs (20261010j stage D)."""
+        if self._posted:
+            raise RuntimeError(f"MPIPool.{what} with {self._posted} asynchronous task(s) still out "
+                               f"(post without recv_any: the lattice's level set must be joined first)")
 
     def set_context(self, ctx):
         """Send the context (plant recipe + arrays) and the module settings to
         every worker (blocking: each acknowledges)."""
+        self._idle('set_context')
         msg = {}
         for k, v in ctx.items():
             msg[k] = ('__plant__', plant_recipe(v)) if k == 'D' and v is not None else v
@@ -107,6 +125,7 @@ class MPIPool:
 
     def map(self, fn, args, chunksize=1):
         from mpi4py import MPI
+        self._idle('map')
         args = list(args)
         out = [None] * len(args)
         nxt, busy = 0, 0
@@ -130,6 +149,7 @@ class MPIPool:
         waiting: the driver works meanwhile, then collect() gathers (the
         reduced model's rows, reduced._MPIRowPool: a frequency always goes to
         the same rank, which keeps its warm starts)."""
+        self._idle('each')
         for w, a in args.items():
             self.comm.send((w, fn, a), dest=w, tag=_TAG_TASK)
         return list(args)
@@ -138,6 +158,7 @@ class MPIPool:
         """The results of each(ranks), {rank: result}; every one is received
         before an error is raised, so no stale result reaches a later map."""
         from mpi4py import MPI
+        self._idle('collect')
         out, err, st = {}, None, MPI.Status()
         for _ in ranks:
             i, ok, res = self.comm.recv(source=MPI.ANY_SOURCE, tag=_TAG_RES, status=st)
@@ -148,6 +169,24 @@ class MPIPool:
         if err is not None:
             raise RuntimeError(err)
         return out
+
+    def post(self, w, fn, a, tid):
+        """fn(a) on worker rank w WITHOUT waiting, its result tagged tid
+        (recv_any).  The caller posts only to a rank with no task out: a send
+        to a busy rank could block until that rank's task ends (a large
+        message waits for its receive), and the driver would stop serving the
+        others (20261010j stage D, level-set-waves.md LS3 verifier)."""
+        self.comm.send((tid, fn, a), dest=w, tag=_TAG_TASK)
+        self._posted += 1
+
+    def recv_any(self):
+        """The next result of a post()ed task, from whichever rank finishes
+        first: (rank, tid, ok, result); ok False: result is the worker's error."""
+        from mpi4py import MPI
+        st = MPI.Status()
+        i, ok, res = self.comm.recv(source=MPI.ANY_SOURCE, tag=_TAG_RES, status=st)
+        self._posted -= 1
+        return st.Get_source(), i, ok, res
 
     def close(self):
         pass

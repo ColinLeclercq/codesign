@@ -168,6 +168,8 @@ _DES = {}            # design key -> dict(b, c, pa, ps, na, ns, cl)
 _VEC = {}            # (design key, theta, rounded lambda) -> (v, u) of the last line tasks
 _V0 = {}             # point key -> the last right singular vector of sigma_1 there (warm starts)
 _XCACHE = {}         # the exact points' factors (XCAP, FIFO): kept out of the lattice cache
+_ASIDE = {}          # the asynchronous level set's design where _DES lacks it (20261010j stage D): built aside
+_VSNAP = []          # [(_DES, _VEC)] as at a look-ahead's start, put back when it is discarded (vecstate_task)
 STATS = dict(hit=0, miss=0, xhit=0, xmiss=0)       # this process's cache accounting: lattice points (_note) and,
                      # 20261010j stage C, the exact points' side cache (_exact; never counted before: the Newton points
                      # are most of the factorisations, driver-serial.md)
@@ -225,16 +227,29 @@ def _lpt(ts, n):
 # --------------------------------------------------------------------- worker
 def _design(dz):
     """The design's ports and closed loop, built once per design and process
-    (the last four kept); its closed loop uses this module's cache."""
+    (the last four kept); its closed loop uses this module's cache.
+    dz['aside'] (20261010j stage D, the asynchronous level set): a design _DES
+    lacks is built in its own slot (_ASIDE), so that the level set's disks,
+    which run between the next iteration's requests, never evict a design nor
+    purge a vector the synchronous order would have kept (level-set-waves.md
+    LS3, driver-serial.md P3 verifier (a): a build purges _VEC of every other
+    design, and the trial's Hermite block would silently go)."""
     import fullpar
     d = _DES.get(dz['key'])
     if d is not None:
         return d
+    if dz.get('aside'):
+        d = _ASIDE.get(dz['key'])
+        if d is not None:
+            return d
     D = fullpar.CTX['D']
     b, c, pa, ps, na, ns = D.bc(dz['xa'], dz['xs'])
     cl = D.cl(b, c)
     cl.lu_cache, cl.lu_cache_max, cl.lu_lru, cl.lu_pin = _CACHE, int(LU_CAP), True, None
     d = dict(b=b, c=c, pa=pa, ps=ps, na=na, ns=ns, cl=cl, D=D)
+    if dz.get('aside'):
+        _ASIDE.clear(); _ASIDE[dz['key']] = d
+        return d
     while len(_DES) >= 4:
         _DES.pop(next(iter(_DES)))
     _DES[dz['key']] = d
@@ -651,8 +666,27 @@ def stats_task(t):
 
 def drop_task(t):
     """Forget everything (a new plant order, a new run phase)."""
-    _CACHE.clear(); _DES.clear(); _VEC.clear(); _V0.clear(); _XCACHE.clear()
+    _CACHE.clear(); _DES.clear(); _VEC.clear(); _V0.clear(); _XCACHE.clear(); _ASIDE.clear(); _VSNAP.clear()
     return dict(out=[], resident=[], dt=0.0, **_counts())
+
+
+def vecstate_task(op):
+    """This process's designs and line vectors around a look-ahead (20261010j
+    stage D): 'mark' keeps (_DES, _VEC) as they are at its start (references:
+    nothing is copied but the two dicts), 'restore' puts them back when it is
+    discarded -- the trials it evaluated built their designs and purged the
+    iterate's vectors, which the synchronous continuation (the re-evaluation
+    with the new members) reads through vectors(); the factor caches stay
+    (a factor is the same whoever computed it, only the cost differs)."""
+    if op == 'mark':
+        _VSNAP[:] = [(dict(_DES), dict(_VEC))]
+    elif op == 'restore' and _VSNAP:
+        des, vec = _VSNAP[0]
+        _DES.clear(); _DES.update(des); _VEC.clear(); _VEC.update(vec)
+        _VSNAP.clear()
+    elif op == 'drop':
+        _VSNAP.clear()
+    return dict(out=[], resident=_resident(), dt=0.0, **_counts())
 
 
 
@@ -798,6 +832,22 @@ def _key(q):
     return complex(q[2], -q[1]) if q[0] == 'centre' else complex(q[1])
 
 
+class _BgLevel:
+    """One level-set call running beside the next SQP iteration (20261010j stage
+    D; LatticeOracle.level_start): its generator (_level) and results R, the
+    requests not yet sent (pend), those out (seq -> (rank, request)), the
+    current wave's batches and results for the ledger, the lines it printed."""
+
+    def __init__(self, dz, gen, R):
+        import io
+        self.dz, self.gen, self.R = dz, gen, R
+        self.pend, self.out, self.seq = [], {}, 0
+        self.done, self.value, self.err = False, None, None
+        self.waves, self.tw = 0, time.perf_counter()
+        self.per, self.res = {}, {}
+        self.buf = io.StringIO()
+
+
 class LatticeOracle:
     """The driver's side: where each lattice point lives, the batches, the
     waves.  pool: bfs/mpipool.MPIPool (rank 0 = this process computes its own
@@ -836,6 +886,11 @@ class LatticeOracle:
         self._slow = [0, 0]              # waves rank 0 was the slowest rank in, waves
         self._rstat = {}                 # rank -> its latest cumulative (hit, miss, xhit, xmiss)
         self._proj = {}                  # ledger kind -> [critical path, replay on this many ranks, on PROJ_RANKS]
+        # ---- 20261010j stage D: the asynchronous level set (level_start / level_join; sqp_inner.LAT_ASYNC)
+        self._bg = None                  # the level-set call running beside the look-ahead (_BgLevel), or None
+        self._fly = {}                   # rank -> 'b' (a level disk) or 'm' (a wave's batch): the task it has out
+        self._astat = dict(launch=0, kept=0, found=0, redo=0, wait=0.0)   # calls; look-aheads kept / discarded
+        self._vec_hold = set()           # ranks holding the current evaluation's row vectors: no level disk until fetched
 
     # ---------------------------------------------------------------- plumbing
     def design(self, z):
@@ -981,7 +1036,10 @@ class LatticeOracle:
 
     def _run(self, fn, per_rank, kind, ntask=None):
         """fn(args) on each rank of per_rank {rank: args}; this process does
-        rank 0's share meanwhile.  Returns {rank: result}."""
+        rank 0's share meanwhile.  Returns {rank: result}.  While a level set
+        runs beside (20261010j stage D): _run_async."""
+        if self._bg is not None:
+            return self._run_async(fn, per_rank, kind, ntask)
         t0 = time.perf_counter()
         res = {}
         others = {r: a for r, a in per_rank.items() if r != 0}
@@ -1011,12 +1069,19 @@ class LatticeOracle:
             finally:
                 if ml is not None:
                     ml.IN_WAVE = False
+        return self._book(res, kind, ntask if ntask is not None else len(per_rank), t0)
+
+    def _book(self, res, kind, ntask, t0):
+        """A wave's results into the driver's state and the ledger: the factors
+        each rank holds, its counters and busy time, the kind's waves, tasks,
+        wall, critical path, factorisations and busy time, the waves rank 0 was
+        the slowest in."""
         for r, o in res.items():
             self.held[r] = set(complex(k) for k in o['resident'])
             self._rstat[r] = tuple(int(o.get(k_, 0)) for k_ in ('hit', 'miss', 'xhit', 'xmiss'))
             self._busy[r] = self._busy.get(r, 0.0) + float(o['dt'])
         c = self.calls.setdefault(kind, [0, 0, 0.0, 0.0, 0, 0.0])
-        c[0] += 1; c[1] += int(ntask if ntask is not None else len(per_rank))
+        c[0] += 1; c[1] += int(ntask)
         c[2] += time.perf_counter() - t0
         c[3] += max((o['dt'] for o in res.values()), default=0.0)
         c[4] += sum(int(rc[1]) for o in res.values() for rc in (o.get('req') or ()))
@@ -1061,8 +1126,11 @@ class LatticeOracle:
             if own is not None:
                 for nm in owner.values():
                     own[nm] = own.get(nm, 0) + 1
-            per = self._assign(reqs)
-            res = self._run(eval_task, {r: (dz, qs) for r, qs in per.items()}, kind, ntask=len(reqs))
+            if self._bg is None:
+                per = self._assign(reqs)
+                res = self._run(eval_task, {r: (dz, qs) for r, qs in per.items()}, kind, ntask=len(reqs))
+            else:
+                per, res = self._run_flow(dz, reqs, kind)      # a level set runs beside (20261010j stage D)
             self._account(kind, per, res)
             for r, qs in per.items():
                 rq = res[r].get('req') or [(0.0,)] * len(qs)
@@ -1074,6 +1142,321 @@ class LatticeOracle:
         if track is not None:
             track.setdefault('fin', {}).update(fin)
         return done, waves
+
+    # ------------------------------------- the asynchronous level set (stage D)
+    # 20261010j stage D (level-set-waves.md LS3 and its verifier, eval-waves.md
+    # P5, driver-serial.md P3; --lattice-async, sqp_inner.LAT_ASYNC).  In the
+    # no-strip runs the missed-peak level set ran alone after every accepted
+    # step, every wave as long as its slowest pencil disk (central 770632: 65 % of
+    # the wall, ranks busy 8 %), while the next iteration's QP and trials waited.
+    # level_start sends the call's first wave and returns; the SQP goes on with the
+    # next iteration (its look-ahead) and level_join waits for the result.  The
+    # level set's disks go one request a message to the worker ranks with no task
+    # out -- NEVER rank 0, which must stay free to serve the look-ahead and to
+    # release each rank as its disk returns (recv by source, MPIPool.post /
+    # recv_any: not one outstanding wave per pool) --, and its later waves (gaps,
+    # slope confirmations) as soon as the earlier one is answered, onto the ranks
+    # the look-ahead's waves leave free.  The look-ahead's own waves go one request
+    # a message to the workers as each becomes free, before the level set's
+    # pending disks (_run_flow: the driver dispatches only); a task for a named
+    # rank still busy (the vectors of its rows) is posted the moment that rank
+    # returns (_run_async), and a rank holding the evaluation's row vectors gets
+    # no level disk until vectors() has fetched them (_vec_hold).  The level set's
+    # own result is the synchronous one: the same generator (_level) from the same
+    # state (level_prev, the base grid, the watch rows), each disk a function of
+    # its request alone (Determinism, above; placement changes only the cost), and
+    # its tasks run on their design built aside (_design: no design evicted, no
+    # vector purged between the look-ahead's requests).  What the SQP does with
+    # the look-ahead (kept when the call adds no member, else discarded and the
+    # synchronous continuation taken) is sqp_inner's.
+
+    def level_start(self, z, gam, wlo, whi, watch=None):
+        """level() BESIDE the next iteration: the call's first wave sent, its job
+        returned for level_join.  None where it cannot run so (one rank, the
+        serial path, or a level already computed beside an evaluation: the caller
+        then calls level()).  Every rank is idle here (no task out): their designs
+        and line vectors are marked first (vecstate_task), for a discarded
+        look-ahead to put back."""
+        if self._bg is not None:
+            raise RuntimeError("lattice: a level set is already running beside the look-ahead")
+        dz = z if isinstance(z, dict) else self.design(z)
+        lk = (dz['key'], float(gam), float(wlo), float(whi))
+        if self.pool is None or self.size < 2 or lk in self._level_memo:
+            return None
+        self._vecstate('mark')
+        R = {}
+        job = _BgLevel(dict(dz, aside=True), self._level(*lk[1:], R, watch=watch), R)
+        self._bg = job
+        self._astat['launch'] += 1
+        self._bg_step(job)
+        self._bg_pump()
+        return job
+
+    def level_join(self, job):
+        """level_start's result (the dict level() returns), waiting for it --
+        every level disk still out received, its later waves sent as before."""
+        t0 = time.perf_counter()
+        self._vec_hold.clear()                             # nothing else to run: every worker the call's
+        try:
+            while not job.done or job.out:
+                if job.err is None:
+                    self._bg_pump()
+                if not self._fly:
+                    if job.err is not None:
+                        break
+                    raise RuntimeError("lattice: the asynchronous level set is not done and has nothing out")
+                self._recv_one()
+        finally:
+            if not self._fly:
+                self._bg = None
+        self._astat['wait'] += time.perf_counter() - t0
+        if job.err is not None:
+            raise RuntimeError(f"lattice: the asynchronous level set failed: {job.err}")
+        return job.value
+
+    def note_async(self, what):
+        """The SQP's verdict on a look-ahead: 'kept', 'found' (discarded: members
+        added) or 'redo' (discarded: --lattice-async redo) -- the ledger's line."""
+        self._astat[what] = self._astat.get(what, 0) + 1
+
+    def async_restore(self):
+        """A discarded look-ahead: every rank's designs and line vectors back to
+        its start (vecstate_task 'restore'; the factor caches stay)."""
+        self._vecstate('restore')
+
+    def async_drop(self):
+        """A kept look-ahead: the ranks' marks dropped (vecstate_task 'drop'; they
+        hold the designs and vectors the look-ahead let go)."""
+        self._vecstate('drop')
+
+    def async_abort(self):
+        """After an error: every task still out received and dropped (no stale
+        result may reach a later call), the level set beside forgotten."""
+        try:
+            while self._fly and self.pool is not None:
+                src, _, _, _ = self.pool.recv_any()
+                self._fly.pop(src, None)
+        finally:
+            self._fly.clear(); self._bg = None
+
+    def _vecstate(self, op):
+        """vecstate_task(op) on every rank, this process's included (no task is
+        out when it is called: a look-ahead's start, or after its join)."""
+        vecstate_task(op)
+        if self.pool is not None and self.size > 1:
+            others = {r: op for r in range(1, self.size)}
+            self.pool.each(vecstate_task, others)
+            self.pool.collect(list(others))
+
+    def _run_flow(self, dz, reqs, kind):
+        """A wave of the look-ahead while a level set runs beside: its requests
+        one a message to the worker ranks as each becomes free, BEFORE the level
+        set's pending disks (a disk already running is never waited for by the
+        wave as a whole: a batch assigned to a rank still busy with a 50-s pencil
+        disk would hold it; and a wave assigned over the ranks free at its start
+        packed itself onto them -- the first sandbox run, every worker on a disk,
+        put a whole wave on rank 0 while the workers then sat idle).  A request
+        goes first to a free rank holding its factor, then to the free ranks
+        holding the fewest factors -- unless a rank busy with another request of
+        the wave holds it (it waits for that rank); one held by a rank on a level
+        disk is factored again elsewhere.  The driver only dispatches here (a
+        request it computed would leave every worker that returns meanwhile
+        idle).  Returns (per, res) as _assign / _run: {rank: [requests]} and
+        {rank: its results merged in that order}."""
+        t0 = time.perf_counter()
+        pend = list(reqs)
+        per, res, err = {}, {}, None
+        nleft = len(pend)
+        workers = list(range(1, self.size))
+
+        def post(r, q):
+            pend.remove(q)
+            self.pool.post(r, eval_task, (dz, [q]), ('m', q)); self._fly[r] = 'm'
+            per.setdefault(r, []).append(q)
+        while nleft:
+            free = [r for r in workers if r not in self._fly]
+            if pend and free:
+                n = len(free); rot = self._rot % n
+                order = {r: (j - rot) % n for j, r in enumerate(free)}
+                self._rot = (self._rot + 1) % max(len(workers), 1)
+                left = []
+                for r in sorted(free, key=order.get):          # a free rank holding a request's factor takes it
+                    hs = self.held.get(r, ())
+                    q = next((q_ for q_ in pend if _key(q_) in hs), None)
+                    if q is None:
+                        left.append(r)
+                    else:
+                        post(r, q)
+                holders = {}
+                for r, ks in self.held.items():
+                    for k in ks:
+                        holders.setdefault(k, []).append(r)
+                for r in sorted(left, key=lambda r_: (len(self.held.get(r_, ())), order[r_])):
+                    # then a request no rank busy with a wave's request holds (held by none, by a rank
+                    # on a level disk or by rank 0: factored here); one such a rank holds waits for it
+                    q = next((q_ for q_ in pend if not any(self._fly.get(h_) == 'm' for h_ in holders.get(_key(q_), ()))),
+                             None)
+                    if q is None:
+                        break
+                    post(r, q)
+            self._bg_pump()                                    # the ranks the wave leaves free
+            src, tid, ok, o = self._recv_one()
+            if tid[0] != 'm':
+                continue
+            nleft -= 1
+            if not ok:
+                err = err or f"MPI worker {src} failed: {o}"
+                continue
+            # a rank runs one request at a time and is sent the next only once this
+            # result is in: its results arrive in the order of per[src]
+            m = res.setdefault(src, dict(out=[], req=[], dt=0.0))
+            m['out'] += o['out']; m['req'] += list(o.get('req') or [(0.0,)] * len(o['out'])); m['dt'] += float(o['dt'])
+            if tid[1][0] == 'centre' and o['out'] and o['out'][0].get('rows'):
+                # its row vectors live there: no level disk on it until vectors() has fetched them (the
+                # first sandbox run waited 144 s for row ranks busy with 50-90 s pencil disks)
+                self._vec_hold.add(src)
+            for k_ in ('resident', 'hit', 'miss', 'xhit', 'xmiss'):
+                m[k_] = o.get(k_, 0)
+        if err is not None:
+            raise RuntimeError(err)
+        self._book(res, kind, len(reqs), t0)
+        return per, res
+
+    def _recv_one(self):
+        """The next result of a task out (MPIPool.recv_any), its rank released; a
+        level disk's goes to the level set (_bg_result).  (rank, tid, ok, result)."""
+        src, tid, ok, o = self.pool.recv_any()
+        self._fly.pop(src, None)
+        if tid[0] == 'b':
+            self._bg_result(src, tid, ok, o)
+        return src, tid, ok, o
+
+    def _run_async(self, fn, per_rank, kind, ntask=None):
+        """_run while a level set runs beside: each batch posted as soon as its
+        rank has no task out (a rank still busy with a level disk gets its batch
+        the moment that disk returns), rank 0's share computed here meanwhile,
+        the results gathered one at a time (the level set's as they come, its
+        next disks sent to the ranks left free).  Every result of the wave is
+        received before an error is raised (MPIPool.collect's rule)."""
+        t0 = time.perf_counter()
+        res, err, wait = {}, None, []
+        ml = _mumps_mod()
+        for r, a in per_rank.items():
+            if r == 0:
+                continue
+            if r in self._fly:
+                wait.append(r)
+            else:
+                self.pool.post(r, fn, a, ('m', r)); self._fly[r] = 'm'
+        if 0 in per_rank:
+            if ml is not None:
+                ml.IN_WAVE = True
+            try:
+                res[0] = fn(per_rank[0])
+            finally:
+                if ml is not None:
+                    ml.IN_WAVE = False
+        need = sum(1 for r in per_rank if r != 0)
+        while need:
+            src, tid, ok, o = self._recv_one()
+            if tid[0] == 'm':
+                need -= 1
+                if ok:
+                    res[src] = o
+                elif err is None:
+                    err = f"MPI worker {src} failed: {o}"
+            if src in wait:
+                wait.remove(src)
+                self.pool.post(src, fn, per_rank[src], ('m', src)); self._fly[src] = 'm'
+            self._bg_pump()
+        if err is not None:
+            raise RuntimeError(err)
+        return self._book(res, kind, ntask if ntask is not None else len(per_rank), t0)
+
+    def _bg_step(self, job):
+        """Resume the level set's generator once its wave is answered (as
+        _drive's step): its next requests into pend, or its result.  Its
+        printed lines go to the job's own buffer."""
+        import contextlib
+        try:
+            with contextlib.redirect_stdout(job.buf):
+                while True:
+                    q = [x for x in next(job.gen) if x not in job.R]
+                    if q:
+                        job.pend = list(dict.fromkeys(q))
+                        job.waves += 1; job.tw = time.perf_counter(); job.per, job.res = {}, {}
+                        return
+        except StopIteration as e:
+            job.done, job.value = True, e.value
+        except Exception as e:
+            import traceback
+            job.err = f"{type(e).__name__}: {e}\n{traceback.format_exc()[-800:]}"
+
+    def _bg_pump(self):
+        """The level set's pending requests to the free WORKER ranks, one request a
+        rank: a point first to a free rank holding its factor, then to the free
+        ranks holding the fewest factors (_assign's rule for a new point), the
+        ties in the rotating order; not to a rank whose row vectors the current
+        evaluation has yet to fetch (_vec_hold)."""
+        job = self._bg
+        if job is None or job.err is not None or not job.pend:
+            return
+        free = [r for r in range(1, self.size) if r not in self._fly and r not in self._vec_hold]
+        if not free:
+            return
+        n = len(free); rot = self._rot % n
+        order = {r: (j - rot) % n for j, r in enumerate(free)}
+        left = []
+        for q in job.pend:
+            hold = [r for r in free if _key(q) in self.held.get(r, ())] if free else []
+            if hold:
+                self._bg_post(job, hold[0], q); free.remove(hold[0])
+            else:
+                left.append(q)
+        rest = []
+        for q in left:
+            if not free:
+                rest.append(q); continue
+            r = min(free, key=lambda r_: (len(self.held.get(r_, ())), order[r_]))
+            self._bg_post(job, r, q); free.remove(r)
+        job.pend = rest
+
+    def _bg_post(self, job, r, q):
+        job.seq += 1
+        self.pool.post(r, eval_task, (job.dz, [q]), ('b', job.seq))
+        job.out[job.seq] = (r, q); self._fly[r] = 'b'
+
+    def _bg_result(self, src, tid, ok, o):
+        """A level disk's result: into the call's R (its rank and seconds, as
+        _drive's), the ledger's per-rank state; its wave complete, the wave
+        booked ('level-bg': its wall overlaps the look-ahead's waves) and the
+        generator resumed."""
+        job = self._bg
+        _, q = job.out.pop(tid[1])
+        if not ok:
+            if job.err is None:
+                job.err = f"MPI worker {src} failed: {o}"
+            return
+        self.held[src] = set(complex(k) for k in o['resident'])
+        self._rstat[src] = tuple(int(o.get(k_, 0)) for k_ in ('hit', 'miss', 'xhit', 'xmiss'))
+        self._busy[src] = self._busy.get(src, 0.0) + float(o['dt'])
+        rc = (o.get('req') or [(0.0,)])[0]
+        res = o['out'][0]
+        res['rank'] = src; res['dt_'] = float(rc[0])
+        job.R[q] = res
+        job.per.setdefault(src, []).append(q)
+        m = job.res.setdefault(src, dict(out=[], req=[], dt=0.0))
+        m['out'].append(res); m['req'].append(rc); m['dt'] += float(o['dt'])
+        if job.out or job.pend or job.done or job.err is not None:
+            return
+        self._account('level-bg', job.per, job.res)
+        c = self.calls.setdefault('level-bg', [0, 0, 0.0, 0.0, 0, 0.0])
+        c[0] += 1; c[1] += sum(len(v) for v in job.per.values())
+        c[2] += time.perf_counter() - job.tw
+        c[3] += max((m_['dt'] for m_ in job.res.values()), default=0.0)
+        c[4] += sum(int(rc_[1]) for m_ in job.res.values() for rc_ in m_['req'] if len(rc_) > 1)
+        c[5] += sum(m_['dt'] for m_ in job.res.values())
+        self._bg_step(job)
 
     def report(self):
         """One line for the ledger: calls (waves), tasks, wall and critical path
@@ -1147,12 +1530,41 @@ class LatticeOracle:
                        f"{sum(len(v) for v in self.held.values())} held; placement "
                        + (f"by solves counted, a factorisation {LU_SOLVES:g}" if TASK_COSTS == 'measured'
                           else "by the static units"))
+        if self._astat['launch']:
+            # the asynchronous level set (20261010j stage D): its calls beside the next iteration, the
+            # look-aheads kept (the call added no member) and discarded, the joins' wait (the level set's
+            # time not hidden behind the look-ahead's waves)
+            a_, c_ = self._astat, self.calls.get('level-bg', [0, 0, 0.0, 0.0, 0, 0.0])
+            out.append(f"lattice async: {a_['launch']} level-set call(s) beside the next iteration, look-aheads "
+                       f"{a_['kept']} kept / {a_['found']} discarded for members found"
+                       + (f" / {a_['redo']} redone (--lattice-async redo)" if a_.get('redo') else '')
+                       + f"; their {c_[0]} waves {c_[2]:.0f} s open, {c_[5]:.0f} s of disks; the joins waited "
+                         f"{a_['wait']:.0f} s")
         if self._proj:
             nr = len(ranks)
             out.append("lattice projection (requests replayed longest first; critical path / on " +
                        " / ".join(str(r_) for r_ in (nr,) + tuple(PROJ_RANKS)) + " ranks, s): " + "; ".join(
                 f"{k} {p[0]:.0f} / " + " / ".join(f"{x:.0f}" for x in p[1:]) for k, p in sorted(self._proj.items())))
         return out
+
+    def look_state(self):
+        """The driver's state an evaluation changes and a later one reads, as at a
+        look-ahead's start (20261010j stage D; put back by look_restore when the
+        look-ahead is discarded): the followed tops, the line's and the strip's
+        kept centres (the next call's first wave: the no-strip rows depend on the
+        line's cover), the line, level and request memos, the last design.  Not
+        level_prev (the level call running beside sets it, as the synchronous
+        call did before the next iteration), nor the placement (held, the
+        rotation, the measured costs: the cost only) and the ledger."""
+        return dict(tops=dict(self.tops), line_prev=dict(self.line_prev), strip_prev=dict(self.strip_prev),
+                    line_memo=dict(self._line_memo), level_memo=dict(self._level_memo),
+                    req_memo={k: dict(v) for k, v in self._req_memo.items()}, dkey=self._dkey, dz=self._dz)
+
+    def look_restore(self, S):
+        self.tops = dict(S['tops']); self.line_prev = dict(S['line_prev']); self.strip_prev = dict(S['strip_prev'])
+        self._line_memo = dict(S['line_memo']); self._level_memo = dict(S['level_memo'])
+        self._req_memo = {k: dict(v) for k, v in S['req_memo'].items()}
+        self._dkey, self._dz = S['dkey'], S['dz']
 
     def counts(self):
         """(factorisations, cached hits) over all ranks so far."""
@@ -1197,6 +1609,7 @@ class LatticeOracle:
         member kind the points asked for and the tasks caused, by s / smax, and
         which agents set the last wave (omega-growth.md P1, strip-ab.md AB4)."""
         dz = self.design(z)
+        self._vec_hold.clear()                             # (stage D) the last evaluation's vectors are not fetched now
         follow = follow or {}
         w_star = {} if w_star is None else w_star
         state = {} if state is None else state
@@ -1263,6 +1676,8 @@ class LatticeOracle:
                 agents['strip'] = self._strip(eps, wlo, whi, ROW_REACH, R)
         lk = None
         if level is not None:
+            if self._bg is not None:
+                raise RuntimeError("lattice: evaluate(level=...) while a level set runs beside the look-ahead")
             lk = (dz['key'],) + tuple(float(v) for v in level)
             if lk not in self._level_memo:
                 agents['level'] = self._level(*lk[1:], R, watch=watch)
@@ -1573,6 +1988,9 @@ class LatticeOracle:
         lk = (dz['key'], float(gam), float(wlo), float(whi))
         if lk in self._level_memo:
             return self._level_memo[lk]                    # computed beside an evaluation (evaluate(level=...))
+        if self._bg is not None:
+            # level_prev is the running call's to set (stage D: the look-ahead never asks for a level set)
+            raise RuntimeError("lattice: level() while a level set runs beside the look-ahead")
         R = {}
         done, _ = self._drive(dz, {0: self._level(*lk[1:], R, watch=watch)}, 'level', R)
         return done[0]
@@ -2000,9 +2418,12 @@ class LatticeOracle:
         for r, v in per.items():
             for (j, _, _, _), vec in zip(v, res[r]['out']):
                 out[j] = vec
+        self._vec_hold.clear()
         return out
 
     def drop(self):
+        if self._bg is not None:
+            raise RuntimeError("lattice: drop() while a level set runs beside the look-ahead")
         self._run(drop_task, {r: None for r in self._ranks()}, 'drop')
         self.held.clear(); self.line_prev.clear(); self.strip_prev.clear(); self.level_prev = []; self.tops.clear(); self._line_memo.clear(); self._level_memo.clear()
         self._req_memo.clear()           # the row requests too (the review of stage C: a plant change would serve stale rows)

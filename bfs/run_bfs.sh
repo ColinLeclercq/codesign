@@ -106,6 +106,10 @@ if [ "${ORACLE:-reduced}" = "lattice" ]; then
     # script's, not the code defaults' (LESSONS 18 rule 3).  No knobs: an A/B of one
     # of them needs its own directory suffix first (testplant.slurm, codesign.slurm)
     ORC+=(--lattice-base 48 --lattice-costs static --lattice-memo 2 --lattice-row-merge 0)
+    # 20261010j stage D: the no-strip level set beside the next SQP iteration stays OFF here
+    # until a cluster run has measured it (--lattice-async on after INIT, in a directory of
+    # its own; the same iterates by construction, a different placement of the tasks)
+    ORC+=(--lattice-async off)
 elif [ "${ORACLE:-reduced}" != "reduced" ]; then
     echo "run_bfs.sh: ORACLE must be reduced or lattice (got ${ORACLE})"; exit 2
 fi

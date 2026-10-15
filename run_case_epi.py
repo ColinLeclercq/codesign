@@ -2140,6 +2140,14 @@ def main():
                          'are one row, the copy from the nearest shift kept (lattice.ROW_MERGE; strip-ab.md AB3, e.g. '
                          '1e-6; changes the QP\'s rows, hence the path); <= 1e-8 (default 0): 1e-8 and the first copy, as '
                          'before, the copies within lattice.ROW_DUP counted and tagged in the QP rows\' line')
+    # 20261010j stage D (level-set-waves.md LS3, eval-waves.md P5, driver-serial.md P3)
+    ap.add_argument('--lattice-async', dest='lattice_async', choices=['off', 'on', 'redo'], default='off',
+                    help='--oracle lattice, --lattice-strip off: the missed-peak level set after an accepted step runs '
+                         'BESIDE the next iteration (on: its disks on the worker ranks, never the driver, while the next '
+                         'QP and line-search trials run on the others; the look-ahead kept when the call adds no member, '
+                         'else put back and the synchronous continuation taken -- the same iterates); redo: every '
+                         'look-ahead put back and redone (the restore\'s test); off (default): the synchronous call '
+                         '(sqp_inner.LAT_ASYNC)')
     ap.add_argument('--oracle-nvec', dest='oracle_nvec', type=int, default=3,
                     help='singular pairs per anchor')
     ap.add_argument('--oracle-tol', dest='oracle_tol', type=float, default=1e-3,
@@ -2694,6 +2702,7 @@ def main():
     import sqp_inner as _sqi; _sqi.REDUCED_CERT = a.reduced_cert; _sqi.FOLLOW_SCAN = a.follow_scan; _sqi.PAIR_MANIFOLD = (a.sqp_pair_manifold == 'on'); _sqi.FIELD_KMAX2 = (a.field_kmax ** 2 if a.field_kmax else None); _sqi.FIELD_ORDER = a.field_order
     _sqi.PARTIAL_SHRINK = (a.sqp_partial_shrink == 'on')
     _sqi.LAT_STRIP = (a.lattice_strip == 'on'); _sqi.LAT_CROSS = a.lattice_cross; _sqi.DEBUG_LS = (a.sqp_debug_ls == 'on')
+    _sqi.LAT_ASYNC = a.lattice_async
     if a.oracle == 'lattice':
         _sqi.QP_DUMP = a.outdir
     certified_norm.enroll_rel = float(a.enroll_rel)
@@ -3914,6 +3923,13 @@ def main():
               + (f"; rows merged within {_lat_mod.ROW_MERGE:g}, the nearest shift's copy kept" if _lat_mod.ROW_MERGE > 1e-8
                  else f"; rows merged within 1e-8 (copies within {_lat_mod.ROW_DUP:g} counted, not merged)") + ")",
               flush=True)
+        if _sqi.LAT_ASYNC != 'off':
+            # 20261010j stage D: a line of its own (the oracle line above is the same in every arm)
+            print(f"oracle: the missed-peak level set BESIDE the next SQP iteration (--lattice-async {_sqi.LAT_ASYNC}"
+                  + ("; every look-ahead put back and redone -- the restore's test" if _sqi.LAT_ASYNC == 'redo' else '')
+                  + ("): NOT applied -- the strip arm runs it in the accepted trial's re-evaluation" if _sqi.LAT_STRIP else
+                     (f"): its disks on the {_lat.size - 1} worker rank(s), never the driver" if _lat.size > 1 else
+                      "): NOT applied -- one rank")), flush=True)
         # the ports' positions behind every (b, c) this process builds: the gates
         # call D.alpha_certified with b and c, and the ranks build them from the
         # positions
