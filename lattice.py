@@ -1820,7 +1820,7 @@ class LatticeOracle:
             return np.array([R[q]['sigma'] for q in reqs])
         return np.array([(R[q]['sigma'], R[q]['sigma2']) for q in reqs]).reshape(len(ws), 2)
 
-    def peak_tops(self, z, ws, rad):
+    def peak_tops(self, z, ws, rad, states=None):
         """The tops of the peaks whose grid maxima are ws (20261010j, missed-
         peaks.md P6): each located by the followed members' Newton (_newton, value
         and slope only: 'slopex'), all side by side in one sequence of waves,
@@ -1828,10 +1828,15 @@ class LatticeOracle:
         enrolled at their 2^-5 grid points (k/32: 4.03125 in 770632), so a new
         member's window sat off its top by up to a grid step -- one of the two
         causes of the round-11 edge stop.  Returns [(top, sigma_1 there)], each
-        at least its grid point's value (Newton accepts only ascent)."""
+        at least its grid point's value (Newton accepts only ascent).  states: a
+        dict per point, filled with the walk's state (_newton: 'top', 'edge',
+        'ext', the curvature 'g2') -- the in-solve level set's regions, located
+        before they are enrolled (20261010j stage E), are enrolled at the point
+        only where it is a top."""
         dz = self.design(z)
         R = {}
-        agents = {i: _newton(float(w), float(rad), None, {}, self.real, R, kind='slopex') for i, w in enumerate(ws)}
+        sts = list(states) if states is not None else [{} for _ in ws]
+        agents = {i: _newton(float(w), float(rad), None, sts[i], self.real, R, kind='slopex') for i, w in enumerate(ws)}
         done, _ = self._drive(dz, agents, 'locate', R)
         return [(float(done[i][0]), float(R[('slopex', done[i][0])]['sigma'])) for i in range(len(ws))]
 

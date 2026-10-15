@@ -379,7 +379,10 @@ class Evaluator:
         on the axis, applied through the plant factors the rows use): either
         sigma_1 < gam everywhere, proven, or the regions above gam, each with a
         top estimate that joins as a new member (followed from then on) unless a
-        followed row already watches it.  (2026-10-08/09: the sweep of sigma_1
+        followed row already watches it -- located at its top first, and followed
+        after its round too (20261010j stage E: the caller's _enrol_at_tops, the
+        round's end in run_case_epi; it had been followed inside its solve only,
+        a fixed row on its estimate from the next round on).  (2026-10-08/09: the sweep of sigma_1
         and its slope on 2^-5 missed peaks narrower than its grid -- central
         2x2, rounds 2 of 20261008c and 20261009b: tops at 1.6376 and 0.0656 next
         to fixed members, the rounds refused.)  On the lattice the caller passes
@@ -1334,6 +1337,57 @@ def _box_stats(box_log):
                 el_dup=int(sum(b_.get('el_dup', 0) for b_ in box_log)))
 
 
+def _enrol_at_tops(lattice, ev_fn, z_, e_, mp_, rad, tol, cnt):
+    """The members the in-solve level set's regions mp_ = [(w, v)] add at z_
+    (lattice, 20261010j stage E): each region LOCATED first by the followed
+    members' Newton (LatticeOracle.peak_tops: value and slope, window w +- rad,
+    the follow radius, and its re-centrings) and enrolled at its top.  A
+    region's w is its top estimate -- the highest centre theta or the Hermite
+    fit on its crossings -- and was the member's base: from the next round on a
+    fixed row there (the final 770632 Omega held 10 members exactly on the 48
+    base-grid centres, about 25 on 2^-6..2^-12 points and 0.134766 = 69/512
+    beside the 0.132094 top, none at that top; missed-peaks.md VERIFIER missed
+    (1)).  Stage A's rules: a walk that ends on a window's edge or on a slope
+    is no top, and the member stays at the estimate (its walk's end the hint
+    of its first evaluation); a top a followed row already reads (within 1e-3,
+    at least its value x (1 - tol): the _level watch rule, with the top's value
+    instead of the estimate's) adds nothing; tops within 1e-3 of a higher one
+    are that peak; a top on an existing fixed member's key makes that member
+    followed.  ev_fn: the solve's Evaluator; cnt: its counts (in place).
+    Returns (members [(w, v)], {member key: (the walk's end, its state)}, the
+    regions' log [(estimate, top, sigma_1, top?)])."""
+    sts_ = [{} for _ in mp_]
+    loc_ = lattice.peak_tops(z_, [w_ for w_, _ in mp_], float(rad), states=sts_)
+    rows_ = e_.get('follow_rows') or []
+    have_ = {round(float(w_), 6): float(w_) for w_ in ev_fn.W}
+    cand_, log_ = [], []
+    for (w0_, v0_), (wt_, vt_), st_ in zip(mp_, loc_, sts_):
+        top_ = bool(st_.get('top'))
+        log_.append((round(float(w0_), 6), round(float(wt_), 6), round(float(vt_), 6), top_))
+        cnt['regions'] += 1
+        if not top_:
+            cnt['not_top'] += 1
+            cand_.append((round(float(w0_), 6), float(v0_), float(wt_), st_))
+            continue
+        cnt['at_top'] += 1
+        cnt['dist_max'] = max(cnt['dist_max'], abs(float(wt_) - float(w0_)))
+        if any(abs(rw_ - wt_) <= 1e-3 and rv_ >= vt_ * (1.0 - float(tol)) for rw_, rv_ in rows_):
+            cnt['watched'] += 1                            # a followed row is on this top already
+            continue
+        cand_.append((round(float(wt_), 6), float(vt_), float(wt_), st_))
+    out_, sts_out_ = [], {}
+    for k_, v_, x_, st_ in sorted(cand_, key=lambda c_: -c_[1]):
+        if any(abs(k_ - q_[0]) <= 1e-3 for q_ in out_):
+            cnt['same'] += 1                               # the same peak as a higher one of this call
+            continue
+        if k_ in have_ and (ev_fn.follow or {}).get(k_):
+            cnt['watched'] += 1                            # a followed member's own base
+            continue
+        out_.append((have_.get(k_, k_), v_))               # an existing fixed member: its own float (one row)
+        sts_out_[k_] = (x_, st_)
+    return out_, sts_out_, log_
+
+
 def solve_epigraph_sqp(*args, **kw):
     """The SQP (_solve_epigraph_sqp).  This wrapper only makes sure that an
     error raised inside a look-ahead (LAT_ASYNC, 20261010j stage D) leaves no
@@ -1773,6 +1827,8 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
     _rb = None                                            # a discarded look-ahead: resume at its C (state, result)
     _trace = [] if os.environ.get('SQP_TRACE') else None  # the per-iteration trace (diagnostics; SQP_TRACE = a file)
     _asy_wait0 = float(lattice._astat['wait']) if _asy else 0.0
+    # the in-solve level set's regions enrolled AT THEIR TOPS (lattice, 20261010j stage E): per solve
+    _enrol = dict(regions=0, at_top=0, not_top=0, watched=0, same=0, dist_max=0.0)
 
     def _tr_level(it_, z_, t_, smax_, mp_):
         # the trace's record of a level-set call (refine_log's last entry, the members it adds in full)
@@ -2132,10 +2188,16 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                     ev_fn.missed_peaks(z, _lev, refine_grid, refine_tol, rows=e.get('follow_rows'))[:refine_max]
             else:
                 mp = ev_fn.missed_peaks(z, _lev, refine_grid, refine_tol, rows=e.get('follow_rows'))[:refine_max]
+            _mp_st = _mp_loc = None
+            if mp and lattice is not None:
+                # the regions located first, their members at their tops (stage E)
+                mp, _mp_st, _mp_loc = _enrol_at_tops(lattice, ev_fn, z, e, mp, follow_radius, refine_tol, _enrol)
             if _sp_here is None:                           # (a look-ahead's call: recorded when it is joined)
                 if lattice is not None and ev_fn.refine_log:
                     ev_fn.refine_log[-1].update(it=int(it), t_epi=float(t), smax=float(e['smax']),
                                                 added=[round(float(w_), 6) for w_, _ in mp])
+                    if _mp_loc is not None:
+                        ev_fn.refine_log[-1]['located'] = _mp_loc     # (estimate, top, sigma_1, top?) per region
                 if _trace is not None and lattice is not None and ev_fn.refine_log:
                     _trace.append(_tr_level(it, z, t, e['smax'], mp))
             if mp:
@@ -2144,13 +2206,25 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                 if ev_fn.follow:
                     for w_, _ in mp:
                         ev_fn.follow[round(float(w_), 6)] = follow_radius
+                        if _mp_st is not None and round(float(w_), 6) in _mp_st:
+                            # the locator's walk is the member's first: its end the hint, its curvature carried
+                            # (no hint: the nearest top of an earlier evaluation within half the radius, another
+                            # member's perhaps -- the dedup's business)
+                            x_, st_ = _mp_st[round(float(w_), 6)]
+                            ev_fn.w_star[round(float(w_), 6)] = float(x_)
+                            ev_fn.follow_state[round(float(w_), 6)] = {k_: v_ for k_, v_ in st_.items() if k_ == 'g2'}
                 W = ev_fn.W; m = len(W)
                 e = ev_fn(z); t = max(t, e['smax'])
                 added.extend(w for w, _ in mp)
                 if verbose:
                     print(f"    sqp refine: +{len(mp)} freq {[round(w, 3) for w, _ in mp]} "
                           f"({'full-model sweep' if lattice is not None else 'reduced'} peaks {[round(v, 3) for _, v in mp]}"
-                          f" > t; t now {t:.4f})", flush=True)
+                          f" > t; t now {t:.4f})"
+                          + (f"; {len(_mp_loc)} region(s) located: {sum(q_[3] for q_ in _mp_loc)} at a top (up to "
+                             f"{max([abs(q_[1] - q_[0]) for q_ in _mp_loc if q_[3]], default=0.0):.4f} from the "
+                             f"estimate), the rest at the estimate" if _mp_loc else ''), flush=True)
+            elif _mp_loc and verbose:
+                print(f"    sqp refine: {len(_mp_loc)} region(s) located, all on followed members: none added", flush=True)
         _note(e, t)
         if admissible(e) and e['smax'] < best['g']:
             best.update(g=e['smax'], z=z.copy(), al=e['al'], t=t, clr=e['clr'], w=_argw(e))
@@ -2311,6 +2385,7 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                  refine_log=list(ev_fn.refine_log[-40:]), clblock_fail=int(ev_fn.n_clblock_fail),
                  sub_failures=list(sub_status_log),
                  w_star=_w_star_best, w_top=_w_top, rows_best=(dict(_rows_best) if _rows_best else None),
+                 enrol=dict(_enrol),                # the in-solve level set's regions located at their tops (stage E)
                  n_blocks=len(e['blocks']), dedup=int(sum(ev_fn.n_dedup)), history=hist, path=path, path_info=path_info,
                  deadline_hit=bool(_deadline_hit), it_wall_max=float(_it_wall), t_loop_end=float(_t_loop_end),
                  lattice=(dict(evaluations=len(ev_fn.lat_info), gain_evals=int(sum(i_['nev'] for i_ in ev_fn.lat_info)),

@@ -1457,6 +1457,108 @@ def _enrol_peaks(wgrid, gvals, sig_fn=None, rel=0.0, cap=16):
     return out
 
 
+def _insolve_summary(add, moved, nottop, dropped, Omega, peakset, enrol):
+    """The round's in-solve additions after the round's end (lattice, 20261010j
+    stage E): add the additions' keys (round 6), moved {key: the in-solve top it
+    was moved to}, nottop the keys left in place (no top at the candidate),
+    dropped the keys left out on another follower's top, Omega and peakset after
+    the round's end (the 1e-3 merge included), enrol the SQP's location counts
+    (sqp_inner._enrol_at_tops).  An addition is FOLLOWED from the next round on
+    where its member (moved or not) is in Omega and the peak set, else MERGED:
+    on another follower's top, or within 1e-3 of a member; a merged one leaves
+    the peak set too.  Returns the counts, the followed members and the round's
+    one-line summary ('line')."""
+    Of = set(round(float(w_), 6) for w_ in Omega)
+    fin = {k_: moved.get(k_, k_) for k_ in add}
+    fol = [k_ for k_ in add if fin[k_] in Of and fin[k_] in peakset]
+    mrg = [k_ for k_ in add if k_ not in fol]
+    for k_ in mrg:
+        if fin[k_] not in Of:
+            peakset.discard(fin[k_])
+    sh = sum(k_ in dropped for k_ in mrg)
+    out = dict(added=len(add), followed=len(fol), merged=len(mrg), shared=int(sh), near=len(mrg) - int(sh),
+               moved=sum(k_ in moved for k_ in fol), not_top=sum(k_ in nottop for k_ in fol),
+               members=sorted(fin[k_] for k_ in fol),
+               regions=int(enrol.get('regions', 0)), at_top=int(enrol.get('at_top', 0)),
+               at_estimate=int(enrol.get('not_top', 0)), on_followed=int(enrol.get('watched', 0)),
+               same=int(enrol.get('same', 0)), dist_max=float(enrol.get('dist_max', 0.0)))
+    out['line'] = (f"    in-solve additions: {out['added']} this round ({out['regions']} region(s) located: {out['at_top']} at a "
+                   f"top, up to {out['dist_max']:.4f} from the estimate, {out['at_estimate']} at the estimate (no top), "
+                   f"{out['on_followed']} on a followed member already); {out['followed']} followed from the next round "
+                   f"({out['moved']} moved to their in-solve tops, {out['not_top']} not at a top left in place), "
+                   f"{out['merged']} merged ({out['shared']} on another follower's top, {out['near']} within 1e-3 of a member)")
+    return out
+
+
+def _round_end_follow(Omega, peakset, members, ins_add, wst, wtop, follow_fn=None):
+    """The round's end for the followed members (--peak-follow): each moved to
+    its peak's top AT THE CANDIDATE, so that the next round starts on the tops;
+    then members closer than 1e-3 merged.  Omega the working set (keys round 6),
+    peakset the peak members (changed in place), members the followed keys in
+    the order they are moved (this round's followers, then the in-solve
+    additions ins_add, stage E); wst / wtop the lattice's tops at the candidate
+    and whether each is one (the SQP's w_star / w_top), follow_fn the reduced
+    model's locator (w -> top; None: the lattice).  Returns (Omega, counts
+    {moved, merged, shared, nottop}, the in-solve additions moved {key: top},
+    those not at a top, the keys dropped on another member's top).  (Moved out
+    of main() unchanged in 20261010j stage E, for its unit test.)"""
+    moved = 0; newO = set(Omega); nottop = 0; shared = 0; dropped = set()
+    ins_add = set(ins_add); ins_mv = {}; ins_nt = set()
+    if follow_fn is None:
+        # MEMBERS TRULY ON ONE TOP (lattice, 20261010j, missed-peaks.md P4): the
+        # tops at the candidate (after the solve's dedup restarts) agreeing within
+        # 1e-4 are one peak -- one member keeps it (a peak member, followed next
+        # round; then the one whose base is nearest), the others leave Omega.  The
+        # 1e-3 merge below never caught them: a member whose top lies within 1e-3
+        # of another member is not moved (eval-waves.md).  Every member followed
+        # in the solve counts (the in-solve additions too: they have tops in
+        # w_star, and are peak members now -- stage E -- so between an addition
+        # and an older follower on one top the nearest base keeps it)
+        grp = sorted((round(float(wst[round(float(w), 6)]), 6), round(float(w), 6), w) for w in Omega
+                     if round(float(w), 6) in wst and wtop.get(round(float(w), 6), True))
+        g = []
+        for tp, k, w in grp + [(np.inf, None, None)]:
+            if g and tp - g[-1][0] > 1e-4:
+                if len(g) > 1:
+                    kw = min(g, key=lambda q_: (q_[1] not in peakset, abs(q_[1] - q_[0])))[1]
+                    for _, k2, w2 in g:
+                        if k2 != kw:
+                            newO.discard(w2); peakset.discard(k2); dropped.add(k2); shared += 1
+                g = []
+            g.append((tp, k, w))
+    for w in members:
+        if round(float(w), 6) in dropped:
+            continue                                   # on another member's top: dropped just above
+        if follow_fn is None:
+            ws = wst.get(round(float(w), 6), w)
+            if not wtop.get(round(float(w), 6), True):
+                # NOT A TOP (P3): stopped on a window's edge or still climbing --
+                # never a member's new place (770632 r11 moved the member onto the
+                # edge point 4.13125, slope +284); it stays where it is
+                nottop += 1
+                if w in ins_add:
+                    ins_nt.add(w)
+                continue
+        else:
+            ws = follow_fn(w)
+        ws = round(float(ws), 6)
+        if abs(ws - w) > 1e-4 and all(abs(ws - q) > 1e-3 for q in newO if q != w):
+            newO.discard(w); newO.add(ws); peakset.discard(w); peakset.add(ws); moved += 1
+            if w in ins_add:
+                ins_mv[w] = ws
+    # MERGE members closer than 1e-3 (following can bring several onto one
+    # top; duplicate rows made the QP nearly degenerate), keeping a peak
+    # member where there is one
+    merged = []
+    for q in sorted(newO):
+        if merged and abs(q - merged[-1]) < 1e-3:
+            if q in peakset and merged[-1] not in peakset:
+                merged[-1] = q
+            continue
+        merged.append(q)
+    return merged, dict(moved=moved, merged=len(newO) - len(merged), shared=shared, nottop=nottop), ins_mv, ins_nt, dropped
+
+
 def _reduced_cert(*args, **kw):
     """Certificate on a REDUCED pencil: the dense level-set algorithm by default
     (2026-09-25: the sparse shift-invert decision procedure could certify a
@@ -4379,6 +4481,7 @@ def main():
         _prov_pre = bool(a.cert_every > 1 and _ro is not None and (it % a.cert_every != 0)
                          and it < a.outer - 1 and _ro.dim > 0 and a.prov_gate == 'reduced')
         _truncated = False                       # the inner solve was cut by --deadline (P5)
+        _ins_add, _ins_sum = [], None            # the in-solve additions followed from the next round (lattice, stage E)
         if a.inner == 'sqp':
             from sqp_inner import solve_epigraph_sqp
             if a.deadline > 0:
@@ -4462,6 +4565,22 @@ def main():
             if _addf:
                 Omega = sorted(set(list(Omega) + [round(float(x), 6) for x in _addf]))
                 print(f"    sqp refine: working set +{len(_addf)} -> |Omega|={len(Omega)}", flush=True)
+                if _follow_dict is not None and _lat is not None:
+                    # IN-SOLVE ADDITIONS FOLLOWED AFTER THEIR ROUND (20261010j stage E,
+                    # missed-peaks.md VERIFIER missed (1)): the level set's members were
+                    # followed inside their solve only -- they joined Omega, not the peak
+                    # set, so _follow_dict left them out and the move below skipped them:
+                    # fixed rows on 2^-10 from the next round on, at the region's centre
+                    # theta or Hermite estimate (the final 770632 Omega: 10 members on the
+                    # exact 48 base-grid centres, ~25 on 2^-6..2^-12 points, 0.134766 beside
+                    # the 0.132094 top; rows under-stating drifting tops, regions re-added,
+                    # |Omega| 116 -> 214).  Now peak members: moved below to their in-solve
+                    # tops (the w_star of the solve's end) under stage A's rules -- never
+                    # onto an edge or slope point, one member per shared top (the nearest
+                    # base) -- and followed from the next round on.  The lattice only: the
+                    # reduced path (GL nominal) has the same gap and is left as it is.
+                    _ins_add = sorted(set(round(float(x), 6) for x in _addf))
+                    _peakset.update(_ins_add)
             inner_stats.setdefault('quadprog_failure_rate', None)
             inner_stats.setdefault('qp_failure', False)
         else:
@@ -4514,7 +4633,8 @@ def main():
                 _vr = _rc_d.gain(float(_top), _aa_d, _nn_d, _KK_d, want_vectors=False)['sigma'] if _rc_d else float('nan')
                 _vf = _clf_d.gain(float(_top), _aa_d, _nn_d, _KK_d, want_vectors=False)['sigma']
                 print(f"      member {_m:+.4f} -> top {_top:+.4f}: reduced {_vr:.6f}, full {_vf:.6f}", flush=True)
-        if _follow_dict and best['z'] is not None:
+        _ins_mv, _ins_nt, _dropped = {}, set(), set()   # in-solve additions moved (key -> top) / not at a top; shared tops dropped
+        if (_follow_dict or _ins_add) and best['z'] is not None:
             # move each followed member to its peak's top AT THE CANDIDATE, so
             # the next round starts on the tops (reduced model: no factorisation;
             # lattice: the rows' points at the candidate, from the SQP's stats)
@@ -4522,62 +4642,20 @@ def main():
             _aa_, _nn_, _KK_, _xa_, _xs_, _va_, _vs_ = pk.unpack(zc)
             _bb_, _cc_, *_ = D.bc(_xa_, _xs_, _va_, _vs_)
             _rcf = _ro.make_cl(_bb_, _cc_, D.r, D.mc) if _ro is not None else None
-            _wst = inner_stats.get('w_star') or {}
-            _wtop = inner_stats.get('w_top') or {}
-            _moved = 0; _newO = set(Omega); _nottop = 0; _shared = 0; _dropped = set()
-            if _rcf is None:
-                # MEMBERS TRULY ON ONE TOP (lattice, 20261010j, missed-peaks.md P4): the
-                # tops at the candidate (after the solve's dedup restarts) agreeing within
-                # 1e-4 are one peak -- one member keeps it (a peak member, followed next
-                # round, before an in-solve addition, which would be a fixed row; then
-                # the one whose base is nearest), the others leave Omega.  The 1e-3 merge
-                # below never caught them: a member whose top lies within 1e-3 of another
-                # member is not moved (eval-waves.md).  Every member followed in the
-                # solve counts (the in-solve additions too: they have tops in w_star)
-                _grp = sorted((round(float(_wst[round(float(_w), 6)]), 6), round(float(_w), 6), _w) for _w in Omega
-                              if round(float(_w), 6) in _wst and _wtop.get(round(float(_w), 6), True))
-                _g = []
-                for _tp, _k, _w in _grp + [(np.inf, None, None)]:
-                    if _g and _tp - _g[-1][0] > 1e-4:
-                        if len(_g) > 1:
-                            _kw = min(_g, key=lambda q_: (q_[1] not in _peakset, abs(q_[1] - q_[0])))[1]
-                            for _, _k2, _w2 in _g:
-                                if _k2 != _kw:
-                                    _newO.discard(_w2); _peakset.discard(_k2); _dropped.add(_k2); _shared += 1
-                        _g = []
-                    _g.append((_tp, _k, _w))
-            for _w in list(_follow_dict):
-                if round(float(_w), 6) in _dropped:
-                    continue                                   # on another member's top: dropped just above
-                if _rcf is None:
-                    _ws = _wst.get(round(float(_w), 6), _w)
-                    if not _wtop.get(round(float(_w), 6), True):
-                        # NOT A TOP (P3): stopped on a window's edge or still climbing --
-                        # never a member's new place (770632 r11 moved the member onto the
-                        # edge point 4.13125, slope +284); it stays where it is
-                        _nottop += 1
-                        continue
-                else:
-                    _ws, _ = _follow(_rcf, _w, _aa_, _nn_, _KK_, float(a.follow_radius))
-                _ws = round(float(_ws), 6)
-                if abs(_ws - _w) > 1e-4 and all(abs(_ws - q) > 1e-3 for q in _newO if q != _w):
-                    _newO.discard(_w); _newO.add(_ws); _peakset.discard(_w); _peakset.add(_ws); _moved += 1
-            # MERGE members closer than 1e-3 (following can bring several onto one
-            # top; duplicate rows made the QP nearly degenerate), keeping a peak
-            # member where there is one
-            _merged = []
-            for _q in sorted(_newO):
-                if _merged and abs(_q - _merged[-1]) < 1e-3:
-                    if _q in _peakset and _merged[-1] not in _peakset:
-                        _merged[-1] = _q
-                    continue
-                _merged.append(_q)
-            _nmerge = len(_newO) - len(_merged)
-            Omega = _merged
-            if _moved or _nmerge or _shared or _nottop:
-                print(f"    peak-following: {_moved} member(s) moved to their tops, {_nmerge} merged"
-                      + (f", {_shared} on another member's top dropped" if _shared else '')
-                      + (f", {_nottop} not at a top (edge or slope) left in place" if _nottop else ''), flush=True)
+            # the reduced model: the member's top by peakfollow.follow at the candidate (no
+            # factorisation); the lattice: its top in the SQP's stats (w_star, w_top)
+            _ffn = (None if _rcf is None else
+                    (lambda w_: _follow(_rcf, w_, _aa_, _nn_, _KK_, float(a.follow_radius))[0]))
+            Omega, _pf, _ins_mv, _ins_nt, _dropped = _round_end_follow(
+                Omega, _peakset, list(_follow_dict or {}) + [k_ for k_ in _ins_add if k_ not in (_follow_dict or {})],
+                _ins_add, inner_stats.get('w_star') or {}, inner_stats.get('w_top') or {}, follow_fn=_ffn)
+            if _pf['moved'] or _pf['merged'] or _pf['shared'] or _pf['nottop']:
+                print(f"    peak-following: {_pf['moved']} member(s) moved to their tops, {_pf['merged']} merged"
+                      + (f", {_pf['shared']} on another member's top dropped" if _pf['shared'] else '')
+                      + (f", {_pf['nottop']} not at a top (edge or slope) left in place" if _pf['nottop'] else ''), flush=True)
+        if _ins_add:
+            _ins_sum = _insolve_summary(_ins_add, _ins_mv, _ins_nt, _dropped, Omega, _peakset, inner_stats.get('enrol') or {})
+            print(_ins_sum.pop('line'), flush=True)
         # BUNDLE-STYLE STEP GOVERNOR (proximity control, Apkarian-Noll).  In
         # the proximity-control bundle method the parameter tau bounds the
         # trial step and is the load-bearing piece of the convergence theory;
@@ -5229,6 +5307,7 @@ def main():
                          smax=(float(best['g']) if best.get('g') is not None and np.isfinite(best['g']) else None),
                          excess=_excess,
                          refine_log=(inner_stats or {}).get('refine_log'),
+                         insolve=_ins_sum,       # the in-solve additions: located, followed, merged (stage E)
                          nOmega=len(Omega), added=len(newf),
                          # stage-0 instrumentation, cheap enough to be always
                          # on: these come from the pyGRANSO solution object,
