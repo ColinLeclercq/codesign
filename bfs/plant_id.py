@@ -4,6 +4,7 @@
     python bfs/plant_id.py coarse|fx            the id (16 hex digits)
     python bfs/plant_id.py --dir coarse|fx      the directory: <data root>/<kind>-<id>
     python bfs/plant_id.py --root OLD coarse    the id of another code directory's generators
+    python bfs/plant_id.py --adopt coarse [DIR] give an existing plant directory this id (lists the candidates)
 
 The plant files (mesh, operators, certified range and poles) are built once
 per id into their own directory and never rebuilt in place, so code versions
@@ -14,8 +15,8 @@ the layout review of 20261010i).
 The id hashes what the files are made from:
   * the generators and what they import (bfs/mesh_coarse.py for the test
     plant, bfs/ops_dolfinx.py, bfs/archive_dsr/nsforms.py, bfs/plant_io.py,
-    bfs/plant_cert.py) -- their syntax trees without comments or docstrings,
-    so an edit of a comment costs no rebuild;
+    bfs/plant_cert.py) -- their source without comments and blank lines, the
+    same for every Python version, so an edit of a comment costs no rebuild;
   * the input data (the archive's mesh, facets and base flow);
   * RANGE_VERSION in bfs/plant.py: the certified range and poles are computed
     by bfs/plant.py, bfs/mfree.py and sparse_spectrum.py, which change for
@@ -40,14 +41,27 @@ DATA = {'coarse': ['bfs/archive_dsr/fx_data/baseflow_fenicsx.npz'],
 
 
 def _code_hash(path):
-    """The syntax tree of a Python file without docstrings (comments are not in it)."""
-    tree = ast.parse(open(path).read())
-    for node in ast.walk(tree):
-        body = getattr(node, 'body', None)
-        if isinstance(body, list) and body and isinstance(body[0], ast.Expr) \
-                and isinstance(getattr(body[0], 'value', None), ast.Constant) and isinstance(body[0].value.value, str):
-            node.body = body[1:] or [ast.Pass()]
-    return hashlib.sha256(ast.dump(tree, include_attributes=False).encode()).hexdigest()
+    """The source without its comments, trailing blanks and blank lines.  The
+    same for every Python version (20261010k): the first version hashed
+    ast.dump, whose format changes between 3.12 and 3.13, so the login node
+    (home.sh) and the jobs (the conda env) disagreed on the id of the same
+    files and the jobs rebuilt the test plant while the others waited.
+    Docstrings count (an edit of one costs one rebuild); comments do not.
+    tokenize only LOCATES the comments: its token stream itself differs
+    between versions (f-strings since 3.12), their positions do not."""
+    import io, tokenize
+    src = open(path).read()
+    lines = src.splitlines()
+    cut = {}
+    for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+        if tok.type == tokenize.COMMENT:
+            cut[tok.start[0] - 1] = tok.start[1]
+    out = []
+    for k, line in enumerate(lines):
+        line = (line[:cut[k]] if k in cut else line).rstrip()
+        if line:
+            out.append(line)
+    return hashlib.sha256("\n".join(out).encode()).hexdigest()
 
 
 def _file_hash(path):
@@ -91,8 +105,45 @@ def data_root():
     return os.path.join(home, 'data') if home else os.path.join(CODE, 'bfs', 'data')
 
 
+def adopt(kind, src=None):
+    """Give an existing plant directory this code's id (20261010k: the ids of
+    20261010j depended on the Python version, so complete files sit under
+    ids no job computes any more).  Without SRC: list the candidates.  The
+    caller vouches that SRC was made by the same generators (they are
+    unchanged since 20261010g); SRC is renamed, never copied or deleted."""
+    want = os.path.join(data_root(), f"{kind}-{plant_id(kind)}")
+    if src is None:
+        import glob
+        print(f"this code's {kind} directory: {want} ({'exists' if os.path.isdir(want) else 'missing'})")
+        for d in sorted(glob.glob(os.path.join(data_root(), f"{kind}-*"))):
+            if os.path.abspath(d) == want:
+                continue
+            files = sorted(os.listdir(d))
+            ok = f"ops_{kind}.npz" in files and f"ops_{kind}_range.npz" in files
+            print(f"  candidate {d}: {'complete (operators + range)' if ok else 'incomplete'}; {len(files)} entries")
+        print(f"adopt one: python bfs/plant_id.py --adopt {kind} <directory>")
+        return 0
+    src = os.path.abspath(src)
+    if os.path.exists(want):
+        print(f"*** {want} exists already: nothing to adopt"); return 1
+    if not os.path.isfile(os.path.join(src, f"ops_{kind}.npz")):
+        print(f"*** {src} holds no ops_{kind}.npz: not a {kind} plant directory"); return 1
+    if os.path.isdir(os.path.join(src, '.build.lockd')):
+        print(f"*** {src} has a build lock (.build.lockd): a job may be writing it; remove the lock once no job runs"); return 1
+    os.rename(src, want)
+    with open(os.path.join(want, 'ADOPTED.txt'), 'a') as f:
+        import datetime
+        f.write(f"{datetime.datetime.now().isoformat()} {src} -> {want} (bfs/plant_id.py --adopt)\n")
+    print(f"{src} -> {want}")
+    return 0
+
+
 if __name__ == '__main__':
     args = sys.argv[1:]
+    if args and args[0] == '--adopt':
+        if len(args) not in (2, 3) or args[1] not in PY:
+            raise SystemExit("usage: plant_id.py --adopt coarse|fx [DIRECTORY]")
+        sys.exit(adopt(args[1], args[2] if len(args) == 3 else None))
     root, want_dir = CODE, False
     if '--root' in args:
         i = args.index('--root'); root = os.path.abspath(args[i + 1]); del args[i:i + 2]

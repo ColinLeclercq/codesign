@@ -416,7 +416,7 @@ ones.
     - `codesign/`: the git clone of the branch `bfs`, updated by `git pull` and **never submitted from**. `version_check.py` refuses to run a job in it (`ALLOW_CLONE=1` overrides).
     - `v/<version>/`: one git worktree per code version, made by `bash bfs/stage.sh` at the clone's commit. Jobs are submitted from there. A pull in a directory that jobs run from changes their code: Slurm spools only the batch script, and the driver loads `winding_cert` and `postproc` only at the end of a resumed run. The worktree is never pulled. `stage.sh` refuses a version label already staged at another commit (the MANIFEST label must change with the code).
     - `testplant_bfs/`, `results_bfs/`, `smoke_bfs/`, `logs/`: shared by every version. Each worktree links to them (`bfs/home.sh`, run by `stage.sh`). The smoke test writes `smoke_bfs/<version>_<job>/`.
-    - `data/<kind>-<id>/`: the plant files (mesh, operators, certified range and poles) by content id (`bfs/plant_id.py`). The id hashes the generators' syntax trees (`bfs/mesh_coarse.py`, `ops_dolfinx.py`, `archive_dsr/nsforms.py`, `plant_io.py`, `plant_cert.py`; comments and docstrings do not count), the archive's input data, and `RANGE_VERSION` in `bfs/plant.py`. Bump `RANGE_VERSION` by hand whenever the computation of the range or poles changes. An id's files are built once, under a build lock that names its owner job (`bfs/lib.sh`: a dead owner's lock is taken over, a live one waited for). They are never rebuilt in place, so a version with other generators gets its own directory and the final winding certificate of a running job always reads its own plant's data. The scripts find their operators with `python bfs/plant_id.py --dir coarse|fx`. The 20261010g files have the current id (the generators are unchanged) and are adopted as they are.
+    - `data/<kind>-<id>/`: the plant files (mesh, operators, certified range and poles) by content id (`bfs/plant_id.py`). The id hashes the generators' source without comments and blank lines (`bfs/mesh_coarse.py`, `ops_dolfinx.py`, `archive_dsr/nsforms.py`, `plant_io.py`, `plant_cert.py`), the same under every Python version (since 20261010k; 20261010j hashed syntax trees, whose dump changes between Python 3.12 and 3.13), the archive's input data, and `RANGE_VERSION` in `bfs/plant.py`. Bump `RANGE_VERSION` by hand whenever the computation of the range or poles changes. An id's files are built once, under a build lock that names its owner job (`bfs/lib.sh`: a dead owner's lock is taken over, a live one waited for). They are never rebuilt in place, so a version with other generators gets its own directory and the final winding certificate of a running job always reads its own plant's data. The scripts find their operators with `python bfs/plant_id.py --dir coarse|fx`. The 20261010g files have the current id (the generators are unchanged) and are adopted as they are.
     - `.results_wt/`: the worktree of the branch `results` (`report.sh PUSH=1`).
   - **Runs.** One driver per run directory: `.job.lockd` holds the job id, a dead owner's lock is taken over, a live one refused. Each job appends a line to `code_versions.txt` (date, version, commit, job, plant id). A `RESUME`/`CONTINUE` on another plant id is refused (`PLANT_CHANGED=1` moves the run on purpose). `codesign.slurm` refuses to auto-resume a checkpoint left by another version (`RESUME=1`). The records carry `code_version`, and a resume prints "checkpoint written by X, continued by Y".
   - **`bfs/home.sh`** never deletes or overwrites. A real directory is emptied into the root with `mv -n`, and an entry already there is reported. Lock directories and temporaries are left alone. It refuses while jobs are queued or running from a directory it would move out of (squeue `%Z`), or across file systems. `FROM=<old code directory>` also moves an old version's runs, logs and plant files; plant files move only when their id equals this code's.
@@ -906,6 +906,22 @@ For comparison: the reduced path's cold central went to 191 in 44 rounds (Octobe
     - Read at T = 4 h, 8 h and at the end of the shorter arm.
     - The strip pays if D >= +1 % in at least 3 pairs and <= -1 % in none; no strip wins in the mirror case; anything else is undecided.
 - **The asynchronous level set, measured:** one more job, `ab_c151_nostrip_async` (`ASYNC=1`), against `ab_c151_nostrip`. The iterates should be identical, so the comparison is wall time only, and also a cluster check of the identity.
+
+*20261010j on the cluster: the plant id depended on the Python version (2026-10-15)*
+
+- What happened (jobs 774312-774320, the batch of section 8 at 48 ranks):
+  - every job computed the test plant's id as `coarse-7afd94cc112e1bbc` and found no files there;
+  - `home.sh` had moved the 20261010g files under another id: it computes the id with the login node's `python3`, while the jobs use the conda env's Python 3.12, and `ast.dump`, which the 20261010j id hashed, differs between Python versions;
+  - job 774317 rebuilt the mesh and the operators and started `plant_cert.py`; the eight others waited on its build lock, each holding 48 ranks, until they were cancelled.
+- No run was touched: the jobs stop in the plant section, before any run directory is opened.
+- Fixed in 20261010k:
+  - the id hashes the source without comments and blank lines: the same under Python 3.11, 3.12 and 3.13, and equal to the id of the 20261010g tree;
+  - `python3 bfs/plant_id.py --adopt coarse [DIR]` gives an existing plant directory this id, and lists the candidates without DIR;
+  - a job that finds the plant incomplete while a live job builds it stops (exit 3) with the `--dependency=afterok:<job>` to resubmit with, instead of waiting on its node (`WAIT_PLANT=1` waits);
+  - `PLANT_ONLY=1` builds the plant and stops;
+  - complete files (operators, range and both pole files) are read without the lock;
+  - `stage.sh` reports whether each plant is complete.
+- Lesson (LESSONS.md 15): a content id must not depend on the interpreter. Compute it the same way on the login node and in the jobs, and check that before relying on it.
 
 ## 9. Open items
 

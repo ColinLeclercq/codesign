@@ -50,6 +50,11 @@
 #   ORACLE=lattice SHRINK=1 ... sbatch ...
 #        (trust radius 2 alpha |d| after a partial step, --sqp-partial-shrink on;
 #         off by default since 20261008c; the directories get _shr)
+#   PLANT_ONLY=1 sbatch --ntasks=48 --mem=100G --time=03:00:00 bfs/slurm/testplant.slurm
+#        (build this code's test plant files, if missing, and stop; then submit the
+#         batch with --dependency=afterok:<that job>: a job finding the plant being
+#         built by another job stops with that hint instead of waiting on its
+#         node; WAIT_PLANT=1 waits)
 #   ORACLE=lattice ASYNC=1 STRIP=0 ... sbatch ...
 #        (the no-strip level set beside the next SQP iteration, --lattice-async on,
 #         20261010j: the same iterates as without, bit for bit in the sandbox; a
@@ -125,8 +130,28 @@ OPS=$PD/ops_coarse.npz
 mkdir -p "$PD"
 echo "=== test plant files: $PD ==="
 LOCKD=$PD/.build.lockd
-take_lock "$LOCKD" "test plant's files"
-trap 'drop_lock "$LOCKD"' EXIT
+# complete = operators with the shear trace, the certified range and the poles
+# at both lines plant_cert.py makes; then the files are only read, no lock
+plant_complete() {
+    python -c "import numpy as np, sys; sys.exit(0 if 'shear_S_data' in np.load('$OPS').files else 1)" 2>/dev/null \
+        && [ -f "$PD/ops_coarse_range.npz" ] && [ -f "$PD/ops_coarse_range_poles_-0.050000.npz" ] \
+        && [ -f "$PD/ops_coarse_range_poles_-0.025000.npz" ]
+}
+if ! plant_complete; then
+    # 20261010k: a job no longer WAITS for another job's build while holding its
+    # node (20261010j: eight 48-rank jobs waited on 774317's plant_cert): it
+    # stops and says what to resubmit after (WAIT_PLANT=1 waits as before);
+    # PLANT_ONLY=1 builds the files and stops -- submit it first, then the
+    # batch with --dependency=afterok:<its job id>
+    owner=$(cat "$LOCKD/owner" 2>/dev/null || true)
+    rc=0; job_alive "$owner" || rc=$?
+    if [ -d "$LOCKD" ] && [ "$rc" = 0 ] && [ "$owner" != "${SLURM_JOB_ID:-}" ] && [ "${WAIT_PLANT:-0}" != 1 ]; then
+        echo "*** the test plant $PD is being built by job $owner: resubmit this job with sbatch --dependency=afterok:$owner ... (or WAIT_PLANT=1 to wait on the node)"
+        exit 3
+    fi
+    take_lock "$LOCKD" "test plant's files"
+    trap 'drop_lock "$LOCKD"' EXIT
+fi
 if ! python -c "import numpy as np, sys; sys.exit(0 if 'shear_S_data' in np.load('$OPS').files else 1)" 2>/dev/null; then
     echo "=== test plant operators (missing or without the shear trace) ==="
     if ! python -c "import h5py, numpy as np; [h5py.File(f'$PD/coarse/{f}.h5', 'r') for f in ('mesh', 'facets')]; np.load('$PD/coarse/baseflow.npz')" 2>/dev/null; then
@@ -139,12 +164,16 @@ if ! python -c "import numpy as np, sys; sys.exit(0 if 'shear_S_data' in np.load
     python bfs/ops_dolfinx.py --data "$PD/coarse" --baseflow baseflow.npz --out "$PD/.ops.$$.npz"
     mv "$PD/.ops.$$.npz" "$OPS"
 fi
-if [ ! -f "$PD/ops_coarse_range.npz" ]; then
+if [ ! -f "$PD/ops_coarse_range.npz" ] || [ ! -f "$PD/ops_coarse_range_poles_-0.050000.npz" ] || [ ! -f "$PD/ops_coarse_range_poles_-0.025000.npz" ]; then
     echo "=== the test plant's certified range and poles (bfs/plant_cert.py) ==="
     time $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/plant_cert.py --ops "$OPS"
 fi
 drop_lock "$LOCKD"
 trap - EXIT
+if [ "${PLANT_ONLY:-0}" = 1 ]; then
+    plant_complete && echo "=== PLANT_ONLY: the test plant is complete in $PD ===" || { echo "*** PLANT_ONLY: the test plant in $PD is still incomplete"; exit 1; }
+    exit 0
+fi
 # NEVER delete a run (2026-10-06: CONTINUE=1, codesign.slurm's word, was not
 # read here, and the directory of a 12.5 h run was started over): RESUME=1 or
 # CONTINUE=1 continues it; without them a directory holding a run is refused,

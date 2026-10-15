@@ -763,6 +763,9 @@ The BFS ports are fixed-shape (a Gaussian force and a wall-shear window). These 
 
 ---
 
+- **A content id must not depend on the interpreter; compute it the same way where it is written and where it is read** (2026-10-15).
+  20261010j's plant id hashed `ast.dump`, whose format differs between Python 3.12 and 3.13. `home.sh` (login-node `python3`) and the jobs (conda Python 3.12) disagreed, so the jobs rebuilt the test plant while eight 48-rank jobs waited on the build lock. Fixed in 20261010k: the id hashes the source without comments, identical under 3.11-3.13. Also: a job must not wait on another job's build while holding a node. [BFS.md 8, 20261010j on the cluster; jobs 774312-774320]
+
 ## 16. Process and validation (specific)
 
 ### Do not repeat

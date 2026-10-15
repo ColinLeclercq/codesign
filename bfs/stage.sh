@@ -34,5 +34,15 @@ else
     echo "staged $VER at ${HEAD:0:12}: $DEST"
 fi
 ( cd "$DEST" && bash bfs/home.sh "$HOME_DIR" | grep -v '^ok ' )
+# the plant files of this version's id (bfs/plant_id.py): complete, or what to do
+for k in coarse fx; do
+    d=$(cd "$DEST" && python3 bfs/plant_id.py --dir "$k")
+    if [ -f "$d/ops_$k.npz" ] && [ -f "$d/ops_${k}_range.npz" ]; then
+        echo "plant $k: $d (complete)"
+    else
+        echo "plant $k: $d MISSING -- 'python3 bfs/plant_id.py --adopt $k' lists directories built by"
+        echo "        unchanged generators under another id; else $([ "$k" = coarse ] && echo "PLANT_ONLY=1 sbatch --ntasks=48 bfs/slurm/testplant.slurm first, then the batch with --dependency=afterok:<that job>" || echo "smoke.slurm step 1 and plant_cert.slurm (full mesh)")"
+    fi
+done
 echo
 echo "submit from there:  cd $DEST && sbatch ... bfs/slurm/testplant.slurm"
