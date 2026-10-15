@@ -765,6 +765,8 @@ The BFS ports are fixed-shape (a Gaussian force and a wall-shear window). These 
 
 - **A content id must not depend on the interpreter; compute it the same way where it is written and where it is read** (2026-10-15).
   20261010j's plant id hashed `ast.dump`, whose format differs between Python 3.12 and 3.13. `home.sh` (login-node `python3`) and the jobs (conda Python 3.12) disagreed, so the jobs rebuilt the test plant while eight 48-rank jobs waited on the build lock. Fixed in 20261010k: the id hashes the source without comments, identical under 3.11-3.13. Also: a job must not wait on another job's build while holding a node. [BFS.md 8, 20261010j on the cluster; jobs 774312-774320]
+- **On sator, two jobs of one user never share a node: pack runs inside one job (`bfs/slurm/pair.slurm`), and at most 8 jobs run per user** (2026-10-15).
+  Slurm placed two 48-rank jobs on each of three 96-core nodes, then cancelled the second of each 6 s in, as root ("CANCELLED by 0", exit 0:54), before the site prolog wrote anything: 774342, 774343, 774346. The QOS keeps a ninth job pending (`QOSMaxJobsPerUserLimit`). A 20261010j plan item ("two per node") had never been tried on the cluster before the batch depended on it: try a packing rule with a short job first. The rule "no second mpiexec in a job" (§9 of the rules) is about srun steps: two concurrent launches in one job are safe with Hydra's fork launcher and one `taskset` half each (sandbox check, BFS.md 8). Also found: `testplant.slurm` never printed the `-> DIR` line `report.sh` looks for, so no testplant run reached the results branch by that path; check that a report finds what a script writes. [BFS.md 8, 20261010m on the cluster]
 
 ## 16. Process and validation (specific)
 
@@ -923,7 +925,7 @@ The BFS ports are fixed-shape (a Gaussian force and a wall-shear window). These 
    - Pass MANIFEST plus version_check; respect the plant ids. `git pull` only in the clone /tmp_user/sator/cleclerc/BFS/codesign, then `bash bfs/stage.sh` and submit from the per-version worktree BFS/v/<label> it prints, never from the pulled clone (20261010j; revised 2026-10-14, §15, §19).
    - Validate inside an allocation, and run a smoke job first.
    - Use a fresh directory, or explicit RESUME/CONTINUE. **Never delete a run directory** (FRESH=1 keeps OUT.old-<date>). Keep checkpoints on deadline stops, with deadlines taken from EndTime.
-   - No second mpiexec in a job; mkdir locks; JIT cache and compiler pinned; the `--comment` line in every slurm script.
+   - No second mpiexec in a job, except with Hydra's fork launcher on separate CPU halves (`bfs/slurm/pair.slurm`); two jobs of one user never share a sator node; mkdir locks; JIT cache and compiler pinned; the `--comment` line in every slurm script.
    - Read the full log (caught exceptions, FATAL lines, refusals, ledger) before the results.
    - Report through `PUSH=1 bash bfs/report.sh`, and record cancelled jobs.
 10. **What every record carries:** the code version and commit, the command line, input hashes, the bounds of any reparametrisation, the certificates written back, the unpacked design (not the packer's z), the termination codes, and a diagnostic marked absent (not zero) when it does not apply.

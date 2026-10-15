@@ -81,8 +81,12 @@ if [ "${ALL:-0}" = 1 ]; then
     for run in testplant_bfs/*/ results_bfs/*/ smoke_bfs/*/; do runs+=("${run%/}"); done
 else
     while read -r d; do [ -n "$d" ] && runs+=("$d"); done < <(
-        for f in "${logs[@]}"; do grep -oE -- '-> (testplant_bfs|results_bfs|smoke_bfs)/[^ ]+' "$f" | head -3 || true; done \
-            | sed 's/^-> //' | sort -u)
+        for f in "${logs[@]}"; do
+            grep -oE -- '-> (testplant_bfs|results_bfs|smoke_bfs)/[^ ]+' "$f" | head -3 | sed 's/^-> //' || true
+            # testplant.slurm before 20261010n named its directory only on a resume
+            grep -oE -- '^=== RESUME: (testplant_bfs|results_bfs|smoke_bfs)/[^ ]+/run continues' "$f" | head -1 \
+                | sed -e 's/^=== RESUME: //' -e 's|/run continues$||' || true
+        done | sort -u)
 fi
 BIGF=()
 cpcap() {   # cp, leaving out files above 50 MB unless BIG=1

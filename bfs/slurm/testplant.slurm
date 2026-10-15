@@ -174,6 +174,9 @@ if [ "${PLANT_ONLY:-0}" = 1 ]; then
     plant_complete && echo "=== PLANT_ONLY: the test plant is complete in $PD ===" || { echo "*** PLANT_ONLY: the test plant in $PD is still incomplete"; exit 1; }
     exit 0
 fi
+# the run directory, for bfs/report.sh (20261010n: this script printed none, so
+# report.sh found no run of a testplant job; it now also reads "RESUME: DIR/run")
+echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none}${PAIR_ARM:+ (pair arm $PAIR_ARM)}  ${SLURM_NTASKS:-24} ranks  $(date -Is) -> $OUT ==="
 # NEVER delete a run (2026-10-06: CONTINUE=1, codesign.slurm's word, was not
 # read here, and the directory of a 12.5 h run was started over): RESUME=1 or
 # CONTINUE=1 continues it; without them a directory holding a run is refused,

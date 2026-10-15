@@ -923,6 +923,18 @@ For comparison: the reduced path's cold central went to 191 in 44 rounds (Octobe
   - `stage.sh` reports whether each plant is complete.
 - Lesson (LESSONS.md 15): a content id must not depend on the interpreter. Compute it the same way on the login node and in the jobs, and check that before relying on it.
 
+*20261010m on the cluster: one job per node, eight per user (2026-10-15)*
+
+- The nine jobs of the batch (774339-774347, 48 ranks, `--mem=225G`): Slurm put two on each of three nodes. The second job on each of those nodes was cancelled 6 s in, before the site prolog wrote its header ("CANCELLED by 0", exit 0:54): 774342 (d370 no strip), 774343 (c177 strip), 774346 (d412 no strip). The six others run, one per node, half of each node idle. The nodes have 96 cores and 515 GB (`scontrol show node`), so it was not the resources: sator refuses two jobs of one user on a node. The QOS also runs at most 8 jobs per user (`QOSMaxJobsPerUserLimit`).
+- So the plan's "48 ranks, two per node" needs both runs in one batch job: `bfs/slurm/pair.slurm` (20261010n).
+  - It runs two `testplant.slurm` arms (`ARM_A`, `ARM_B`: each arm's own VAR=value words, OUT required) on one 96-core node, with 48 ranks each, each on one half of the CPUs, one NUMA side each (`bfs/cpu_halves.py`).
+  - Every launch uses Hydra's fork launcher (`HYDRA_LAUNCHER=fork`: no srun step, so no repeat of the second-launch hang of section 8). The ranks inherit the half's `taskset` mask, and a check launch per half proves that before the arms start.
+  - The plant files are checked once first (`PLANT_ONLY=1` on the whole node).
+  - Each arm logs to `logs/bfs_testplant_<job>_<OUT's name>.log`.
+  - Sandbox check (MPICH 5.0.1 Hydra, fake Slurm environment): without the fork launcher, Hydra tried srun and hung; with it, two concurrent 2-rank launches ran on CPUs 0-1 and 2-3; a failing arm's exit code reaches the job's.
+- Found on the way: `testplant.slurm` printed no `-> DIR` line, so `report.sh` found no run directory of a testplant job. It now prints one, after the `PLANT_ONLY` exit, and `report.sh` also reads `=== RESUME: DIR/run continues` for the older logs.
+- `stage.sh`: a directory that git does not list as a worktree, without a complete checkout (what an interrupted `git worktree add` left at `v/20261010m`), is moved aside as `<dir>.partial-<date>` and the checkout redone. A complete checkout that is not a worktree is refused.
+
 ## 9. Open items
 
 - **Starts below the open loop:** the zero-controller start works (test plant, cluster: 0.826 x the open-loop peak in 3 rounds, section 8). The certified prefix (section 5) is to be seen on the cluster rerun.

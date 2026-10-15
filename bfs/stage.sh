@@ -24,6 +24,27 @@ HOME_DIR=$(python3 -c "import sys; sys.path.insert(0, 'bfs'); import plant_id; p
 VER=$(sed -n 's/^# version //p' bfs/MANIFEST)
 HEAD=$(git rev-parse HEAD)
 DEST=$HOME_DIR/v/$VER
+# a directory git does not list as a worktree is what an interrupted
+# "git worktree add" leaves (20261010m on sator: a .git file and part of the
+# files, "exists at commit none"); no job can have run from it (no complete
+# bfs/slurm), so it is moved aside -- never deleted -- and the checkout redone
+registered() {   # is directory $1 a worktree of this clone (paths compared resolved)
+    local real k w
+    real=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+    while read -r k w; do
+        [ "$k" = worktree ] && [ "$(cd "$w" 2>/dev/null && pwd -P)" = "$real" ] && return 0
+    done < <(git worktree list --porcelain)
+    return 1
+}
+if [ -e "$DEST" ] && ! registered "$DEST"; then
+    if [ -f "$DEST/bfs/slurm/testplant.slurm" ] && [ -f "$DEST/bfs/MANIFEST" ]; then
+        echo "*** $DEST holds a full checkout that is not a worktree of this clone: look at it, move it away, then stage again"; exit 1
+    fi
+    aside="$DEST.partial-$(date +%Y%m%d-%H%M%S)"
+    mv "$DEST" "$aside"
+    git worktree prune
+    echo "=== $DEST was a partial checkout (an interrupted git worktree add): moved to $aside (delete it once checked) ==="
+fi
 if [ -d "$DEST" ]; then
     have=$(git -C "$DEST" rev-parse HEAD 2>/dev/null || echo none)
     [ "$have" = "$HEAD" ] || { echo "*** $DEST exists at commit ${have:0:12}, this clone is at ${HEAD:0:12} with the same label $VER: the MANIFEST label must change with the code"; exit 1; }
