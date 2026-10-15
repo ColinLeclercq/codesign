@@ -137,7 +137,7 @@ mkdir -p "$RUN"
 run_lock "$RUN" || exit 1
 trap 'drop_lock "$RUN/.job.lockd"' EXIT
 PID=$(basename "$PD")
-LASTP=$( [ -f "$RUN/code_versions.txt" ] && awk 'NF >= 5 {p = $5} END {print p}' "$RUN/code_versions.txt" || true)
+LASTP=$( [ -f "$RUN/code_versions.txt" ] && awk '$5 ~ /^(coarse|fx)-[0-9a-f]+$/ {p = $5} END {print p}' "$RUN/code_versions.txt" || true)
 if [ -f "$RUN/${TAG}_ckpt.npz" -o -f "$RUN/$TAG.json" ] && [ -n "$LASTP" ] && [ "$LASTP" != "$PID" ] && [ "${PLANT_CHANGED:-0}" != 1 ]; then
     echo "*** $RUN was run on the plant $LASTP, this code's is $PID (bfs/plant_id.py): PLANT_CHANGED=1 continues it on the new plant"; exit 1
 fi

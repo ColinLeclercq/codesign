@@ -206,7 +206,7 @@ trap 'drop_lock "$OUT/.job.lockd"' EXIT
 # code version, and a RESUME/CONTINUE on another plant id is refused
 # (PLANT_CHANGED=1 moves it on purpose); lines before 20261010j carry no id
 PID=$(basename "$PD")
-LASTP=$( [ -f "$OUT/code_versions.txt" ] && awk 'NF >= 5 {p = $5} END {print p}' "$OUT/code_versions.txt" || true)
+LASTP=$( [ -f "$OUT/code_versions.txt" ] && awk '$5 ~ /^(coarse|fx)-[0-9a-f]+$/ {p = $5} END {print p}' "$OUT/code_versions.txt" || true)
 if [ ${#CONT[@]} -gt 0 ] && [ -n "$LASTP" ] && [ "$LASTP" != "$PID" ] && [ "${PLANT_CHANGED:-0}" != 1 ]; then
     echo "*** $OUT was run on the plant $LASTP, this code's is $PID (bfs/plant_id.py): PLANT_CHANGED=1 continues it on the new plant"; exit 1
 fi
