@@ -76,7 +76,7 @@ def range_version(root):
     """RANGE_VERSION = <int> in bfs/plant.py, read without importing it."""
     for node in ast.parse(open(os.path.join(root, 'bfs/plant.py')).read()).body:
         if isinstance(node, ast.Assign) and any(getattr(t, 'id', None) == 'RANGE_VERSION' for t in node.targets):
-            return int(node.value.value)
+            return int(ast.literal_eval(node.value))      # ast.Num before Python 3.8, ast.Constant after
     return 1        # code from before the constant (20261010i and earlier) computes version 1
 
 

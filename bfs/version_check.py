@@ -35,8 +35,8 @@ def _sha(path):
 
 
 def _files():
-    out = subprocess.run(['git', 'ls-files', '*.py', '*.sh', '*.slurm'], cwd=ROOT, capture_output=True,
-                         text=True, check=True).stdout.split()
+    out = subprocess.run(['git', 'ls-files', '*.py', '*.sh', '*.slurm'], cwd=ROOT, stdout=subprocess.PIPE,
+                         universal_newlines=True, check=True).stdout.split()     # Python 3.6 on the login node
     return sorted(p for p in out if not p.startswith(('tools/', 'attic/')) and p not in SITE)
 
 
