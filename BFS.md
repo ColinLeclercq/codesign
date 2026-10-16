@@ -937,6 +937,24 @@ For comparison: the reduced path's cold central went to 191 in 44 rounds (Octobe
 - `stage.sh`: a directory that git does not list as a worktree, without a complete checkout (what an interrupted `git worktree add` left at `v/20261010m`), is moved aside as `<dir>.partial-<date>` and the checkout redone. A complete checkout that is not a worktree is refused.
 - 20261010o-q: `report.sh PUSH=1` stopped at the commit with "fatal: name consists only of disallowed characters: ...". The clone's `.git/config` held `user.name ...`: the setup line of section 7 had `git config user.name ...` with `...` as a placeholder, and it was typed as written (the second placeholder typed literally, after `coarse-XXXX`: commands given to the user carry real values or none). A clone's setting overrides `--global`. EL8's git refuses the name; git 2.43 accepts it. Then the push asked for a GitHub password, which git over https refuses since 2021, and report.sh read the failure as a race and asked twice more; it now retries only when origin/results moved, and section 7 says how to push (SSH key or a token). The report itself was built (`for_claude.tar.gz`). `report.sh` now checks the name before it touches the results worktree and says what to set.
 
+*The paired batch 774360-774364 at about 10 h (20261010n, report of 2026-10-16 09:24; jobs end about 13:30)*
+
+- Five pair jobs, ten arms of 48 ranks, two per node (`pair.slurm`): each half's ranks checked on their own CPUs (48 + 48 python processes per node, by `ps`). Every arm resumed its parent's checkpoint with its loop state (inner budget 40, trust 0.32, peak set) and certified the inherited anchor (winding count 0 right of -0.05).
+- No incident in any arm: no gate refusal, no veto, no FATAL, and no missed peak. The level-set notes read only "t lag" (certified = smax within 1e-14). Every arm also has 0-7 trials across the line, weighed by the merit. One QP gave up (async c151, round 6: NumericalError, then InsufficientProgress at 1e-8 and 1e-6) and was handled.
+- **The strip A/B**, D(T) = ln(gamma_nostrip / gamma_strip), with T from each log's round-0 stamp:
+
+  | pair | T = 4 h | T = 8 h | end of the shorter arm |
+  |---|---|---|---|
+  | central 151.48 | -0.18 % | -4.75 % | -3.55 % (9.3 h: 125.81 against 130.35) |
+  | decentral 369.87 | -0.03 % | -0.03 % | -0.02 % (9.8 h: 368.43 against 368.51) |
+  | central 176.71 | -0.21 % | -0.12 % | -0.11 % (9.4 h: 155.14 against 155.31) |
+  | decentral 412.28 | +0.46 % | -0.44 % | -0.38 % (9.4 h: 391.67 against 393.15) |
+
+  By the rule set before the batch (1 % in at least 3 pairs, and none against) this is **undecided**. No strip leads in all four pairs at the end, by more than 1 % only in central 151.48; the strip never leads by more than 0.5 %. The strip costs about 45 % more evaluations per round (123-135 calls against 83-95) and 10-25 % more wall per round, and it bought no stability here (no refusal, no veto in either arm). The asynchronous level set exists only without the strip: with it, no strip leads by 4.9 % (central 151.48, 124.06 against 130.35 at 9.3 h) and 0.14 % (decentral 369.87).
+- **The asynchronous level set** (`ASYNC=1`) on the cluster: the trace of each async arm is identical to its synchronous partner's, every round line, t lag note and crossing line, over 6 rounds (central) and 8 rounds (decentral), as in the sandbox. Its rounds take 0.74-0.82 of the synchronous wall in central and about 0.70 in decentral (2760-3180 s against 3990-4450 s). The level set's own wall went from 2200-4400 s a round to about 60 s: it now runs beside the SQP. By 10 h the async arms are 2 rounds (central) and 4 rounds (decentral) ahead.
+- **48 ranks against 96** (2 arms a node against 1 run a node, the partner's memory traffic included): round wall per SQP evaluation, no-strip arms in the 20261010g logs at 96 ranks against these logs at 48 ranks, decentral 31-40 s against 45-51 s (ratio about 1.26), central 57-67 s against 59-72 s (about 1.1). Evaluation waves take 2.1-2.6 s against 1.7-1.8 s. That is the 1.13-1.27 per round of the projection, so about 1.6x more rounds per node-hour. (The reading of 2026-10-16 that "1.8-2 h a round" meant a much worse ratio was wrong: these designs' rounds took 1.5-1.9 h at 96 ranks too.)
+- Progress in 10 h: central 151.48 -> 124.53 (no strip; 123.94 async), central 176.71 -> 155.14, decentral 369.87 -> 368.43 (367.24 async, 367.77 strip), decentral 412.28 -> 391.67.
+
 ## 9. Open items
 
 - **Starts below the open loop:** the zero-controller start works (test plant, cluster: 0.826 x the open-loop peak in 3 rounds, section 8). The certified prefix (section 5) is to be seen on the cluster rerun.
