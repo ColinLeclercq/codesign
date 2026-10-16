@@ -1,0 +1,33 @@
+{
+ "out": "testplant_bfs/zero_m2p2_central_o10_lat_nostrip_s0_r300/starts",
+ "n": 1,
+ "seed": 0,
+ "r": 10,
+ "m": 2,
+ "p": 2,
+ "struct": "central",
+ "kind": "zero",
+ "starts": [
+  {
+   "name": "zero_000",
+   "xa": [
+    [
+     0.6,
+     1.0
+    ],
+    [
+     1.6,
+     0.9
+    ]
+   ],
+   "xs": [
+    2.0,
+    3.6
+   ],
+   "loop_orders": [
+    5,
+    5
+   ]
+  }
+ ]
+}

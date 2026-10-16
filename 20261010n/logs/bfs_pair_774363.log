@@ -1,0 +1,17 @@
+==========================================
+SLURM_JOB_ID = 774363
+SLURM_JOB_NODELIST = n1261
+==========================================
+version_check: code version 20261010n, 73 files consistent
+version_check: git HEAD ee6149d, clean
+=== host n1261  job 774363  2026-10-15T22:28:34+02:00: two arms, MPI launcher  Version: 5.0.1 ===
+half a: 48 CPUs 0-47 on NUMA node(s) [0, 1, 2, 3]
+half b: 48 CPUs 48-95 on NUMA node(s) [4, 5, 6, 7]
+cpu check: 48 ranks, CPUs 0-47 inside 0-47
+cpu check: 48 ranks, CPUs 48-95 inside 48-95
+version_check: code version 20261010n, 73 files consistent
+version_check: git HEAD ee6149d, clean
+=== test plant files: /tmp_user/sator/cleclerc/BFS/data/coarse-8d283f5726c7c91f ===
+=== PLANT_ONLY: the test plant is complete in /tmp_user/sator/cleclerc/BFS/data/coarse-8d283f5726c7c91f ===
+=== arm a: OUT=testplant_bfs/pr_d412_strip STRIP=1 on CPUs 0-47 -> testplant_bfs/pr_d412_strip (log logs/bfs_testplant_774363_pr_d412_strip.log, pid 2679782) ===
+=== arm b: OUT=testplant_bfs/pr_d412_nostrip STRIP=0 on CPUs 48-95 -> testplant_bfs/pr_d412_nostrip (log logs/bfs_testplant_774363_pr_d412_nostrip.log, pid 2679784) ===
