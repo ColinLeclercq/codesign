@@ -934,6 +934,7 @@ For comparison: the reduced path's cold central went to 191 in 44 rounds (Octobe
   - Sandbox check (MPICH 5.0.1 Hydra, fake Slurm environment): without the fork launcher, Hydra tried srun and hung; with it, two concurrent 2-rank launches ran on CPUs 0-1 and 2-3; a failing arm's exit code reaches the job's.
 - Found on the way: `testplant.slurm` printed no `-> DIR` line, so `report.sh` found no run directory of a testplant job. It now prints one, after the `PLANT_ONLY` exit, and `report.sh` also reads `=== RESUME: DIR/run continues` for the older logs.
 - `stage.sh`: a directory that git does not list as a worktree, without a complete checkout (what an interrupted `git worktree add` left at `v/20261010m`), is moved aside as `<dir>.partial-<date>` and the checkout redone. A complete checkout that is not a worktree is refused.
+- 20261010o: `report.sh PUSH=1` stopped at the commit with "fatal: name consists only of disallowed characters: ...": the login node's git had no usable `user.name` (the name "...", from git config or the account's GECOS field), which EL8's git refuses (git 2.43 accepts it). The report itself was built (`for_claude.tar.gz`). `report.sh` now checks the name before it touches the results worktree and says what to set.
 
 ## 9. Open items
 
