@@ -1,50 +1,50 @@
 {
- "rec": "/tmp_user/sator/cleclerc/BFS/20261010g/codesign_bfs/testplant_bfs/zero_m2p2_decentral_o10_lat_s0_r300/run/K_B_C_s0_bfs_mimo2x2_decentral.npz",
+ "rec": "/tmp_user/sator/cleclerc/BFS/testplant_bfs/pr_d412_strip/run/K_B_C_s0_bfs_mimo2x2_decentral.npz",
  "n": 33593,
  "band": [
   0.0,
   10.0
  ],
- "nfreq": 394,
- "gamma_record": 412.28454253410064,
+ "nfreq": 374,
+ "gamma_record": 412.28454253410104,
  "peak_open": {
   "omega": 0.72791,
   "sigma": [
-   1464.350155157286,
-   32.68959874060322,
-   25.027216659198274
+   1464.350155157284,
+   32.689598740603124,
+   25.027216659198213
   ]
  },
  "peak_closed": {
-  "omega": 1.372066,
+  "omega": 1.369141,
   "sigma": [
-   412.28454253374076,
-   28.065736944985357,
-   18.0501179950531
+   412.2631985456216,
+   28.08588645668222,
+   18.053023188819996
   ]
  },
- "closed_over_gamma": 0.9999999999991271,
+ "closed_over_gamma": 0.9999482299570384,
  "vec_omega": [
   0.72791,
-  1.372066,
+  1.369141,
   0.3,
   1.5
  ],
  "sigma1_vec_open": [
-  1464.3501551572856,
-  508.2992817281798,
-  531.979149653323,
-  347.2591027531005
+  1464.350155157282,
+  512.6112913961452,
+  531.9791496533215,
+  347.259102753101
  ],
  "sigma1_vec_closed": [
-  408.5919712820043,
-  412.28454253373957,
-  407.906961391503,
-  380.5913295798513
+  408.5919712820055,
+  412.2631985456237,
+  407.9069613915053,
+  380.5913295798523
  ],
  "seconds": {
-  "curves": 14.7,
-  "vectors": 2.0
+  "curves": 26.0,
+  "vectors": 2.1
  },
- "pool": "full-model pool (96 workers): 3528 tasks in 317 calls, 12127.0 s of task time in 1655.0 s wall (x7.33; on 11 / 23 / 95 workers ~1771.5 / 1692.3 / 1638.2 s)"
+ "pool": "full-model pool (48 workers): 3387 tasks in 313 calls, 11994.4 s of task time in 1459.7 s wall (x8.22; on 11 / 23 / 95 workers ~1520.1 / 1440.8 / 1386.5 s)"
 }

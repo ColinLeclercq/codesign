@@ -174,3 +174,44 @@ continuation anchor: 0 closed-loop eigenvalues right of Re=-0.05 over all freque
   [ledger] lattice factors: 94173 factorisations in the requests (45218 s; 0.46 s each, running mean = 22 solves): lattice points 1136 (cache 129135 hits / 1136 misses), exact points 93037 (side cache 171 hits / 93037 misses); 1129 held; placement by the static units
   [ledger] lattice projection (requests replayed longest first; critical path / on 48 / 48 / 32 ranks, s): eval 12057 / 10317 / 10317 / 12807; level 33160 / 33132 / 33132 / 33132; line 9 / 9 / 9 / 11; locate 61 / 61 / 61 / 61; sweep 107 / 93 / 93 / 141
     sigma2 enrolled at 0 of 138 frequencies
+    sqp: deadline -- stopped after 29 iteration(s) (the longest 188 s), 104 s before the solve's deadline
+    inner solve cut by the deadline after 29 iteration(s) (code 4): this round is the last of the job, exempt from the progress and stall rules
+    lattice: 62 evaluations, 12632 sigma evaluations (Newton: at most 45 per member); line 3538 shifts (at most 2 waves, 0 not clear); strip up to 0 shifts, 0 incomplete; up to 8 stability rows (up to 1 copies within 1e-06, kept); 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 29 call(s), up to 65 shifts (35 with pencil eigenvalues, the rest norm disks) / 2 waves, 0 inconclusive, 0 on watched regions only, inner CG up to 9 iterations
+    lattice: followed members: 0 window re-centring(s), 0 stop(s) on a window's edge after them (0 at the last evaluation); 0 restart(s) from their own base (shared tops)
+    lattice: members per evaluation (mean of 62): fixed 131 (131 points, 127 tasks), followed 7 (73 points, 72 tasks; 0.2 caused none); by s/smax <0.5/0.5-0.8/0.8-0.95/0.95-0.99/>=0.99: members 32/0/32/35/39, points 16/0/16/18/51 %, tasks 16/0/16/18/51 %; the last wave set by followed 62, fixed 2 (of 62 evaluations)
+    lattice: level disks of 29 call(s): norm 822 (1.5 s each, up to 2.2), ncv 24 791 (14.6 s each, up to 20.6), ncv 100 203 (69.5 s each, up to 118.8); applications up to 365, CG 4.7 per solve (up to 9); critical path 3361 s of 26877 s of disks; the slowest at 5.1064 (ncv 100, 118.8 s, 365 applications), 5.1064 (ncv 100, 117.1 s, 365 applications), 5.1064 (ncv 100, 115.7 s, 365 applications)
+    lattice: QP stability rows: active in 11 of 29 QPs (median 0, up to 5 of 5; 0 given up), the deepest active Re -0.2262 (|g| up to 7.8e+01); the active rows bind at radius 8.2e-05 (median) against the trust radius 7.0e-01 (5 rows could bind inside it), 27 steps on its boundary, a Hermite block active in 26; accepted alpha 0.125, step 8.7e-02 (medians); copies of one eigenvalue (within 1e-06, not merged; the review of stage C): up to 0 in a QP, active in 0 QPs (up to 0), 0 given up
+    peak-following: 6 member(s) moved to their tops, 0 merged
+    certificate peaks at their tops: 7 grid maxima, moved by up to 0.0148; 6 distinct (none within 1e-3 of the witness)
+    continuation along the SQP's path: 29 segments, certified (205 tracked queries, 0 splits)
+  outer 7: |Omega|=138  t=388.056696  smax=388.439077  certified=388.439077  best=388.439077  (+0 freq, 62 calls)
+    inner budget kept at 40 (the solve was cut by the deadline)
+  DEADLINE STOP: 14.34 h elapsed, the round's inner solve was cut by the deadline, --deadline 14.91 h
+*** WINDING VETO: round 7's design (gamma 388.439077) has an INCONCLUSIVE count (RuntimeError: winding_count: tail bound never certifies; check nu/lam_min estimates) right of Re=-0.05 over all frequencies (0 pts): it is not the record; falling back to the last accepted design with a conclusive 0
+    veto: round 6's design (gamma 389.171891): INCONCLUSIVE (0 pts, None s)
+    veto: round 5's design (gamma 390.192732): INCONCLUSIVE (0 pts, None s)
+    veto: round 4's design (gamma 391.667686): INCONCLUSIVE (0 pts, None s)
+    veto: 4 earlier design(s) not counted (at most 3 counts, or the deadline): rounds [3, 2, 1, 0]
+*** WINDING VETO: the record is the anchor (this job's start) (gamma 412.284543), not the final design (gamma 388.439077); its count right of Re=-0.05: 0 (counted at the start)
+BFS: gamma is the certified level-set value on [0, 10]; stability: the winding count over all frequencies (BFS.md 4)
+winding certificate: 0 eigenvalue(s) right of Re=-0.0500 over all frequencies (veto fallback: counted at the start; 5016 pts, 408 s) -- UNCONDITIONALLY stable with the margin eps (so with eps/2 too, STAGE6 6.29)
+activity: 4 grid maxima (end points included) within 0.2 % of gamma; sigma at the band's ends 199.764748, 4.360298
+full-model pool (48 workers): 3172 tasks in 343 calls, 11933.3 s of task time in 1568.6 s wall (x7.61; on 11 / 23 / 95 workers ~1549.0 / 1524.8 / 1508.9 s)
+full-model pool by task: _shift_task 29 calls / 361 tasks, 5649 s, ~765 s on 95; _track_worker 309 calls / 2288 tasks, 2623 s, ~368 s on 95; _seg_task 1 calls / 192 tasks, 3016 s, ~356 s on 95; _plant_shift_task 1 calls / 14 tasks, 125 s, ~13 s on 95; _sigma_task 3 calls / 317 tasks, 520 s, ~7 s on 95
+MUMPS (this process): factor_driver 88 (39.5 s), factor_task 0 (0.0 s), solve_driver 2626 (39.7 s), solve_task 0 (0.0 s), factor_wave 1117 (546.6 s), solve_wave 218795 (5393.4 s)
+  [ledger] lattice (48 ranks): eval 5701 waves / 219034 tasks, 13145 s wall (longest rank 13141 s, ranks busy 52 %); level 408 waves / 17954 tasks, 36553 s wall (longest rank 36553 s, ranks busy 14 %); line 3 waves / 120 tasks, 17 s wall (longest rank 17 s, ranks busy 54 %); locate 70 waves / 860 tasks, 71 s wall (longest rank 71 s, ranks busy 25 %); sweep 17 waves / 4345 tasks, 141 s wall (longest rank 141 s, ranks busy 85 %); vectors 676 waves / 1352 tasks, 1 s wall (longest rank 0 s, ranks busy 0 %); 1152 factors held (at the end, 51635 s)
+  [ledger] lattice rank 0: busy 7538 s in the waves (mean rank 12321 s, busiest rank 43 29368 s), the slowest rank in 58 of 6046 waves; ms per solve: rank 0 24.7, ranks 17.1 / 22.0 / 25.0 (min / median / max); serial MUMPS outside the waves 88 factorisations (40 s), 2626 solves (40 s)
+  [ledger] lattice requests (tasks / work / critical / longest, s): level-pencil 9493 / 240549 / 36457 / 153.9 (25.34 s, 1114 solves each); line 36168 / 144636 / 5572 / 9.7 (4.00 s, 119 solves each); rowx 91817 / 103300 / 5564 / 1.5 (1.13 s, 26 solves each); row 86067 / 77065 / 1548 / 1.8 (0.90 s, 30 solves each); slopex 5968 / 6626 / 541 / 1.4 (1.11 s, 26 solves each); value 3209 / 4116 / 97 / 2.1 (1.28 s, 41 solves each); level-norm 8455 / 13166 / 93 / 2.4 (1.56 s, 55 solves each); value2 1136 / 1638 / 44 / 2.3 (1.44 s, 48 solves each); setup 0 / 330 / 7 / 0.0
+  [ledger] lattice factors: 99095 factorisations in the requests (47550 s; 0.53 s each, running mean = 26 solves): lattice points 1483 (cache 143045 hits / 1483 misses), exact points 97612 (side cache 173 hits / 97612 misses); 1152 held; placement by the static units
+  [ledger] lattice projection (requests replayed longest first; critical path / on 48 / 48 / 32 ranks, s): eval 13141 / 11148 / 11148 / 13847; level 36553 / 36493 / 36493 / 36493; line 17 / 15 / 15 / 18; locate 71 / 71 / 71 / 71; sweep 141 / 124 / 124 / 189
+{"rec": "/tmp_user/sator/cleclerc/BFS/testplant_bfs/pr_d412_nostrip/run/K_B_C_s0_bfs_mimo2x2_decentral.npz", "n": 33593, "band": [0.0, 10.0], "nfreq": 374, "gamma_record": 412.28454253410104, "peak_open": {"omega": 0.72791, "sigma": [1464.350155157284, 32.689598740603124, 25.027216659198213]}, "peak_closed": {"omega": 1.369141, "sigma": [412.2631985456216, 28.08588645668222, 18.053023188819996]}, "closed_over_gamma": 0.9999482299570384, "vec_omega": [0.72791, 1.369141, 0.3, 1.5], "sigma1_vec_open": [1464.350155157282, 512.6112913961452, 531.9791496533215, 347.259102753101], "sigma1_vec_closed": [408.5919712820055, 412.2631985456237, 407.9069613915053, 380.5913295798523], "seconds": {"curves": 26.4, "vectors": 2.1}, "pool": "full-model pool (48 workers): 3550 tasks in 345 calls, 13112.7 s of task time in 1597.2 s wall (x8.21; on 11 / 23 / 95 workers ~1657.6 / 1577.9 / 1523.3 s)"}
+figures in /tmp_user/sator/cleclerc/BFS/testplant_bfs/pr_d412_nostrip/run/K_B_C_s0_bfs_mimo2x2_decentral_post
+{"case": "K+B+C", "gamma": 412.28454253410104, "alpha": -0.06320259062980925, "n_active": 4, "outer": 8, "nOmega": 138, "calls": 676, "seconds": 51635.0}
+
+real	861m17.236s
+user	41087m33.395s
+sys	59m1.335s
+best gamma after each round: [404.6186, 398.2559, 394.4387, 393.5897, 391.6677, 390.1927, 389.1719, 388.4391] (candidates certified: [404.6186, 398.2559, 394.4387, 393.5897, 391.6677, 390.1927, 389.1719, 388.4391] )
+final gamma 412.284543, open-loop peak 1464.350155 (ratio 0.2815); wind_count 0; xa [[1.9608344584465969, 0.5684712387848111], [3.8413227708658644, 0.23619573561033644]] xs [[3.1882552367470796], [5.073572188065348]]
+=== done 2026-10-16T12:49:57+02:00 ===
