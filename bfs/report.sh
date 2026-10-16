@@ -168,8 +168,17 @@ for try in 1 2 3; do
     fill_wt
     if git -C "$WT" diff --cached --quiet; then echo "results/$DEST: nothing new to commit"; exit 0; fi
     git -C "$WT" commit -q -m "results $DEST: ${#logs[@]} log(s), ${#runs[@]} run(s) ($(date -Is), $(hostname))"
+    before=$(git rev-parse refs/remotes/origin/results)
     if git -C "$WT" push -q origin HEAD:refs/heads/results; then
         echo "pushed: branch results, folder $DEST/ ($(git -C "$WT" rev-parse --short HEAD))"; exit 0
+    fi
+    # a race moves origin/results; anything else (2026-10-16: a GitHub password,
+    # which git over https refuses since 2021) is not retried
+    git fetch -q origin +refs/heads/results:refs/remotes/origin/results 2>/dev/null || true
+    if [ "$(git rev-parse refs/remotes/origin/results)" = "$before" ]; then
+        echo "*** PUSH: the push failed and nobody pushed in between (git's message above). Authentication:"
+        echo "    GitHub takes an SSH key or a personal access token, never the account password (BFS.md 7); upload $OUTD.tar.gz"
+        exit 1
     fi
     echo "   push rejected (someone pushed in between): try $try of 3 again from origin/results"
 done
