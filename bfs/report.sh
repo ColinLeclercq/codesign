@@ -133,11 +133,14 @@ echo "$OUTD/ and $OUTD.tar.gz ($(du -h "$OUTD.tar.gz" | cut -f1)): ${#logs[@]} l
 DEST=${LABEL:-${VER:-unversioned}}
 HOME_DIR=$(python3 -c "import sys; sys.path.insert(0, 'bfs'); import plant_id; print(plant_id.bfs_home() or '')" 2>/dev/null || true)
 WT=${HOME_DIR:-$CODE}/.results_wt
-git config user.email > /dev/null || { echo "*** PUSH: git user.email is not set (git config --global user.email ...); upload $OUTD.tar.gz"; exit 1; }
-# without user.name git takes the account's GECOS field, "..." on sator:
-# "fatal: name consists only of disallowed characters" at the commit (2026-10-16)
+case "$(git config user.email || true)" in
+    *?@?*) ;;
+    *) echo "*** PUSH: git user.email is unset or not an address ($(git config --show-origin user.email || echo unset)): git config user.email you@example.org; upload $OUTD.tar.gz"; exit 1 ;;
+esac
+# a name of dots (sator: the clone held user.name "...", a doc placeholder typed in)
+# makes EL8 git fail at the commit: "name consists only of disallowed characters"
 gname=$(git var GIT_COMMITTER_IDENT 2>/dev/null | sed 's/ <.*//' || true)
-[ -n "$(printf '%s' "$gname" | tr -d '.,:;<>"\\'"'"' \t')" ] || { echo "*** PUSH: git has no usable user.name (git config --global user.name \"First Last\"); upload $OUTD.tar.gz"; exit 1; }
+[ -n "$(printf '%s' "$gname" | tr -d '.,:;<>"\\'"'"' \t')" ] || { echo "*** PUSH: git's user.name '$gname' is not a name ($(git config --show-origin user.name || echo 'unset: the account GECOS field')); set it where it comes from: git config [--global] user.name \"First Last\"; upload $OUTD.tar.gz"; exit 1; }
 exec 9> "$WT.lock"
 command -v flock > /dev/null && { flock -n 9 || { echo "*** PUSH: another report is pushing ($WT.lock); try again"; exit 1; }; }
 sync_wt() {     # the worktree = origin/results, whatever state an earlier report left
