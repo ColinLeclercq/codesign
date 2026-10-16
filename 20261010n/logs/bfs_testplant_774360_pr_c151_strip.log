@@ -171,3 +171,73 @@ continuation anchor: 0 closed-loop eigenvalues right of Re=-0.05 over all freque
     sigma2 row at w=+0.8438: sigma1=128.8395 sigma2=125.3254 gap=0.0273
     sigma2 row at w=+0.8511: sigma1=128.9454 sigma2=124.6993 gap=0.0329
     sigma2 enrolled at 11 of 181 frequencies
+    lattice: 124 evaluations, 34898 sigma evaluations (Newton: at most 65 per member); line 7072 shifts (at most 2 waves, 0 not clear); strip up to 1203 shifts, 0 incomplete; up to 23 stability rows (up to 6 copies within 1e-06, kept); 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 40 call(s), up to 134 shifts (41 with pencil eigenvalues, the rest norm disks) / 3 waves, 0 inconclusive, 0 on watched regions only, inner CG up to 15 iterations
+    lattice: followed members: 132 window re-centring(s), 416 stop(s) on a window's edge after them (2 at the last evaluation); 69 restart(s) from their own base (shared tops)
+    lattice: members per evaluation (mean of 124): fixed 167 (167 points, 110 tasks), followed 14 (114 points, 104 tasks; 4.6 caused none); by s/smax <0.5/0.5-0.8/0.8-0.95/0.95-0.99/>=0.99: members 13/15/27/96/30, points 5/6/14/48/27 %, tasks 4/6/14/48/29 %; the last wave set by followed 90, strip 34, level 15 (of 124 evaluations)
+    lattice: level disks of 40 call(s): norm 3383 (1.5 s each, up to 3.2), ncv 24 962 (19.0 s each, up to 39.8), ncv 100 400 (76.8 s each, up to 107.4); applications up to 267, CG 6.3 per solve (up to 15); critical path 4244 s of 53999 s of disks; the slowest at 9.4115 (ncv 100, 107.4 s, 267 applications), 9.4115 (ncv 100, 105.7 s, 267 applications), 8.1826 (ncv 100, 105.3 s, 267 applications)
+    lattice: QP stability rows: active in 0 of 40 QPs (median 0, up to 0 of 21; 0 given up), the deepest active Re - (|g| up to 0.0e+00); the active rows bind at radius - (median) against the trust radius 3.2e-01 (14.5 rows could bind inside it), 40 steps on its boundary, a Hermite block active in 3; accepted alpha 0.125, step 4.0e-02 (medians); copies of one eigenvalue (within 1e-06, not merged; the review of stage C): up to 6 in a QP, active in 0 QPs (up to 0), 0 given up
+    peak-following: 9 member(s) moved to their tops, 0 merged, 2 on another member's top dropped, 2 not at a top (edge or slope) left in place
+    band widened to [-22.88, 22.88] from the candidate's closed-loop spectrum (before its certificate)
+    certificate peaks at their tops: 10 grid maxima, moved by up to 0.0155; 9 distinct (none within 1e-3 of the witness)
+    continuation along the SQP's path: 40 segments, certified (320 tracked queries, 0 splits)
+    t lag: witness w=+0.9220 (certified 125.652044 vs t 124.950787, smax 125.652044: certified/smax - 1 = +3.24e-14); nearest member +0.9220 (distance 0.0000), FOLLOWED peak
+  outer 5: |Omega|=179  t=124.950787  smax=125.652044  certified=125.652044  best=125.652044  (+1 freq, 124 calls)
+    inner budget -> 40 (certified/t = 1.006)
+  [ledger] round 6 starts at 41826 s; MUMPS (this process): factor_driver 89 (40.7 s), factor_task 0 (0.0 s), solve_driver 2426 (37.1 s), solve_task 0 (0.0 s), factor_wave 3460 (1720.4 s), solve_wave 676975 (14486.9 s); full-model pool (48 workers): 2694 tasks in 259 calls, 9631.4 s of task time in 991.7 s wall (x9.71; on 11 / 23 / 95 workers ~1042.0 / 949.3 / 934.5 s)
+  [ledger] pool by task (cumulative): _shift_task 21 calls / 309 tasks, 4016 s, ~375 s on 95; _seg_task 1 calls / 192 tasks, 2910 s, ~271 s on 95; _track_worker 233 calls / 1864 tasks, 2115 s, ~271 s on 95; _plant_shift_task 1 calls / 14 tasks, 107 s, ~11 s on 95; _sigma_task 3 calls / 315 tasks, 483 s, ~7 s on 95
+  [ledger] lattice (48 ranks): eval 7876 waves / 401635 tasks, 40414 s wall (longest rank 40407 s, ranks busy 42 %); line 6 waves / 343 tasks, 47 s wall (longest rank 47 s, ranks busy 60 %); locate 60 waves / 761 tasks, 62 s wall (longest rank 62 s, ranks busy 26 %); sweep 12 waves / 3844 tasks, 137 s wall (longest rank 137 s, ranks busy 88 %); vectors 770 waves / 1540 tasks, 1 s wall (longest rank 0 s, ranks busy 0 %); 1152 factors held
+  [ledger] lattice rank 0: busy 20265 s in the waves (mean rank 17247 s, busiest rank 0 20265 s), the slowest rank in 309 of 7642 waves; ms per solve: rank 0 21.4, ranks 21.4 / 22.6 / 23.3 (min / median / max); serial MUMPS outside the waves 89 factorisations (41 s), 2426 solves (37 s)
+  [ledger] lattice requests (tasks / work / critical / longest, s): level-pencil 6980 / 192537 / 20133 / 107.4 (27.58 s, 1178 solves each); rowx 135673 / 158040 / 7194 / 1.5 (1.16 s, 26 solves each); strip 120808 / 259935 / 5896 / 9.8 (2.15 s, 59 solves each); line 27408 / 101823 / 4116 / 8.5 (3.72 s, 111 solves each); row 83787 / 73688 / 1612 / 2.6 (0.88 s, 29 solves each); slopex 13653 / 15628 / 1076 / 1.5 (1.14 s, 26 solves each); blockx 281 / 299 / 254 / 1.4 (1.07 s, 31 solves each); level-norm 12003 / 18051 / 223 / 3.2 (1.50 s, 51 solves each); value 2702 / 4040 / 92 / 2.9 (1.50 s, 37 solves each); value2 1142 / 1716 / 45 / 3.0 (1.50 s, 47 solves each); block 2146 / 1840 / 6 / 1.4 (0.86 s, 28 solves each); setup 0 / 262 / 5 / 0.1
+  [ledger] lattice factors: 180266 factorisations in the requests (90188 s; 0.52 s each, running mean = 23 solves): lattice points 31017 (cache 225959 hits / 31298 misses), exact points 149249 (side cache 358 hits / 149249 misses); 1152 held; placement by the static units
+  [ledger] lattice projection (requests replayed longest first; critical path / on 48 / 48 / 32 ranks, s): eval 40407 / 33435 / 33435 / 36928; line 47 / 37 / 37 / 47; locate 62 / 61 / 61 / 61; sweep 137 / 125 / 125 / 185
+    sigma2 row at w=+0.7937: sigma1=123.9972 sigma2=110.5534 gap=0.1084
+    sigma2 row at w=+0.7988: sigma1=123.9950 sigma2=111.3278 gap=0.1022
+    sigma2 row at w=+0.8112: sigma1=124.0102 sigma2=113.3698 gap=0.0858
+    sigma2 row at w=+0.8125: sigma1=124.0127 sigma2=113.5277 gap=0.0845
+    sigma2 row at w=+0.8185: sigma1=124.0310 sigma2=114.4750 gap=0.0770
+    sigma2 row at w=+0.8200: sigma1=124.0386 sigma2=114.7900 gap=0.0746
+    sigma2 row at w=+0.8211: sigma1=124.0426 sigma2=114.9473 gap=0.0733
+    sigma2 row at w=+0.8438: sigma1=124.1859 sigma2=118.4524 gap=0.0462
+    sigma2 row at w=+0.8511: sigma1=124.2495 sigma2=119.4425 gap=0.0387
+    sigma2 row at w=+0.9220: sigma1=125.6520 sigma2=124.2389 gap=0.0112 (active)
+    sigma2 row at w=+0.9524: sigma1=125.3999 sigma2=123.2167 gap=0.0174
+    sigma2 enrolled at 11 of 180 frequencies
+    lattice: 108 evaluations, 25126 sigma evaluations (Newton: at most 39 per member); line 6697 shifts (at most 2 waves, 0 not clear); strip up to 1145 shifts, 0 incomplete; up to 23 stability rows (up to 6 copies within 1e-06, kept); 0 trial(s) across the line from an admissible iterate (weighed by the merit), 0 of them by an eigenvalue without a row at the iterate
+    lattice: level set 40 call(s), up to 164 shifts (39 with pencil eigenvalues, the rest norm disks) / 3 waves, 0 inconclusive, 0 on watched regions only, inner CG up to 15 iterations
+    lattice: followed members: 17 window re-centring(s), 422 stop(s) on a window's edge after them (2 at the last evaluation); 3 restart(s) from their own base (shared tops)
+    lattice: members per evaluation (mean of 108): fixed 167 (167 points, 99 tasks), followed 14 (66 points, 54 tasks; 5.5 caused none); by s/smax <0.5/0.5-0.8/0.8-0.95/0.95-0.99/>=0.99: members 10/8/28/85/49, points 4/4/13/43/36 %, tasks 4/3/13/41/39 %; the last wave set by followed 71, level 37, strip 28, fixed 1 (of 108 evaluations)
+    lattice: level disks of 40 call(s): norm 5001 (1.4 s each, up to 3.0), ncv 24 1054 (20.0 s each, up to 41.7), ncv 100 400 (70.0 s each, up to 87.6); applications up to 170, CG 6.5 per solve (up to 15); critical path 3214 s of 56121 s of disks; the slowest at 4.0522 (ncv 100, 87.6 s, 170 applications), 3.6170 (ncv 100, 84.7 s, 170 applications), 6.1362 (ncv 100, 83.8 s, 170 applications)
+    lattice: QP stability rows: active in 0 of 40 QPs (median 0, up to 0 of 21; 0 given up), the deepest active Re - (|g| up to 0.0e+00); the active rows bind at radius - (median) against the trust radius 3.2e-01 (16 rows could bind inside it), 11 steps on its boundary, a Hermite block active in 7; accepted alpha 1, step 4.6e-06 (medians); copies of one eigenvalue (within 1e-06, not merged; the review of stage C): up to 6 in a QP, active in 0 QPs (up to 0), 0 given up
+    QP failed: MaxIterations -> NumericalError at 1e-08 -> InsufficientProgress at 1e-06 [415 constraints, row max |a| 0.0e+00..1.1e+05, 19 stability rows |g| up to 3.2e+02, 10 compensator rows, hermite 1, blocks 11, Delta 3.2e-01]
+    sqp refine: working set +1 -> |Omega|=181
+    sqp: stalled solve -- quasi-Newton matrix and radius reset for the next round
+    peak-following: 9 member(s) moved to their tops, 0 merged, 1 on another member's top dropped, 2 not at a top (edge or slope) left in place
+    in-solve additions: 1 this round (1 region(s) located: 1 at a top, up to 0.0012 from the estimate, 0 at the estimate (no top), 0 on a followed member already); 1 followed from the next round (1 moved to their in-solve tops, 0 not at a top left in place), 0 merged (0 on another follower's top, 0 within 1e-3 of a member)
+    band widened to [-22.94, 22.94] from the candidate's closed-loop spectrum (before its certificate)
+    certificate peaks at their tops: 11 grid maxima, moved by up to 0.0121; 10 distinct (none within 1e-3 of the witness)
+    continuation along the SQP's path: 40 segments, certified (320 tracked queries, 0 splits)
+  outer 6: |Omega|=180  t=125.489755  smax=125.489755  certified=125.489755  best=125.489755  (+1 freq, 108 calls)
+    inner budget -> 40 (certified/t = 1.000)
+  [ledger] round 7 starts at 47702 s; MUMPS (this process): factor_driver 95 (43.5 s), factor_task 0 (0.0 s), solve_driver 2600 (39.7 s), solve_task 0 (0.0 s), factor_wave 3668 (1824.7 s), solve_wave 851887 (18028.3 s); full-model pool (48 workers): 3061 tasks in 302 calls, 10604.0 s of task time in 1083.2 s wall (x9.79; on 11 / 23 / 95 workers ~1144.5 / 1040.6 / 1025.8 s)
+  [ledger] pool by task (cumulative): _shift_task 24 calls / 356 tasks, 4627 s, ~421 s on 95; _track_worker 273 calls / 2184 tasks, 2477 s, ~317 s on 95; _seg_task 1 calls / 192 tasks, 2910 s, ~271 s on 95; _plant_shift_task 1 calls / 14 tasks, 107 s, ~11 s on 95; _sigma_task 3 calls / 315 tasks, 483 s, ~7 s on 95
+  [ledger] lattice (48 ranks): eval 8432 waves / 453841 tasks, 46123 s wall (longest rank 46115 s, ranks busy 44 %); line 7 waves / 420 tasks, 60 s wall (longest rank 60 s, ranks busy 60 %); locate 70 waves / 896 tasks, 73 s wall (longest rank 73 s, ranks busy 26 %); sweep 14 waves / 4759 tasks, 170 s wall (longest rank 170 s, ranks busy 88 %); vectors 878 waves / 1756 tasks, 1 s wall (longest rank 0 s, ranks busy 0 %); 1152 factors held
+  [ledger] lattice rank 0: busy 24895 s in the waves (mean rank 20268 s, busiest rank 0 24895 s), the slowest rank in 321 of 8178 waves; ms per solve: rank 0 21.2, ranks 21.2 / 22.7 / 23.3 (min / median / max); serial MUMPS outside the waves 95 factorisations (44 s), 2600 solves (40 s)
+  [ledger] lattice requests (tasks / work / critical / longest, s): level-pencil 8434 / 241643 / 23279 / 107.4 (28.65 s, 1212 solves each); rowx 140830 / 163656 / 7524 / 1.5 (1.16 s, 26 solves each); strip 146272 / 315639 / 7189 / 10.5 (2.16 s, 59 solves each); line 31206 / 118538 / 4693 / 10.0 (3.80 s, 112 solves each); row 93837 / 81627 / 1733 / 2.6 (0.87 s, 29 solves each); slopex 14440 / 16496 / 1149 / 1.5 (1.14 s, 26 solves each); level-norm 17004 / 25067 / 313 / 3.2 (1.47 s, 52 solves each); blockx 347 / 363 / 312 / 1.4 (1.05 s, 30 solves each); value 3437 / 5143 / 117 / 2.9 (1.50 s, 37 solves each); value2 1322 / 2021 / 52 / 3.0 (1.53 s, 47 solves each); block 2787 / 2389 / 51 / 1.4 (0.86 s, 28 solves each); setup 0 / 293 / 6 / 0.1
+  [ledger] lattice factors: 190293 factorisations in the requests (95298 s; 0.52 s each, running mean = 23 solves): lattice points 35091 (cache 269208 hits / 35438 misses), exact points 155202 (side cache 415 hits / 155202 misses); 1152 held; placement by the static units
+  [ledger] lattice projection (requests replayed longest first; critical path / on 48 / 48 / 32 ranks, s): eval 46115 / 37766 / 37766 / 41875; line 60 / 46 / 46 / 58; locate 73 / 72 / 72 / 73; sweep 170 / 155 / 155 / 229
+    sigma2 row at w=+0.7937: sigma1=124.0318 sigma2=111.1964 gap=0.1035
+    sigma2 row at w=+0.7988: sigma1=124.0408 sigma2=111.9695 gap=0.0973
+    sigma2 row at w=+0.8112: sigma1=124.0841 sigma2=113.9955 gap=0.0813
+    sigma2 row at w=+0.8125: sigma1=124.0887 sigma2=114.1514 gap=0.0801
+    sigma2 row at w=+0.8185: sigma1=124.1199 sigma2=115.0837 gap=0.0728
+    sigma2 row at w=+0.8200: sigma1=124.1318 sigma2=115.3927 gap=0.0704
+    sigma2 row at w=+0.8211: sigma1=124.1380 sigma2=115.5468 gap=0.0692
+    sigma2 row at w=+0.8438: sigma1=124.3354 sigma2=118.9365 gap=0.0434
+    sigma2 row at w=+0.8511: sigma1=124.4181 sigma2=119.8744 gap=0.0365
+    sigma2 row at w=+0.9115: sigma1=125.4897 sigma2=124.2964 gap=0.0095 (active)
+    sigma2 row at w=+0.9524: sigma1=125.2604 sigma2=122.9710 gap=0.0183
+    sigma2 row at w=+1.0095: sigma1=125.4885 sigma2=114.4321 gap=0.0881 (active)
+    sigma2 row at w=+1.0302: sigma1=125.4537 sigma2=110.6696 gap=0.1178 (active)
+    sigma2 row at w=+1.0350: sigma1=125.4358 sigma2=109.7653 gap=0.1249 (active)
+    sigma2 enrolled at 14 of 181 frequencies
