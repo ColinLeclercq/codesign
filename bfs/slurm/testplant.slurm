@@ -61,6 +61,10 @@
 #        (driver flags appended last, so they win over bfs/run_bfs.sh's; words
 #         split on spaces, no quoting inside.  The directory name does not change:
 #         a flag that changes the method needs its own OUT=)
+#   START_PERTURB=1e-12 [START_PERTURB_SEED=1] ... sbatch ...
+#        (the start moved by 1e-12 x max(|z0|, 1) along a seeded direction,
+#         --start-perturb: the second arm of an A/A pair, the path noise an A/B
+#         is read against -- 20261010s; the directory name does not change)
 #   STRIP=1 is refused: the strip arm was removed on 2026-10-16 (BFS.md 8).
 #   Directories: until then a lattice directory WITHOUT _nostrip held a strip
 #   run, and the default names are those again -- a RESUME/CONTINUE of one
@@ -94,6 +98,10 @@ strip_refused || exit 1                                # STRIP=1: removed on 202
 unset STRIP
 AF=$(lattice_async_flag) || exit 1                     # ASYNC: 1 (default) or 0
 read -ra XA <<< "${EXTRA_ARGS:-}"                      # EXTRA_ARGS: driver flags, appended last
+SPA=()                                                 # START_PERTURB: the A/A pair's moved start (--start-perturb)
+if [ -n "${START_PERTURB:-}" ] && [ "${START_PERTURB}" != 0 ]; then
+    SPA=(--start-perturb "$START_PERTURB" --start-perturb-seed "${START_PERTURB_SEED:-1}")
+fi
 LAUNCHER=${LAUNCHER:-mpiexec}
 KIND=${KIND:-zero}; OUTER=${OUTER:-3}; SEED=${SEED:-0}
 export M=${M:-1} P=${P:-1} STRUCT=${STRUCT:-central}   # MIMO: M actuators, P sensors, central | decentral
@@ -187,6 +195,7 @@ fi
 # report.sh found no run of a testplant job; it now also reads "RESUME: DIR/run")
 echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none}${PAIR_ARM:+ (pair arm $PAIR_ARM)}  ${SLURM_NTASKS:-24} ranks  $(date -Is) -> $OUT ==="
 [ ${#XA[@]} -eq 0 ] || echo "=== EXTRA_ARGS: ${XA[*]} (appended to bfs/run_bfs.sh's flags) ==="
+[ ${#SPA[@]} -eq 0 ] || echo "=== START_PERTURB: ${SPA[*]} (the start moved: an A/A pair's second arm) ==="
 # NEVER delete a run (2026-10-06: CONTINUE=1, codesign.slurm's word, was not
 # read here, and the directory of a 12.5 h run was started over): RESUME=1 or
 # CONTINUE=1 continues it; without them a directory holding a run is refused,
@@ -232,7 +241,7 @@ export OPS OUTER PY=python LAUNCH="$LAUNCHER -n ${SLURM_NTASKS:-24}"
 # save counts right of -eps with the absolute step floor (the 369.87 record: 5434
 # points against 3208 right of -eps/2) and a veto counts up to --veto-counts more
 # designs while the deadline holds one
-time bash bfs/run_bfs.sh "$OUT/run" "$OUT/starts/$NAME.npz" --deadline-final 1200 "${CONT[@]}" "${XA[@]}"
+time bash bfs/run_bfs.sh "$OUT/run" "$OUT/starts/$NAME.npz" --deadline-final 1200 "${CONT[@]}" "${SPA[@]}" "${XA[@]}"
 # the figures are made by the driver itself (--post 1, same job and pool); a
 # second launch only if they are missing, bounded in time (a launch that hangs
 # must not hold the allocation to its limit)

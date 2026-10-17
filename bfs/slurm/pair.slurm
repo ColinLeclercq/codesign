@@ -18,6 +18,14 @@
 #        (a QUEUE: A and B start on the two halves, C takes the first half to
 #         become free, D the next)
 #
+#   bash bfs/abcopy.sh testplant_bfs/pr_c151 testplant_bfs/aa_c151_a; bash bfs/abcopy.sh testplant_bfs/pr_c151 testplant_bfs/aa_c151_b
+#   ARM_A="OUT=testplant_bfs/aa_c151_a" ARM_B="OUT=testplant_bfs/aa_c151_b" ARM_B_ARGS="--start-perturb 1e-12" \
+#   CONTINUE=1 ORACLE=lattice M=2 P=2 STRUCT=central OUTER=300 sbatch --job-name=aa_c151 bfs/slurm/pair.slurm
+#        (an A/A PAIR, 20261010s: two copies of one parent, the second's start
+#         moved by 1e-12 -- the same code and flags, so the two paths differ by
+#         path noise only, the scale an A/B difference is read against;
+#         START_PERTURB=1e-12 in ARM_B's words does the same)
+#
 # Runs of bfs/slurm/testplant.slurm in ONE job on one 96-core node, two at a
 # time, each on its own half of the cores (its own NUMA side) with half of the
 # ranks.  The variables common to every arm are set as for testplant.slurm

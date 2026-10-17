@@ -2417,6 +2417,17 @@ def main():
                          'identical traces over 8 central and 11 decentral rounds on the cluster, 0.71-0.80 x the round '
                          'wall, 20261010n); redo: every look-ahead put back and redone (the restore\'s test); off: the '
                          'synchronous call, for measurements (sqp_inner.LAT_ASYNC)')
+    # 20261010s: the level set's paired Arnoldi tiers; the winding count's split segments
+    ap.add_argument('--lattice-pair', dest='lattice_pair', choices=['on', 'off'], default='on',
+                    help='--oracle lattice: at a level-set centre whose last disk needed the second Arnoldi tier, the two '
+                         'tiers at once on two ranks, the first one\'s disk where it converged, else the second\'s -- the '
+                         'disk the tiers in turn give, bit for bit, in the second tier\'s time (lattice.LEVEL_PAIR; '
+                         'off: the tiers in turn)')
+    ap.add_argument('--wind-split', dest='wind_split', choices=['on', 'off'], default='on',
+                    help='backward-facing step: the winding count\'s segments split where one has taken '
+                         'winding_cert.SEG_BUDGET points, the pieces on the next free ranks, the band beyond the last knot '
+                         'in doublings -- the same count, other points (winding_cert.SEG_SPLIT_ON; off: one task a segment, '
+                         'as before 20261010s)')
     ap.add_argument('--oracle-nvec', dest='oracle_nvec', type=int, default=3,
                     help='singular pairs per anchor')
     ap.add_argument('--oracle-tol', dest='oracle_tol', type=float, default=1e-3,
@@ -2760,6 +2771,13 @@ def main():
     ap.add_argument('--n-act', dest='n_act', type=int, default=1,
                     help='MIMO (STAGE6): number of actuators (with --n-sens > 1 or > 1 itself: the MIMO path)')
     ap.add_argument('--n-sens', dest='n_sens', type=int, default=1, help='MIMO: number of sensors')
+    ap.add_argument('--start-perturb', dest='start_perturb', type=float, default=0.0,
+                    help='(20261010s; the A/A pair: path noise before an A/B is read) the start moved by this x '
+                         'max(|z0|_inf, 1) along a seeded unit normal vector over the controller and the positions (packed '
+                         'z; not with free fields); refused if the moved start leaves the compensator\'s line, the domain or '
+                         '(backward-facing step) the closed loop\'s certified line.  0 (the default): the start as it is')
+    ap.add_argument('--start-perturb-seed', dest='start_perturb_seed', type=int, default=1,
+                    help='--start-perturb: the seed of its direction')
     # (%% in the help: argparse formats it, and the unescaped '0.08 % higher' made --help raise TypeError until 2026-10-16)
     ap.add_argument('--sqp-stat', dest='sqp_stat', choices=['auto', 'pred', 'rel'], default='auto',
                     help="SQP stationarity: 'rel' stat < 1e-4 x the active rows' gradient scale (to 2026-09-29); "
@@ -2964,6 +2982,7 @@ def main():
         _lat_mod.LINE_K = int(a.lattice_k); _lat_mod.WARM_NCV = int(a.lattice_warm)
         _lat_mod.LINE_BASE = int(a.lattice_base); _lat_mod.TASK_COSTS = a.lattice_costs
         _lat_mod.REQ_MEMO = max(int(a.lattice_memo), 0); _lat_mod.ROW_MERGE = float(a.lattice_row_merge)
+        _lat_mod.LEVEL_PAIR = (a.lattice_pair == 'on')
     _retire_frac = _retire_rounds = None
     if a.omega_retire:
         if a.oracle != 'lattice':
@@ -2979,6 +2998,7 @@ def main():
     _sqi.PARTIAL_SHRINK = (a.sqp_partial_shrink == 'on')
     _sqi.LAT_CROSS = a.lattice_cross; _sqi.DEBUG_LS = (a.sqp_debug_ls == 'on')
     _sqi.LAT_ASYNC = a.lattice_async
+    import winding_cert as _wc_mod; _wc_mod.SEG_SPLIT_ON = (a.wind_split == 'on')
     if a.oracle == 'lattice':
         _sqi.QP_DUMP = a.outdir
     certified_norm.enroll_rel = float(a.enroll_rel)
@@ -3693,6 +3713,45 @@ def main():
     else:
         pk = Packer(D, flags, *pk_args)
     z = pk.z0()
+    _sp_rec = None
+    if a.start_perturb:
+        # THE A/A PAIR (20261010s): one arm from the parent as it is, the other from
+        # the parent moved by --start-perturb (1e-12 moved GL paths by 9-20 % mid-run,
+        # 0.014-0.7 % at the stop, LESSONS 21); never measured on the BFS
+        if flags.get('FB') or flags.get('FC'):
+            raise SystemExit("--start-perturb: the controller and the positions only (not with free fields)")
+        _u = np.random.default_rng(int(a.start_perturb_seed)).standard_normal(len(z))
+        _u /= max(float(np.linalg.norm(_u)), 1e-300)
+        _dz = float(a.start_perturb) * max(float(np.max(np.abs(z))) if len(z) else 0.0, 1.0) * _u
+        _z_un = z.copy(); z = z + _dz
+        import controller as _ctl_p
+        _lim_p = max(-a.eps, a.ctrl_max)
+        _up, _pp = pk.unpack(_z_un), pk.unpack(z)
+        _alc = [float(np.max(np.linalg.eigvals(_ctl_p.A_of(*u_[0][:3])).real)) if len(np.atleast_1d(u_[0][0])) else -np.inf
+                for u_ in (_up, _pp)]
+        if flags.get('K') and _alc[0] <= _lim_p + 1e-8 < _alc[1]:
+            raise SystemExit(f"--start-perturb {a.start_perturb:g}: the moved start's compensator abscissa {_alc[1]:+.10f} "
+                             f"is right of its line {_lim_p:+g} (unmoved {_alc[0]:+.10f})")
+        if BFS:
+            _out = [k_ for k_, x_, sd_ in (('actuator', _pp[3], 'a'), ('sensor', _pp[4], 's'))
+                    if not all(D.inside(x1_, sd_) for x1_ in (np.asarray(x_, float).reshape(-1, D.pos_dims[sd_])))]
+            if _out:
+                raise SystemExit(f"--start-perturb {a.start_perturb:g}: the moved start's {' and '.join(_out)} centre "
+                                 f"is outside the domain")
+            _t0 = time.time()
+            _bb_, _cc_, *_ = D.bc(_pp[3], _pp[4])
+            _alp, _lamp, *_r_ = D.alpha_certified(_pp[0], _pp[1], _pp[2], _bb_, _cc_, eps=a.eps, wlo=a.wlo, whi=a.whi)
+            _clp = bool(_r_[-1])
+            print(f"start perturbed: closed loop at the moved start alpha {_alp:+.10f} ({'clear' if _clp else 'NOT clear'}"
+                  f" at -eps = {-a.eps:g}; serial certificate, {time.time() - _t0:.0f} s)", flush=True)
+            if not (_clp and _alp <= -a.eps):
+                raise SystemExit(f"--start-perturb {a.start_perturb:g}: the moved start is not certified inside the "
+                                 f"closed loop's line (alpha {_alp:+.10f}, clear {_clp})")
+        _sp_rec = dict(eps=float(a.start_perturb), seed=int(a.start_perturb_seed), size=float(np.linalg.norm(_dz)),
+                       inf=float(np.max(np.abs(_dz))), n=int(len(z)))
+        print(f"start perturbed (--start-perturb {a.start_perturb:g}, seed {a.start_perturb_seed}): |dz|_2 "
+              f"{_sp_rec['size']:.3e}, |dz|_inf {_sp_rec['inf']:.3e} over {len(z)} packed coordinates; compensator "
+              f"abscissa {_alc[0]:+.12f} -> {_alc[1]:+.12f}", flush=True)
     if a.stabilise and not BFS:
         # ---- STAGE 2: abscissa-descent phase (stabilise.py) before anything
         # else, when the start is not inside the margin plus the cushion.
@@ -5642,6 +5701,13 @@ def main():
         # at round 0 having just made progress.
         _inner_stationary = (int(inner_stats.get('termination_code') or -1) == 0) \
             if a.inner_budget == 'iters' else True
+        if a.inner_budget == 'iters' and a.sqp_stat == 'pred':
+            # (20261010s) `or -1` read the stationary code 0 as -1, so this test never
+            # passed and 'exchange converged' never fired (the re-read, REREAD_2026-10-16).
+            # Fixed under --sqp-stat pred only, where code 0 also means the QP predicts
+            # no decrease (the BFS passes pred); the GL frozen path keeps the old reading
+            _tc = inner_stats.get('termination_code')
+            _inner_stationary = (_tc is not None and int(_tc) == 0)
         # convergence only on a FULL round: a provisional value is the reduced
         # model's (--cert-every); the final design must carry the full guarantee
         if abs(g - best['t']) <= a.rtol * max(g, 1e-12) and not newf and _inner_stationary and not _prov:
@@ -6385,6 +6451,7 @@ def main():
                 wind_veto=(_js(_veto) if _veto is not None else None),
                 final_file=(os.path.basename(_final_path) if _final_path else None),
                 code_version=_code_version(),
+                **({'start_perturb': _sp_rec} if _sp_rec is not None else {}),
                 loop_state=dict(maxit_cur=int(_maxit_cur), sqp_trust=float(_sqp_trust_prev or 0.0), peak_members=len(_peakset),
                                 tau_rho=(float(_tau_rho) if _tau_rho is not None else None), tau_streak=int(_tau_streak)),
                 sym=bool(a.sym),

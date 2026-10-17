@@ -109,6 +109,12 @@ LEVEL_ARNOLDI = ((24, 2), (100, 3))   # ... and their Arnoldi: (Krylov subspace,
                      # between peaks and the far field the nearest eigenvalues are many at similar distances: ncv 24
                      # failed in 8 restarts where ncv 100 converged in ~100 applications (zero start, w = 1.5: 23 s,
                      # radius 0.49 against the norm disk's 0.0022); ncv 12-40 needed 350-850 at w = 6-10
+LEVEL_PAIR = True    # (20261010s) at a level-set centre whose last disk needed the second Arnoldi tier (or neither
+                     # converged), the two tiers at once on two ranks ('levelp' requests): the first tier's disk where
+                     # it converged, else the second's -- the disk the tiers in turn give, bit for bit (each tier starts
+                     # from the same vector, _v0, so the second does not depend on the first; the applications and CG
+                     # counts are the two tiers' sums, as in turn).  A hard disk then takes the second tier's time instead
+                     # of both (the first tier's failed restarts are 21-42 % of it); a centre needs two factors
 LEVEL_NORM_MIN = 2.0 ** -5   # a level-set centre whose norm disk is at least this needs no pencil eigenvalues
 LEVEL_CG_TOL = 1e-12 # the inner CG on the plant factor (_level_disk): relative residual in the M semi-norm
 LEVEL_CG_MAX = 200   # ... iterations at most
@@ -117,7 +123,7 @@ LEVEL_CONFIRM = 1e-6 # a crossing is confirmed where sigma_1 >= gam (1 - this) (
 LEVEL_WATCH_PAD = 1e-3  # a region a followed row watches is left out of the cover with this margin on each side (the
                      # members' own spacing: a region within it of a watched one is that region; 20261010j, P2)
 TASK_COST = dict(row=1.0, value=1.0, slope=1.0, value2=2.0, block=2.0, centre=3.0,
-                 rowx=1.0, slopex=1.0, blockx=2.0, level=10.0)   # relative costs of the requests
+                 rowx=1.0, slopex=1.0, blockx=2.0, level=10.0, levelp=10.0)   # relative costs of the requests
 LU_COST = 2.0        # ... and of a factorisation (balancing, LatticeOracle._assign)
 TASK_COSTS = 'static'    # 'static' (the default; --lattice-costs): the units above in request order, as since
                      # 2026-10-08.  'measured' (20261010j stage C, eval-waves.md P7; opt-in): _assign balances on the
@@ -500,7 +506,7 @@ def _norm_disk(d, dz, th, gam):
     return s1, best
 
 
-def _level_disk(d, dz, th, gam):
+def _level_disk(d, dz, th, gam, tiers=None):
     """One disk of the LEVEL-SET certificate at the axis point i th, at level
     gam: a radius around i th free of eigenvalues of the even pencil (so free of
     level crossings), the pencil eigenvalues found, and sigma_1(th).  First the
@@ -528,7 +534,9 @@ def _level_disk(d, dz, th, gam):
     axis, at equal distance from it); Arnoldi with a small subspace first, a
     large one if that does not converge in 2 restarts (LEVEL_ARNOLDI): 21-39
     applications, 5-8 s on the test plant near the peaks, ~100 (20-25 s)
-    midway between them (BFS.md 5).  The disk is the larger of the two."""
+    midway between them (BFS.md 5).  The disk is the larger of the two.
+    tiers: the indices of LEVEL_ARNOLDI to try, in turn (None: all; a
+    'levelp' request one, LEVEL_PAIR)."""
     import scipy.sparse.linalg as spla
     from closedloop_sparse import _v0
     s1, rn = _norm_disk(d, dz, th, gam)
@@ -577,6 +585,8 @@ def _level_disk(d, dz, th, gam):
     s = 1j * float(th)
     tier = -1
     for j_, (ncv, mxit) in enumerate(LEVEL_ARNOLDI):
+        if tiers is not None and j_ not in tiers:
+            continue
         conv = True
         try:
             mu = spla.eigs(O, k=LEVEL_K, which='LM', tol=LINE_TOL, maxiter=mxit, v0=_v0(2 * N), ncv=ncv,
@@ -606,7 +616,8 @@ def eval_task(t):
     and sigma_2; ('rowx', w), ('slopex', w), ('blockx', w) the same at an exact
     (off-lattice) point, factor in the side cache; ('centre', sre, theta, rlo)
     a disk centred at sre + i theta, rows for its eigenvalues with Re >= rlo;
-    ('level', theta, gam) a level-set disk at i theta (_level_disk).
+    ('level', theta, gam) a level-set disk at i theta (_level_disk);
+    ('levelp', theta, gam, k) the same with the Arnoldi tier k alone (LEVEL_PAIR).
     Each request's own cost comes back in 'req' (20261010j stage C, eval-waves.md
     P0 / P7, driver-serial.md P1): (seconds, factorisations, their seconds,
     solves, their seconds) -- the ledger's per-kind work and critical path, the
@@ -645,6 +656,8 @@ def eval_task(t):
             res = _centre(d, dz, q[1], q[2], q[3])
         elif kind == 'level':
             res = _level_disk(d, dz, q[1], q[2])
+        elif kind == 'levelp':
+            res = _level_disk(d, dz, q[1], q[2], tiers=(int(q[3]),))
         else:
             raise ValueError(kind)
         out.append(res)
@@ -881,6 +894,10 @@ class LatticeOracle:
                                          #   ('measured' placement: counts, never seconds -- the review of stage C)
         self._lu = [0, 0.0]              # factorisations, running mean s (the ledger only)
         self._lvl_last = {}              # level-set centre theta -> its disk's last count of solves
+        self._lvl_tier = {}              # level-set centre theta -> its disk's last Arnoldi tier (0: the first or
+                                         #   no pencil; 1, -1: the second or none -- paired next time, LEVEL_PAIR)
+        self._pstat = [0, 0, 0.0, 0, 0, 0.0]   # paired disks: pairs, settled by the second tier, the first tier's s
+                                         #   there; settled by the first, of which the second not sent, the second's s
         self._sre_line = set()           # the lines' Re = -eps (a centre there is the line's, else the strip's)
         self._req = {}                   # ledger request kind -> [tasks, work s, critical s, factorisations, their s,
                                          #   longest s, solves]: critical = on each wave's slowest rank (sums to [3])
@@ -944,23 +961,43 @@ class LatticeOracle:
                 for k in ks:
                     where.setdefault(k, []).append(r)
 
-        def least():
-            return min(ranks, key=lambda r_: (load[r_], nheld[r_], order[r_]))
+        # the two tiers of a paired level disk (LEVEL_PAIR) on two ranks: the rank of the one placed first is
+        # barred to the other
+        sib = {}
+
+        def bar(q):
+            return sib.get((q[1], q[2])) if q[0] == 'levelp' else None
+
+        def placed(q, r):
+            if q[0] == 'levelp':
+                sib[(q[1], q[2])] = r
+
+        def least(x=None):
+            return min([r_ for r_ in ranks if r_ != x] or ranks, key=lambda r_: (load[r_], nheld[r_], order[r_]))
         if TASK_COSTS == 'measured':
             lu = LU_SOLVES
             items = sorted(((_key(q), q, self._cost_of(q)) for q in reqs), key=lambda it: -it[2])   # stable: ties in order
         else:
             lu = LU_COST
             items = [(_key(q), q, TASK_COST[q[0]]) for q in reqs]
-        for k, q, c in [it for it in items if it[0] in where]:
-            r = min(where[k], key=load.get)
-            rmin = least()
+        new = []
+        for k, q, c in items:
+            if k not in where:
+                new.append((k, q, c))
+                continue
+            x = bar(q)
+            hs = [r_ for r_ in where[k] if r_ != x]
+            if not hs:
+                new.append((k, q, c))                      # its factor held only on its pair's rank: a new point
+                continue
+            r = min(hs, key=load.get)
+            rmin = least(x)
             if load[r] > load[rmin] + lu:
                 r = rmin; c += lu; nheld[r] += 1
-            out[r].append(q); load[r] += c
-        for k, q, c in [it for it in items if it[0] not in where]:
-            r = least()
-            out[r].append(q); load[r] += c + lu; nheld[r] += 1
+            out[r].append(q); load[r] += c; placed(q, r)
+        for k, q, c in new:
+            r = least(bar(q))
+            out[r].append(q); load[r] += c + lu; nheld[r] += 1; placed(q, r)
         return {r: v for r, v in out.items() if v}
 
     # ------------------------------------------------- costs and the ledger
@@ -970,9 +1007,9 @@ class LatticeOracle:
         k = q[0]
         if k == 'centre':
             return 'line' if float(q[1]) in self._sre_line else 'strip'
-        if k == 'level' and o is not None:
+        if k in ('level', 'levelp') and o is not None:
             return 'level-pencil' if o.get('pencil') else 'level-norm'
-        return k
+        return 'level' if k == 'levelp' else k
 
     def _cost_of(self, q):
         """A request's expected MUMPS solves, its factorisation apart (TASK_COSTS
@@ -1446,6 +1483,12 @@ class LatticeOracle:
         res = o['out'][0]
         res['rank'] = src; res['dt_'] = float(rc[0])
         job.R[q] = res
+        if q[0] == 'levelp' and int(q[3]) == 0 and (not res.get('pencil') or res.get('tier') == 0):
+            # a paired disk's first tier final (LEVEL_PAIR): its second, if not yet sent, is not needed
+            sib = ('levelp', q[1], q[2], 1)
+            if sib in job.pend:
+                job.pend.remove(sib); job.R[sib] = dict(skipped=True)
+                self._astat['pair_skip'] = self._astat.get('pair_skip', 0) + 1
         job.per.setdefault(src, []).append(q)
         m = job.res.setdefault(src, dict(out=[], req=[], dt=0.0))
         m['out'].append(res); m['req'].append(rc); m['dt'] += float(o['dt'])
@@ -1542,6 +1585,11 @@ class LatticeOracle:
                        + (f" / {a_['redo']} redone (--lattice-async redo)" if a_.get('redo') else '')
                        + f"; their {c_[0]} waves {c_[2]:.0f} s open, {c_[5]:.0f} s of disks; the joins waited "
                          f"{a_['wait']:.0f} s")
+        if self._pstat[0]:
+            p_ = self._pstat
+            out.append(f"lattice paired level disks (LEVEL_PAIR): {p_[0]} pairs; {p_[1]} settled by the second tier "
+                       f"(the first tier's {p_[2]:.0f} s off their walls), {p_[3]} by the first ({p_[4]} second tiers "
+                       f"not sent, {p_[5]:.0f} s of second tiers wasted)")
         if self._proj:
             nr = len(ranks)
             out.append("lattice projection (requests replayed longest first; critical path / on " +
@@ -2036,13 +2084,38 @@ class LatticeOracle:
         waves = 0; nshift = 0; spurious = set(); conf = {}
         cross, watched, excl = [], [], []
         wmax = []                                          # the slowest disk of each wave (LS1: the call's critical path)
+        pair = LEVEL_PAIR and len(self._ranks()) >= 2
         while cent and waves < LINE_WAVES:
             waves += 1
-            reqs = [('level', float(th), gam) for th in cent]
+            reqs, disk = [], {}
+            for th in cent:
+                th = float(th)
+                if pair and self._lvl_tier.get(th, 0) != 0:
+                    # its last disk needed the second tier (or neither converged): both at once (LEVEL_PAIR)
+                    disk[th] = (('levelp', th, gam, 0), ('levelp', th, gam, 1))
+                else:
+                    disk[th] = (('level', th, gam),)
+                reqs += list(disk[th])
             yield reqs
-            for q in reqs:
-                done[q[1]] = R[q]
-            wmax.append(max(float(R[q].get('dt_', 0.0)) for q in reqs))
+            for th, qs in disk.items():
+                done[th] = R[qs[0]] if len(qs) == 1 else self._level_pair(R[qs[0]], R[qs[1]])
+                c_ = done[th]
+                if len(qs) == 2:
+                    # the ledger (report_lines): pairs, those the second tier settled and the first tier's
+                    # seconds there (the wall the pair saved, less a factorisation and a norm disk), those the
+                    # first settled (the second's work wasted, or not sent: asynchronous path)
+                    a_, b_ = R[qs[0]], R[qs[1]]
+                    ps_ = self._pstat
+                    ps_[0] += 1
+                    if not a_.get('pencil') or a_.get('tier') == 0 or b_.get('skipped'):
+                        ps_[3] += 1; ps_[4] += int(bool(b_.get('skipped'))); ps_[5] += float(b_.get('dt_', 0.0))
+                    else:
+                        ps_[1] += 1; ps_[2] += float(a_.get('dt_', 0.0))
+                self._lvl_tier.pop(th, None)
+                self._lvl_tier[th] = (int(c_['tier']) if c_.get('pencil') and c_.get('tier') is not None else 0)
+            while len(self._lvl_tier) > 4096:
+                self._lvl_tier.pop(next(iter(self._lvl_tier)))
+            wmax.append(max(float(R[q].get('dt_', 0.0)) for q in reqs if q in R))
             nshift += len(cent)
             on = []
             known = list(conf) + list(spurious)
@@ -2093,6 +2166,21 @@ class LatticeOracle:
                     watched=[dict(w=float(r_['w']), v=float(r_['v']), lo=float(r_['lo']), hi=float(r_['hi']),
                                   by_w=float(r_['by'][0]), by_v=float(r_['by'][1])) for r_ in watched],
                     disks=self._disk_log(done, wmax))
+
+    @staticmethod
+    def _level_pair(a, b):
+        """A paired level disk (LEVEL_PAIR): a the first tier's result, b the
+        second's (None: not computed -- the asynchronous path drops the second
+        tier while still unsent once the first has converged).  The first's where
+        it is final (no pencil: the norm disk; or its tier converged), else the
+        second's with the counts of both, as _level_disk gives in turn: the
+        applications, the CG iterations (sum, count, largest).  Its 'dt_' is the
+        longer of the two (the disk's wall), 'paired' marks it."""
+        if not a.get('pencil') or a.get('tier') == 0 or b is None or b.get('skipped'):
+            return dict(a, paired=True)
+        return dict(b, napp=int(a['napp']) + int(b['napp']), cg_max=max(int(a['cg_max']), int(b['cg_max'])),
+                    cg_sum=int(a['cg_sum']) + int(b['cg_sum']), cg_n=int(a['cg_n']) + int(b['cg_n']),
+                    dt_=max(float(a.get('dt_', 0.0)), float(b.get('dt_', 0.0))), paired=True)
 
     @staticmethod
     def _disk_log(done, wmax):

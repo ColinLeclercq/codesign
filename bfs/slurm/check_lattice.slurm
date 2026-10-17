@@ -11,12 +11,14 @@
 #
 # tools/check_lattice.py on the MPI ranks (BFS.md 5, 8): the lattice's rows,
 # followed peaks, LEVEL SET (in-solve missed peaks; with LEVEL_REF=1 against the
-# 2n certificate, certify_sparse.certify_greater), line and strip at a record
-# (the strip a diagnostic since 2026-10-16: no optimiser path covers it, BFS.md 8).
+# 2n certificate, certify_sparse.certify_greater) and line at a record; the strip
+# only with CHECK_STRIP=1 (a debugging diagnostic, not run unless asked: no
+# optimiser path covers it since 2026-10-16, BFS.md 8).
 #
 #   REC=path/to/K_B_C_s0_bfs_mimo2x2_central.npz MIMO="2 2 central" sbatch bfs/slurm/check_lattice.slurm
 #   REC=path/to/K_B_C_s0_bfs.npz sbatch bfs/slurm/check_lattice.slurm            (SISO)
 #   LEVEL_REF=0 ...    (skip the 2n reference: minutes per decision)
+#   CHECK_STRIP=1 ...  (the strip stage too: debugging)
 set -eo pipefail
 cd "$SLURM_SUBMIT_DIR"
 mkdir -p logs
@@ -27,4 +29,5 @@ LAUNCHER=${LAUNCHER:-mpiexec}
 ARGS=("$REC" --ops "${OPS:-$(python bfs/plant_id.py --dir coarse)/ops_coarse.npz}" --cap "${LATTICE_CAP:-24}")
 [ -n "${MIMO:-}" ] && ARGS+=(--mimo $MIMO)
 [ "${LEVEL_REF:-1}" = 1 ] && ARGS+=(--level-ref)
+[ "${CHECK_STRIP:-0}" = 1 ] && ARGS+=(--strip on)
 time $LAUNCHER -n "${SLURM_NTASKS:-96}" python -u tools/check_lattice.py "${ARGS[@]}"
