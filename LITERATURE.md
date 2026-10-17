@@ -429,7 +429,7 @@ None is to be implemented now. Concerns: (1) validation, (2) stationarity, (3) p
 - *Weakness at our scale:* a dense frequency grid with factorisations, and no certified sup.
 - *Tried:* not found.
 
-**Not recommended (listed so they are not retried):**
+**Not recommended (listed so they are not retried):** (Note added after the re-read of 2026-10-16, REREAD_2026-10-16.md: the LESSONS rule "do not add another inner solver" cited below lost its justification on the BFS, because its premise, that the inner solve is not the bottleneck, is false there. These items are not recommended on cost-per-iteration and structural grounds, not on a BFS measurement.)
 - bundle or proximity-control methods, gradient sampling, or GRANSO/HANSO as the inner solver;
 - a reduced or multi-fidelity inner model;
 - spectral-value-set or HEC norm oracles;
