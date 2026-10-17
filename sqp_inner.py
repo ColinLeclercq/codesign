@@ -48,6 +48,22 @@ PARTIAL_SHRINK = False  # everywhere (not only on S): after a step accepted at a
                         # region the line search found the model good for (--sqp-partial-shrink; off: the frozen GL path.
                         # 2026-10-08: the SISO lattice run spent 5-8 evaluations per SQP iteration in its last rounds,
                         # against 2-3 in its first -- line-search trials of steps the box kept proposing at its corner)
+TRUST_RULE = 'legacy'   # the trust radius's control (--sqp-trust-rule).  'legacy' (the GL frozen path, every path but the BFS):
+                        # x 2 after a full step on the boundary, x 0.5 after a rejected line search, the line search started
+                        # at twice the last accepted alpha -- on the BFS (20261010n, LESSONS 21) the radius stood 100-1000 x the
+                        # accepted step, 37-40 of 40 QP steps on its boundary, alpha 2^-9 .. 2^-10: the line search did all the
+                        # step control and the QP chose box corners.  'ratio' (2026-10-17, the BFS default through
+                        # bfs/run_bfs.sh): the line search from alpha = 1; after a step accepted at alpha < 1 the radius is
+                        # 2 alpha |d| (where the model held, PARTIAL_SHRINK's rule); after a full step the ratio rho of the
+                        # merit's decrease to the model's: rho >= TRUST_RHO[1] on the boundary -> x 2 (at most TRUST_MAX),
+                        # rho < TRUST_RHO[0] -> |d| / 2; a rejected line search -> min(Delta / 2, 2 alpha |d|) for the last
+                        # alpha tried; and a QP that fails at every tolerance is tried once more with Clarabel's
+                        # equilibration bounded to QP_EQ_BOUNDS (the 20261010n dumps: H at condition ~1e17 solved so)
+TRUST_RHO = (0.25, 0.75)
+TRUST_MAX = 1.0         # 'ratio': the radius's cap, packed units (a controller entry scaled by its own size moves by 100 %,
+                        # a port by 0.3); the BFS radius under 'legacy' grew to 0.17-0.70 (20261010n)
+QP_EQ_BOUNDS = (1e-2, 1e2)
+_QP_EQ = [0]            # QPs solved by that last try (the process's count)
 LAT_STRIP = False       # lattice, a DIAGNOSTIC of the Evaluator only (tools; e.g. a stationarity measure that needs the
                         # closed-loop eigenvalues LEFT of the line): every evaluation also covers the strip [-eps - reach,
                         # -eps] (lattice._strip), every eigenvalue in it a stability row.  The optimiser has no strip since
@@ -1179,6 +1195,20 @@ def subproblem(ev, t, H, Delta, eps, ctrl_max, enroll_block=True, mg_row=0.0, di
             if 'Solved' in str(sol.status):
                 status = str(sol.status)
                 break
+    if relax and 'Solved' not in status and TRUST_RULE == 'ratio':
+        # BOUNDED EQUILIBRATION, the last try (TRUST_RULE 'ratio', 2026-10-17): the
+        # 20261010n failures (c151, H = BFGS at condition ~1e17, an eigenvalue
+        # -2e-5 against 5e11 by rounding) end on NumericalError / InsufficientProgress
+        # at every tolerance with Clarabel's equilibration (scalings 1e-4 .. 1e4), and
+        # solve with it bounded to QP_EQ_BOUNDS (AlmostSolved at 1e-10, Solved at 1e-8)
+        st.equilibrate_min_scaling, st.equilibrate_max_scaling = QP_EQ_BOUNDS
+        for tol_ in (1e-10, 1e-8):
+            st.tol_gap_abs = st.tol_gap_rel = st.tol_feas = tol_; st.max_iter = 400
+            sol = clarabel.DefaultSolver(P, q, A, bvec, cones, st).solve()
+            status = f"{status} -> {sol.status} at {tol_:g}, equilibration {QP_EQ_BOUNDS[0]:g} .. {QP_EQ_BOUNDS[1]:g}"
+            if 'Solved' in str(sol.status):
+                status = str(sol.status); _QP_EQ[0] += 1
+                break
     if 'Solved' not in status:
         if QP_DUMP and _QP_DUMPED[0] < 3:
             # the failing QP itself, for an offline replay (bfs/report.sh collects it)
@@ -1507,6 +1537,9 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
     t0_start = float(e['smax'])                       # the start's value on the SQP's own model
     H = np.eye(NZ) if H0 is None else np.asarray(H0, float).copy()
     Delta = trust0 if trust0 else 1e-3 * max(float(np.linalg.norm(z)), 1.0)   # row gradients ~1e3-1e4: the linear model holds for steps ~1e-4 |z|
+    _D_start = Delta
+    _trust_n = [0, 0, 0, 0, 0]          # TRUST_RULE 'ratio': steps at alpha < 1, x 2, kept, rho < TRUST_RHO[0], rejected searches
+    _qp_eq0 = _QP_EQ[0]
     # merit penalty nu, and the QP's elastic slack costs (nu for the rows, 10 nu
     # for the Hermite and LMI slacks).  Fixed at 100 (GL), or ADAPTIVE
     # (pen_adapt, BFS.md 5, 2026-10-05): an exact penalty needs nu above the
@@ -1780,6 +1813,26 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
         if PAIR_BALL and ev_fn.pair_mode:
             return float(np.linalg.norm(v))
         return float(np.max(np.abs(v)))
+
+    def _trust_ratio(D_, a_, dn_, ared_, pred_):
+        """TRUST_RULE 'ratio': the radius after a step accepted at alpha a_, the QP's
+        step dn_ = |d| (trust norm) at radius D_, the merit's actual decrease ared_
+        against the model's pred_."""
+        if a_ < 1.0:
+            _trust_n[0] += 1
+            return max(2.0 * a_ * dn_, 1e-10)       # where the model held (2 alpha failed)
+        if not pred_ > 0.0:
+            _trust_n[2] += 1
+            return D_
+        rho_ = ared_ / pred_
+        if rho_ >= TRUST_RHO[1] and dn_ >= 0.9 * D_:
+            _trust_n[1] += 1
+            return min(2.0 * D_, max(TRUST_MAX, _D_start, D_))
+        if rho_ < TRUST_RHO[0]:
+            _trust_n[3] += 1
+            return max(0.5 * dn_, 1e-10)
+        _trust_n[2] += 1
+        return D_
     cands = []                                            # (smax, z, al, t) admissible iterates, for the certified fallback
     def _note(e_, t_):
         if admissible(e_):
@@ -1861,7 +1914,8 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
         L_ = dict(hist=hist, path=path, path_info=path_info, _backs_at=_backs_at, pair_log=pair_log,
                   sub_status_log=sub_status_log, stab_cross=stab_cross, cands=cands, added=added, n_soc=n_soc,
                   n_ctrl_cut=n_ctrl_cut, n_stab_cut=n_stab_cut, n_stab_unseen=n_stab_unseen, _last_adm=_last_adm,
-                  _n_out=_n_out, n_back=n_back, _QP_DUMPED=_QP_DUMPED)   # (the QP dumps' count: theirs, not the look-ahead's)
+                  _n_out=_n_out, n_back=n_back, _QP_DUMPED=_QP_DUMPED,   # (the QP dumps' count: theirs, not the look-ahead's)
+                  _trust_n=_trust_n, _QP_EQ=_QP_EQ)
         if _trace is not None:
             L_['_trace'] = _trace
         return L_
@@ -1986,7 +2040,7 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
             # top of it ratcheted both down (ne=100 round 11: radius 2.5e-7, alpha
             # never back to 1; the same design from alpha = 1 moved 7.9285 -> 7.8808),
             # nor anywhere with PARTIAL_SHRINK (the same ratchet)
-            _shrinking = (PAIR_BALL and ev_fn.pair_mode) or PARTIAL_SHRINK
+            _shrinking = (PAIR_BALL and ev_fn.pair_mode) or PARTIAL_SHRINK or TRUST_RULE == 'ratio'
             alpha, accepted = (min(1.0, 2.0 * _alpha_prev) if (ALPHA_WARM and not _shrinking) else 1.0), False
             _a0 = alpha
             if DEBUG_LS:
@@ -2099,7 +2153,12 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                       f"{'adm' if admissible(e) else 'NOT adm'} stat={stat:.2e} step={np.linalg.norm(alpha*d):.2e} a={alpha:g} "
                       f"D={Delta:.2e} nu={nu:.3g} {'ok' if accepted else 'REJ'}", flush=True)
             if not accepted:
-                Delta *= 0.5
+                if TRUST_RULE == 'ratio':
+                    # the model failed at every trial down to the last alpha tried (2 x the
+                    # halved alpha left by the search): the next QP inside twice that step
+                    Delta = min(0.5 * Delta, 4.0 * alpha * _tnorm(d)); _trust_n[4] += 1
+                else:
+                    Delta *= 0.5
                 if Delta < 1e-10:
                     code = 6
                     if _sp is not None and _sp_join():
@@ -2117,6 +2176,7 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                 r_ = theta * yv + (1 - theta) * (H @ sv)
                 H = H - np.outer(H @ sv, H @ sv) / sHs + np.outer(r_, r_) / max(float(sv @ r_), 1e-16)
             _adm_prev = bool(admissible(e))
+            _D_qp, _ared = Delta, m0 - merit(en, tn)      # the radius of this QP; the merit's actual decrease
             z, t, e = zn, tn, en
             if lattice is None or admissible(e):
                 path.append(z.copy())     # the gate's path: admissible iterates only (LAT_CROSS 'merit' may accept others)
@@ -2133,7 +2193,10 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                     if lattice is None or admissible(e):
                         path.append(z.copy())
                         path_info.append(_pinfo(e, it=int(it), alpha=None, prev_adm=True, backs=0, how='pair entry'))
-            if (PARTIAL_SHRINK or (PAIR_BALL and ev_fn.pair_mode)) and alpha < 1.0:
+            if TRUST_RULE == 'ratio':
+                # (before the refine: the level set's look-ahead state at this C carries it)
+                Delta = _trust_ratio(_D_qp, alpha, _tnorm(d), _ared, pred)
+            elif (PARTIAL_SHRINK or (PAIR_BALL and ev_fn.pair_mode)) and alpha < 1.0:
                 # the line search found where the model holds: a radius of twice the
                 # accepted step (2 alpha failed), so the next QP picks its direction
                 # for the region it can use instead of a box corner cut by alpha
@@ -2229,7 +2292,7 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                         print(f"    sqp: {LAT_BACK} iterations outside the line -- back to the last admissible iterate "
                               f"(smax {e['smax']:.6f}), radius {Delta:.2e}", flush=True)
                     continue
-        if alpha == 1.0 and _tnorm(d) > 0.9 * Delta:
+        if TRUST_RULE != 'ratio' and alpha == 1.0 and _tnorm(d) > 0.9 * Delta:
             Delta *= 2.0
         _v = max(e['smax'] - t, 0.0) + max(e['al'] + eps, 0.0)
         # stationarity RELATIVE to the gradient scale of the active rows: the
@@ -2340,6 +2403,11 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
         print(f"    sqp: penalty nu = {nu:.3g} at the end; {n_soc[0]} compensator correction(s), "
               f"{n_ctrl_cut[0]} trial(s) cut back inside the compensator's line"
               + (f", {n_stab_cut[0]} inside the closed loop's (lattice)" if lattice is not None else ''), flush=True)
+    if verbose and TRUST_RULE == 'ratio':
+        print(f"    sqp: trust radius by the ratio rule, {_D_start:.2e} -> {Delta:.2e}: {_trust_n[0]} step(s) at alpha < 1 "
+              f"(-> 2 alpha |d|), {_trust_n[1]} doubled, {_trust_n[2]} kept, {_trust_n[3]} at rho < {TRUST_RHO[0]:g} "
+              f"(-> |d| / 2), {_trust_n[4]} rejected line search(es); {_QP_EQ[0] - _qp_eq0} QP(s) solved only with "
+              f"the equilibration bounded to {QP_EQ_BOUNDS[0]:g} .. {QP_EQ_BOUNDS[1]:g}", flush=True)
     _asy_info = None
     if _asy:
         # the asynchronous level set's share of this solve (20261010j stage D): look-aheads kept / discarded,
@@ -2362,7 +2430,11 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                  stat_value=(hist[-1].get('stat') if hist else None),
                  wall=_wall_pre, inner='sqp', kink_block=kink_block,
                  ctrl_lmi=bool(ctrl_lmi), alpha_rows=ev_fn.n_alpha_rows, alpha_fallback=ev_fn.n_fallback,
-                 trust_final=float(Delta), added_freqs=added, W_final=[float(w) for w in ev_fn.W], pair_log=pair_log, pair_mode_end=bool(ev_fn.pair_mode), z_last=[float(x) for x in z], e_last_al_ctrl=float(e["al_ctrl"]), e_last_al=float(e["al"]),
+                 trust_final=float(Delta),
+                 **(dict(trust_rule=TRUST_RULE, trust_counts=dict(zip(('partial', 'grow', 'keep', 'rho_low', 'rejected'),
+                                                                      _trust_n)), qp_eq_rescued=int(_QP_EQ[0] - _qp_eq0))
+                    if TRUST_RULE == 'ratio' else {}),
+                 added_freqs=added, W_final=[float(w) for w in ev_fn.W], pair_log=pair_log, pair_mode_end=bool(ev_fn.pair_mode), z_last=[float(x) for x in z], e_last_al_ctrl=float(e["al_ctrl"]), e_last_al=float(e["al"]),
                  screen=(ev_fn.screen_stats[-1] if ev_fn.screen_stats else None),
                  refine_log=list(ev_fn.refine_log[-40:]), clblock_fail=int(ev_fn.n_clblock_fail),
                  sub_failures=list(sub_status_log),

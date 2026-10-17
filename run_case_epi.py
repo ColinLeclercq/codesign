@@ -2596,6 +2596,11 @@ def main():
                          'PARTIAL_SHRINK; off = the frozen path, where only the double-pole face does this)')
     ap.add_argument('--sqp-trust', dest='sqp_trust', type=float, default=0.0,
                     help='initial box trust radius (0 = 0.05 |z0|)')
+    ap.add_argument('--sqp-trust-rule', dest='sqp_trust_rule', choices=['legacy', 'ratio'], default='legacy',
+                    help="the trust radius's control (sqp_inner.TRUST_RULE): legacy = x 2 after a full step on the "
+                         "boundary, x 0.5 after a rejected line search, the line search warm (the GL frozen path); "
+                         "ratio = the line search from 1, 2 alpha |d| after a partial step, the ratio test after a full "
+                         "one, and a failed QP retried with bounded equilibration (the BFS default, bfs/run_bfs.sh)")
     ap.add_argument('--qp-solver', dest='qp_solver', choices=['osqp', 'daqp'],
                     default='osqp',
                     help='item 0: steering/termination QP solver.  osqp = frozen '
@@ -2977,6 +2982,9 @@ def main():
     REDUCED_CERT = a.reduced_cert
     import sqp_inner as _sqi; _sqi.REDUCED_CERT = a.reduced_cert; _sqi.FOLLOW_SCAN = a.follow_scan; _sqi.PAIR_MANIFOLD = (a.sqp_pair_manifold == 'on'); _sqi.FIELD_KMAX2 = (a.field_kmax ** 2 if a.field_kmax else None); _sqi.FIELD_ORDER = a.field_order
     _sqi.PARTIAL_SHRINK = (a.sqp_partial_shrink == 'on')
+    _sqi.TRUST_RULE = a.sqp_trust_rule
+    if a.sqp_trust_rule == 'ratio' and a.sqp_partial_shrink == 'on':
+        raise SystemExit("--sqp-trust-rule ratio has its own rule after a partial step: drop --sqp-partial-shrink on (SHRINK=1)")
     _sqi.LAT_CROSS = a.lattice_cross; _sqi.DEBUG_LS = (a.sqp_debug_ls == 'on')
     _sqi.LAT_ASYNC = a.lattice_async
     if a.oracle == 'lattice':

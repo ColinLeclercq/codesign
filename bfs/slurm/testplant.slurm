@@ -44,9 +44,14 @@
 #        (a trial across the closed loop's line from an admissible iterate is
 #         halved, as up to 20261010c, instead of weighed by the merit; the
 #         directories get _cut)
-#   ORACLE=lattice SHRINK=1 ... sbatch ...
-#        (trust radius 2 alpha |d| after a partial step, --sqp-partial-shrink on;
-#         off by default since 20261008c; the directories get _shr)
+#   ORACLE=lattice TRUST=legacy SHRINK=1 ... sbatch ...
+#        (trust radius 2 alpha |d| after a partial step, --sqp-partial-shrink on,
+#         under the legacy rule; off by default since 20261008c; the directories
+#         get _shr_leg)
+#   TRUST=legacy ... sbatch ...
+#        (the trust-radius rule of every run before 2026-10-17, --sqp-trust-rule
+#         legacy; the default is the ratio rule, sqp_inner.TRUST_RULE; the
+#         directories get _leg)
 #   PLANT_ONLY=1 sbatch --ntasks=48 --mem=100G --time=03:00:00 bfs/slurm/testplant.slurm
 #        (build this code's test plant files, if missing, and stop; then submit the
 #         batch with --dependency=afterok:<that job>: a job finding the plant being
@@ -111,7 +116,10 @@ if [ "${ORACLE:-reduced}" = lattice ] && [ "${CROSS:-merit}" = cut ]; then SUF="
 # --lattice-async; on by default since 2026-10-16, no suffix then -- the _async
 # directories of 20261010n were named by hand)
 if [ "${ORACLE:-reduced}" = lattice ] && [ "$AF" = off ]; then SUF="${SUF}_sync"; fi
-export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-24} RETIRE=${RETIRE:-} SHRINK=${SHRINK:-0} LATTICE_K=${LATTICE_K:-1} CROSS=${CROSS:-merit} ASYNC=${ASYNC:-1}
+# TRUST=legacy: the trust-radius rule of every run before 2026-10-17 (bfs/run_bfs.sh
+# passes --sqp-trust-rule; ratio by default, no suffix then)
+if [ "${TRUST:-ratio}" = legacy ]; then SUF="${SUF}_leg"; fi
+export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-24} RETIRE=${RETIRE:-} SHRINK=${SHRINK:-0} LATTICE_K=${LATTICE_K:-1} CROSS=${CROSS:-merit} ASYNC=${ASYNC:-1} TRUST=${TRUST:-ratio}
 IDX=${SLURM_ARRAY_TASK_ID:-}                           # array job: the start index (catalogue entry)
 NSTART=${NSTART:-64}
 if [ -n "$IDX" ]; then
