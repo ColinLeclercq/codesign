@@ -1500,12 +1500,29 @@ the identity gives $\nu'\|u\|_L^2\le\|u\|_M\|\psi_a\|_M+(\beta-\mathrm{Re}\,s)_+
 |G(s)|\le\|c\|_{L^{-1}}\|\psi_a\|_M\sqrt{\frac{1/d+(\beta-\mathrm{Re}\,s)_+/d^2}{\nu'}}
 =O(d^{-1/2}).
 \]
-The $d^{-1/2}$ decay is genuine, not an artefact of the estimate: at high frequency the
-response to a smooth forcing is its Leray projection over $s$, which slips at the wall, and
-the Stokes layer of thickness $\sqrt{\nu/\omega}$ carries a wall shear of order
-$\omega^{-1}\sqrt{\omega/\nu}=(\nu\omega)^{-1/2}$.  With a feedthrough $K\ne0$,
-$W_T\sim(2|K|\,C)^2$: the tracked segment is longer than for an $M\psi$ sensor (whose tail
-decays like $1/d$), by an amount the record reports.  $P_{\mathrm{plant}}$ and the near-line
+(iv) An $L^2$ bound from (i) alone (2026-10-16): $c$ is zero off the free velocity dofs,
+so Cauchy--Schwarz in $M_{vv}$ (the velocity mass on them, SPD) gives
+$|c\hp u|=|(M_{vv}^{-1}c_v)\hp M_{vv}u|\le\|c\|_{M_{vv}^{-1}}\|u\|_M$ and
+\[
+|G(s)|\le\|c\|_{M_{vv}^{-1}}\|\psi_a\|_M/d=O(d^{-1}),
+\]
+with $\|C\|_{M_{vv}^{-1}}^2=\lambda_{\max}(C_v\hp M_{vv}^{-1}C_v)$ for several sensors.  It is
+computed without factorising or inverting $M_{vv}$: CG gives $Y\approx M_{vv}^{-1}C_v$, and with
+$R=C_v-M_{vv}Y$ the identity $C_v\hp M_{vv}^{-1}C_v=C_v\hp Y+Y\hp R+R\hp M_{vv}^{-1}R$ bounds it by
+$\lambda_{\max}(C_v\hp Y+Y\hp R)+\|R\|_2^2/\lambda_{\mathrm{floor}}$, $\lambda_{\mathrm{floor}}$ the
+element floor $\min_e\lambda_{\min}(M_e)\le\lambda_{\min}(M_{vv})$ (thrift level (b) of the GL tail,
+\S\ref{sec:winding-num}; interlacing: $M_{vv}$ is a principal submatrix of the assembled mass,
+and the floor's premise is checked by reassembling $M$ from the mesh).  The count uses
+$\min(H^1, L^2)$.  Test plant, decentral $2\times2$ record $369.87$: $\|C\|_{M_{vv}^{-1}}=738.05$
+(floor $1.94\times10^{-5}$ against $\lambda_{\min}=1.08\times10^{-4}$); the $L^2$ bound is the
+smaller from $w\approx100$ ($51.9$ against $102.5$), and $W_T$ falls from $7.86\times10^6$ to
+$7680$.  ERRATA (2026-10-16): this subsection claimed the $d^{-1/2}$ decay was genuine, from the
+Stokes layer of thickness $\sqrt{\nu/\omega}$ and its wall shear $(\nu\omega)^{-1/2}$.  That is a
+continuum argument.  The discrete plant decays like $1/w$ ($w\|G(-0.05+iw)\|=11.74$ from $10^2$
+to $10^7$ at that record): the mesh does not resolve a layer that thin, and the crossover moves
+out on a finer wall mesh.  With the $H^1$ bound alone, $W_T\sim(2|K|\,C)^2$ grew with the square of
+the feedthrough and reached the count's old cap of $10^7$ in 20261010n.  With $(iv)$ it grows
+linearly in it, as for an $M\psi$ sensor.  $P_{\mathrm{plant}}$ and the near-line
 plant poles come from the enclosure of \S\ref{sec:ns} with the inertia bounds above and the
 tiles' nearest-eigenvalue exhaustion; they are design-independent and cached per mesh.
 The plant is real, so $f(\bar s)=\overline{f(s)}$ and the march covers $[0,W_T]$ only, the phase

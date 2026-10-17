@@ -1907,7 +1907,7 @@ def certified_norm(D, pk, z, wlo, whi, gam_lb, w_hint=None):
     return float(g), float(w), bool(ok), peaks
 
 
-def winding_veto(final, earlier, count_fn, line, cap=3, time_ok=None, log=print):
+def winding_veto(final, earlier, count_fn, line, cap=3, time_ok=None, log=print, tail_fn=None):
     """THE SAVE-TIME WINDING VETO's choice (20261010j stage B; the user's decision
     of 2026-10-14: the save-time count vetoes, never an unstable design as the
     record).  final: the ledger entry of the design about to be saved; earlier:
@@ -1915,43 +1915,89 @@ def winding_veto(final, earlier, count_fn, line, cap=3, time_ok=None, log=print)
     of all; an entry is dict(round (-1: the anchor), z, g, watch, count) with
     count a dict(count, ok, ..., how) when a count right of `line` is known for
     it (the feasible start's, the anchor's at the start, one at acceptance),
-    else None.  count_fn(entry) counts one (a dict with count, ok, npts, ...).
+    else None.  count_fn(entry) counts one (a dict with count, ok, npts, ...);
+    tail_fn(entry), when given, is the count's instant tail test (no march:
+    BFSPlant.tail_check), run first on every design to be counted.
+
+    Every outcome is classified (2026-10-16): 'zero' (a conclusive 0),
+    'positive' (a conclusive count > 0), 'inconclusive' (the march ran and could
+    not close), 'pre-march' (no march at all: the tail test or the count raised
+    winding_cert.TailBoundError, or the tail test failed otherwise) and 'error'
+    (the count raised during or before its march for another reason).  A
+    PRE-MARCH outcome costs nothing and proves nothing: it is never charged
+    against `cap` (in 20261010n three instant tail failures, 0 pts each,
+    exhausted --veto-counts 3 and every decentral arm fell back to its anchor,
+    although about three real counts still fitted before the deadline).
 
     The final design stands when its count is a conclusive 0 (known, or counted
     here).  Otherwise the record falls back to the LATEST earlier design whose
     count is a conclusive 0: free where known, else counted -- at most `cap`
-    counts, none once time_ok() says the deadline cannot hold one; the designs
-    passed over are listed.  Returns (chosen entry or None, its count dict with
-    'source', the veto dict or None when the final design passed); prints the
-    '*** WINDING VETO' lines."""
+    charged counts, none once time_ok() says the deadline cannot hold one; a
+    design whose tail test fails is passed over uncharged; the designs passed
+    over are listed with the reason.  Returns (chosen entry or None, its count
+    dict with 'source', the veto dict or None when the final design passed;
+    veto['final']['outcome'] is the final design's outcome, which the save
+    path's checkpoint rule reads); prints the '*** WINDING VETO' lines."""
+    from winding_cert import TailBoundError
+
     def _known0(e_):
         c_ = e_.get('count')
         return bool(c_) and bool(c_.get('ok')) and c_.get('count') == 0
 
+    def _err(_e):
+        return f"{type(_e).__name__}: {str(_e)[:200]}"
+
+    def _screen(e_):
+        # the instant tail test: None when it passes (or there is none), else the
+        # outcome of a design that cannot be counted (nothing marched).  Any failure
+        # here is pre-march: the test is the count's own code before its march (the
+        # ports, the plant's tail bound, the cutoff), so the count would fail alike
+        if tail_fn is None:
+            return None
+        try:
+            tail_fn(e_)
+            return None
+        except Exception as _e:
+            return dict(count=None, ok=False, outcome='pre-march', error=_err(_e), npts=0, seconds=0.0)
+
     def _count(e_):
+        t0_ = time.time()
         try:
             o_ = count_fn(e_)
-            return dict(count=(None if o_.get('count') is None else int(o_['count'])), ok=bool(o_.get('ok')),
-                        npts=int(o_.get('npts', 0) or 0), seconds=o_.get('seconds'),
-                        wtail=float(o_.get('wtail', np.nan)), p_plant=int(o_.get('p_plant', -1)))
         except Exception as _e:
-            return dict(count=None, ok=False, error=f"{type(_e).__name__}: {str(_e)[:80]}")
+            return dict(count=None, ok=False, outcome=('pre-march' if isinstance(_e, TailBoundError) else 'error'),
+                        error=_err(_e), npts=0, seconds=round(time.time() - t0_, 1))
+        cnt_ = None if o_.get('count') is None else int(o_['count'])
+        ok_ = bool(o_.get('ok')) and cnt_ is not None
+        return dict(count=cnt_, ok=ok_, outcome=(('zero' if cnt_ == 0 else 'positive') if ok_ else 'inconclusive'),
+                    npts=int(o_.get('npts', 0) or 0), seconds=o_.get('seconds'),
+                    wtail=float(o_.get('wtail', np.nan)), wstar=float(o_.get('wstar', np.nan)),
+                    p_plant=int(o_.get('p_plant', -1)))
 
     def _desc(e_):
         return ("the anchor (this job's start)" if e_.get('round') == -1 else
                 (f"round {e_['round']}'s design" if e_.get('round') is not None else "the final design")) + \
             f" (gamma {e_['g']:.6f})"
+
+    def _what(c_):
+        o_ = c_['outcome']
+        return {'zero': f"0 right of Re={line:g}", 'positive': f"{c_['count']} right of Re={line:g}",
+                'inconclusive': 'INCONCLUSIVE (the march could not close)',
+                'pre-march': f"not counted, pre-march ({c_.get('error')}): not charged",
+                'error': f"the count failed ({c_.get('error')})"}[o_]
     counted = []
     if _known0(final):
         return final, dict(final['count'], source=f"known: {final['count'].get('how')}"), None
-    cf = _count(final)
+    cf = _screen(final) or _count(final)
     counted.append(dict(cf, round=final.get('round'), gamma=float(final['g'])))
-    if cf['ok'] and cf['count'] == 0:
+    if cf['outcome'] == 'zero':
         final['count'] = dict(cf, how='counted at the save')
         return final, dict(cf, source='counted at the save'), None
     log(f"*** WINDING VETO: {_desc(final)} has "
-        + (f"{cf.get('count')} closed-loop eigenvalue(s)" if cf.get('ok') else
-           f"an INCONCLUSIVE count{(' (' + cf['error'] + ')') if cf.get('error') else ''}")
+        + {'positive': f"{cf.get('count')} closed-loop eigenvalue(s)",
+           'inconclusive': 'an INCONCLUSIVE count (the march could not close)',
+           'pre-march': f"no count (pre-march, nothing marched: {cf.get('error')})",
+           'error': f"a failed count ({cf.get('error')})"}[cf['outcome']]
         + f" right of Re={line:g} over all frequencies ({cf.get('npts', 0)} pts): it is not the record; "
         f"falling back to the last accepted design with a conclusive 0", flush=True)
     chosen, nc, skipped = None, 0, []
@@ -1959,25 +2005,32 @@ def winding_veto(final, earlier, count_fn, line, cap=3, time_ok=None, log=print)
         if _known0(e_):
             chosen = e_
             break
+        pre = _screen(e_)
+        if pre is not None:
+            skipped.append(dict(round=e_.get('round'), why=f"pre-march: {pre['error']}"))
+            log(f"    veto: {_desc(e_)}: {_what(pre)}", flush=True)
+            continue
         if nc >= int(cap):
             skipped.append(dict(round=e_.get('round'), why=f'cap of {cap} counts'))
             continue
         if time_ok is not None and not time_ok():
             skipped.append(dict(round=e_.get('round'), why='the deadline'))
             continue
-        ce = _count(e_); nc += 1
+        ce = _count(e_)
+        nc += 0 if ce['outcome'] == 'pre-march' else 1
         counted.append(dict(ce, round=e_.get('round'), gamma=float(e_['g'])))
-        log(f"    veto: {_desc(e_)}: " + (f"{ce['count']} right of Re={line:g}" if ce['ok'] else 'INCONCLUSIVE')
-            + f" ({ce.get('npts', 0)} pts, {ce.get('seconds')} s)", flush=True)
-        if ce['ok'] and ce['count'] == 0:
+        log(f"    veto: {_desc(e_)}: {_what(ce)} ({ce.get('npts', 0)} pts, {ce.get('seconds')} s)", flush=True)
+        if ce['outcome'] == 'zero':
             e_['count'] = dict(ce, how='counted at the save (veto)')
             chosen = e_
             break
     if skipped:
-        log(f"    veto: {len(skipped)} earlier design(s) not counted (at most {cap} counts, or the deadline): "
-            f"rounds {[s_['round'] for s_ in skipped]}", flush=True)
-    veto = dict(line=float(line), final=dict(round=final.get('round'), gamma=float(final['g'])),
-                counted=counted, skipped=skipped, cap=int(cap),
+        log(f"    veto: {len(skipped)} earlier design(s) not counted (pre-march, at most {cap} charged counts, or the "
+            f"deadline): {[(s_['round'], s_['why'][:40]) for s_ in skipped]}", flush=True)
+    veto = dict(line=float(line),
+                final=dict(round=final.get('round'), gamma=float(final['g']), outcome=cf['outcome'],
+                           **({'error': cf['error']} if cf.get('error') else {})),
+                counted=counted, skipped=skipped, cap=int(cap), charged=int(nc),
                 fallback=(None if chosen is None else
                           dict(round=chosen.get('round'), gamma=float(chosen['g']), count_source=chosen['count'].get('how'))))
     if chosen is None:
@@ -1985,6 +2038,120 @@ def winding_veto(final, earlier, count_fn, line, cap=3, time_ok=None, log=print)
     log(f"*** WINDING VETO: the record is {_desc(chosen)}, not the final design (gamma {final['g']:.6f}); "
         f"its count right of Re={line:g}: 0 ({chosen['count'].get('how')})", flush=True)
     return chosen, dict(chosen['count'], source=f"veto fallback: {chosen['count'].get('how')}"), veto
+
+
+# NO ACCEPTED DESIGN IS EVER LOST (BFS, 2026-10-16).  In 20261010n the five final
+# decentral designs (367.38, 367.40, 366.49, 388.44, 390.82) existed in no file:
+# the veto fell back to the anchor, the deadline stop rewrote the checkpoint with
+# it, the record held the anchor and the JSON gammas only.  Now the save writes
+# the job's final design to <tag>_final_<jobid>.npz/.json (never overwritten), and
+# every acceptance appends the design to <tag>_accepted.npz.
+
+def job_id():
+    """The SLURM job id, else 'local<pid>' (the final file's name)."""
+    return os.environ.get('SLURM_JOB_ID') or f"local{os.getpid()}"
+
+
+def design_arrays(pk, z, mimo, loop_orders=None):
+    """The small arrays of a design (d, e, f, nvec, K, xa, xs; MIMO also Bc and
+    loop_orders; the atoms' va / vs where the ports have them), under the
+    record's keys: what the record readers (count_rec-style tools) load."""
+    aa, nn, KK, xa, xs, va, vs = pk.unpack(np.asarray(z, float))
+    out = dict(d=np.asarray(aa[0]), e=np.asarray(aa[1]), f=np.asarray(aa[2]), nvec=np.asarray(nn),
+               K=np.asarray(KK), xa=np.asarray(xa), xs=np.asarray(xs))
+    if mimo:
+        out.update(Bc=np.asarray(aa[3]), loop_orders=np.asarray(loop_orders))
+    out.update({k_: np.asarray(v_) for k_, v_ in (('va', va), ('vs', vs)) if v_ is not None})
+    return out
+
+
+def write_final_design(base, final, record, veto, arrays_of, extra=None, jobid=None, log=print):
+    """<base>_final_<jobid>.npz/.json: the job's final design (the last accepted,
+    the one the veto judged) under the plain record keys, so it reads like a
+    record; when the veto saved another design as the record, that one under
+    'record_' keys.  final / record: ledger entries (z, g, round, al); veto: the
+    veto dict or None; arrays_of(z): design_arrays; extra: further npz arrays
+    (the loop state, the working set).  A name that exists already gets _2, _3,
+    ...: nothing overwrites it.  Returns the npz path (None if the write failed,
+    which is logged and never fatal)."""
+    jobid = jobid or job_id()
+    try:
+        stem = f"{base}_final_{jobid}"
+        k = 1
+        while os.path.exists(stem + '.npz') or os.path.exists(stem + '.json'):
+            k += 1
+            stem = f"{base}_final_{jobid}_{k}"
+        arr = dict(arrays_of(final['z']))
+        arr.update(gamma=float(final['g']), alpha=float(final.get('al', np.nan)),
+                   round=int(-2 if final.get('round') is None else final['round']))
+        same = record is not None and np.array_equal(np.asarray(record['z']), np.asarray(final['z']))
+        if record is not None and not same:
+            arr.update({'record_' + k_: v_ for k_, v_ in arrays_of(record['z']).items()})
+            arr.update(record_gamma=float(record['g']), record_round=int(-2 if record.get('round') is None else record['round']))
+        arr.update(dict(extra or {}))
+        arr['veto'] = np.array(json.dumps(_js(veto)) if veto is not None else '')
+        np.savez(stem + '.npz', **arr)
+        json.dump(_js(dict(job=str(jobid), gamma=float(final['g']), round=final.get('round'),
+                           record_design=('the final design' if (record is not None and same) else
+                                            (f"round {record.get('round')} (gamma {record['g']:.6f}), the veto's fallback"
+                                             if record is not None else 'none (NOT SAVING)')),
+                           veto=veto, code_version=_code_version())),
+                  open(stem + '.json', 'w'), indent=1)
+        log(f"final design: {os.path.basename(stem)}.npz (gamma {final['g']:.6f}"
+            + ('' if record is None or same else f"; the record: round {record.get('round')}, gamma {record['g']:.6f}")
+            + ')', flush=True)
+        return stem + '.npz'
+    except Exception as _e:
+        log(f"    final-design write failed: {_e!r}", flush=True)
+        return None
+
+
+def append_accepted(path, arrays, meta, log=print):
+    """Append one accepted design to the ledger `path` (npz): its arrays as
+    a<k>_<key>, the index arrays n, gamma, round, job beside them; meta: gamma,
+    round, job (and alpha, t).  Rewritten whole (a few kB per design) through a
+    temporary file and os.replace, so an interruption leaves the previous ledger.
+    Returns the new length (None if the write failed: logged, never fatal)."""
+    try:
+        old = {}
+        if os.path.exists(path):
+            with np.load(path, allow_pickle=False) as zz:
+                old = {k_: zz[k_] for k_ in zz.files}
+        n0 = int(old.get('n', 0))
+        out = {k_: v_ for k_, v_ in old.items() if k_ not in ('n', 'gamma', 'round', 'job')}
+        for k_, v_ in dict(arrays, **meta).items():
+            out[f"a{n0:04d}_{k_}"] = np.asarray(v_)
+        out['n'] = np.array(n0 + 1)
+        out['gamma'] = np.append(np.asarray(old.get('gamma', np.zeros(0)), float), float(meta['gamma']))
+        out['round'] = np.append(np.asarray(old.get('round', np.zeros(0)), int), int(meta['round']))
+        out['job'] = np.append(np.asarray(old.get('job', np.zeros(0, dtype='<U1')), str), str(meta['job']))
+        tmp = path[:-4] + '.tmp.npz'
+        np.savez(tmp, **out)
+        os.replace(tmp, path)
+        return n0 + 1
+    except Exception as _e:
+        log(f"    accepted-design ledger write failed: {_e!r}", flush=True)
+        return None
+
+
+def ckpt_after_veto(veto, final, chosen, anchor):
+    """The design a checkpoint may hold once the save-time veto has run
+    (2026-10-16), and why: the final design when it passed (veto None) or when
+    its veto was PRE-MARCH (nothing was counted, so nothing is known against it:
+    the next job's start count decides, FATAL on a conclusive count > 0); else
+    the veto's fallback; else (NOT SAVING) the anchor, the job's start; else
+    None (no design may stay).  Never a design whose march came back
+    INCONCLUSIVE or with a count > 0 (20261010j stage B: the next job must not
+    resume from a vetoed design; the NOT SAVING path used to leave it there)."""
+    if veto is None:
+        return final, 'the final design'
+    if veto['final'].get('outcome') == 'pre-march':
+        return final, 'the final design (the veto could not count it: pre-march)'
+    if chosen is not None:
+        return chosen, "the winding veto's fallback"
+    if anchor is not None:
+        return anchor, "the anchor, this job's start (no design of the job has a conclusive 0)"
+    return None, 'none (the veto found no conclusive 0)'
 
 
 def _atoms_record_keys(D, apa, aps):
@@ -2831,6 +2998,8 @@ def main():
     _wind_accept = (a.wind_accept == 'on') or (a.wind_accept == 'auto' and
                                                 (MIMO or 'FB' in a.case.split('+') or 'FC' in a.case.split('+')))
     n_wind_accept, n_wind_refused, n_gate_wind = [0], [0], [0]
+    n_wind_premarch = [0]               # counts that could not run (winding_cert.TailBoundError), 2026-10-16
+    import winding_cert as _wc_mod      # (its TailBoundError at the count sites)
     _wind_sec = [0.0]                   # the longest BFS count of this job (s): the deadline's round reserve, the veto's guard
 
     def _wind_right_of_margin(bb_, cc_, aa_, nn_, KK_, seen_, pa_=None):
@@ -2842,7 +3011,8 @@ def main():
         import winding_cert as _wc
         _line = -a.eps
         if BFS:
-            # the M-free count (BFSPlant.winding: certified plant data, H^1 tail),
+            # the M-free count (BFSPlant.winding: certified plant data, the smaller of
+            # the H^1 and L2 tails, 2026-10-16),
             # with the ABSOLUTE step floor (20261010j stage B, gate-refusal.md G1):
             # the designs sit on the rows' target, ~1e-4 left of this line
             _zh = []
@@ -3419,6 +3589,11 @@ def main():
                 _wo = D.winding(_pa_, _bb_, _cc_, arow0, nvec0, K0, -a.eps, hmin_abs=WIND_HMIN_ABS)
                 _wind_sec[0] = max(_wind_sec[0], time.time() - _t0)
                 _stab_rec['count_right_of_eps'] = int(_wo['count']) if _wo['ok'] else None
+                # the count's own data, for the anchor's entry in the veto's ledger (a
+                # record that falls back to it reports them; 2026-10-16)
+                _stab_rec['count_info'] = dict(npts=int(_wo.get('npts', 0) or 0), seconds=round(time.time() - _t0, 1),
+                                               wtail=float(_wo.get('wtail', np.nan)), wstar=float(_wo.get('wstar', np.nan)),
+                                               p_plant=int(_wo.get('p_plant', -1)))
                 print(f"  feasible start: {_stab_rec['count_right_of_eps']} closed-loop eigenvalue(s) right of "
                       f"Re = {-a.eps:g} over all frequencies (winding count, {_wo['npts']} pts, "
                       f"{time.time() - _t0:.0f} s)", flush=True)
@@ -4210,7 +4385,7 @@ def main():
             # the anchor is this job's feasible start, counted above: 0 is known; an
             # INCONCLUSIVE count there is not repeated (the same design, the same march)
             if _stab_rec['count_right_of_eps'] == 0:
-                _anchor_count = dict(count=0, ok=True, how='feasible start')
+                _anchor_count = dict(count=0, ok=True, **dict(_stab_rec.get('count_info') or {}), how='feasible start')
         else:
             # THE INHERITED ANCHOR COUNTED (gate-refusal.md G4 with its verifier's
             # correction): a checkpoint, a continued record or a start record whose
@@ -4233,7 +4408,11 @@ def main():
                           f"is clear: the chain broke upstream (an escape); not running", flush=True)
                     return
                 if _o['ok']:
-                    _anchor_count = dict(count=0, ok=True, npts=int(_o['npts']), seconds=_o['seconds'], how='counted at the start')
+                    # wtail / p_plant too: a record that falls back to the anchor reported
+                    # wtail nan and p_plant -1 (20261010n)
+                    _anchor_count = dict(count=0, ok=True, npts=int(_o['npts']), seconds=_o['seconds'],
+                                         wtail=float(_o.get('wtail', np.nan)), wstar=float(_o.get('wstar', np.nan)),
+                                         p_plant=int(_o.get('p_plant', -1)), how='counted at the start')
                     print(f"continuation anchor: 0 closed-loop eigenvalues right of Re={-a.eps:g} over all frequencies "
                           f"(winding count, {_o['npts']} pts, {_o['seconds']:.0f} s): the inherited anchor is certified",
                           flush=True)
@@ -4836,7 +5015,20 @@ def main():
                         # closed-loop branch out to |Im| ~ 850 (the band grew to +-1269 at
                         # ne=100 atoms) and the line sweep runs out of shifts on it (85
                         # uncovered); the exact winding count, global in w, decides.
-                        _o = _wind_right_of_margin(bb, cc, aa, nn, KK, _seen_c, pa_=(D.bc(xa_, xs_, va_, vs_)[2] if BFS else None))
+                        # a count that cannot run (a pre-march TailBoundError, or any failure)
+                        # leaves the gate's INCONCLUSIVE standing: it used to reach the
+                        # handler below, 'gate unavailable', and the alpha fallback could
+                        # accept the very design the gate could not clear (2026-10-16)
+                        try:
+                            _o = _wind_right_of_margin(bb, cc, aa, nn, KK, _seen_c,
+                                                       pa_=(D.bc(xa_, xs_, va_, vs_)[2] if BFS else None))
+                        except Exception as _e:
+                            _o = None
+                            _pre = isinstance(_e, _wc_mod.TailBoundError)
+                            n_wind_premarch[0] += int(_pre)
+                            print(f"    gate: line sweep {why}; the winding count could not run "
+                                  f"({'pre-march, ' if _pre else ''}{type(_e).__name__}: {_e}): the INCONCLUSIVE stands",
+                                  flush=True)
                         if _o is not None:
                             _wind_done = _o
                             if _o['ok'] and _o['count'] == 0:
@@ -5003,7 +5195,12 @@ def main():
                                   flush=True)
                             _okc = True; watch_cand = _topk_watch(list(_seen_c or []), a.cont_k, a.eps)
                 except Exception as _e:
-                    print(f"    winding check failed: {type(_e).__name__}", flush=True)
+                    # the refusal stands; a pre-march TailBoundError (nothing marched) says
+                    # so and why (the cap of the tail cutoff, |k| gb(W) against q)
+                    _pre = isinstance(_e, _wc_mod.TailBoundError)
+                    n_wind_premarch[0] += int(_pre)
+                    print(f"    continuation refused; the winding count could not run "
+                          f"({'pre-march, ' if _pre else ''}{type(_e).__name__}: {_e}): not accepted", flush=True)
             if not _okc and a.gate_prefix and not _prov and (_reach.get('z') is None
                                                               or float(np.linalg.norm(_reach['z'] - zwatch)) == 0.0):
                 print(f"    certified prefix: none (no piece of the step certified: its first 1/{2 ** a.cont_depth}, or the "
@@ -5072,6 +5269,15 @@ def main():
                                  f"{'INCONCLUSIVE' if not _o['ok'] else str(_o['count']) + ' eigenvalue(s) right of Re=-eps'} "
                                  f"({_o['npts']} pts)") + ": REFUSED", flush=True)
                         n_wind_refused[0] += 1
+                except _wc_mod.TailBoundError as _e:
+                    # PRE-MARCH (nothing counted, nothing known against the design): as at
+                    # the save, the design stays -- accepted on the gate, its count unknown
+                    # (None in the veto's ledger, which counts or screens it at the save) --
+                    # instead of a refusal that would repeat on every later candidate as
+                    # long as the tail cannot be cut (a stall; 2026-10-16)
+                    n_wind_premarch[0] += 1
+                    print(f"    *** winding check at acceptance: no count (pre-march: {_e}): accepted on the "
+                          f"gate, the save-time veto decides", flush=True)
                 except Exception as _e:
                     _okc = False
                     print(f"    winding check at acceptance failed ({type(_e).__name__}): refused", flush=True)
@@ -5234,6 +5440,21 @@ def main():
                                          if (_wind_done is not None and _wind_done.get('ok') and _wind_done.get('count') == 0)
                                          else None),
                                   how='accepted', prov=bool(_prov)))
+            if BFS:
+                # the ledger on disk (append_accepted): no accepted design is lost,
+                # whatever the veto, the deadline or a later checkpoint does
+                append_accepted(tag + '_accepted.npz', design_arrays(pk, zbest, MIMO, flags.get('loop_orders')),
+                                dict(gamma=float(gbest), alpha=float(al_c), round=int(it), job=job_id(),
+                                     t=round(time.time() - t_start, 1), prov=bool(_prov)))
+                # the count's tail at this design, no march (BFSPlant.tail_check): W*
+                # and the norms that set it, rounds before a design nears the cap
+                try:
+                    _tc = D.tail_check(D.bc(xa_, xs_, va_, vs_)[2], bb, cc, aa, nn, KK, -a.eps)
+                    _cMs = 'none' if _tc['cM'] is None else f"{_tc['cM']:.4g}"
+                    print(f"    tail: W* {_tc['wstar']:.4g} (W_T {_tc['wtail']:.4g}): ||D_c|| {_tc['kD']:.4g}, "
+                          f"cL {_tc['cL']:.4g}, cM {_cMs}, pM {_tc['pM']:.4g}", flush=True)
+                except Exception as _e:
+                    print(f"    *** tail: {type(_e).__name__}: {_e}", flush=True)
 
         # adapt the trust radius: a faithful step earns a bigger one, a step
         # whose certified norm blew past t earns a smaller one
@@ -5670,17 +5891,25 @@ def main():
     # -- free where known (the anchor, counted at the start; a design accepted on
     # its count), else counted, at most --veto-counts of them and none the
     # deadline cannot hold -- and says so (wind_veto in the JSON, a '*** ' line).
-    # No such design: nothing is saved.
-    _wind_final, _veto = None, None
+    # No such design: nothing is saved.  The final design is written to
+    # <tag>_final_<jobid> whatever the veto decides (above write_final_design).
+    _wind_final, _veto, _chosen, _ck_keep, _final_path = None, None, None, None, None
+    if BFS:
+        _fin = next((e_ for e_ in reversed(_accepted) if np.array_equal(e_['z'], zbest)), None)
+        if _fin is None:
+            _fin = dict(round=None, z=zbest.copy(), g=float(gbest), al=(np.nan if albest is None else float(albest)),
+                        watch=[q for q in (watch_cur or []) if q is not None], count=None, how='final')
     if BFS and a.wind:
         def _count_entry(e_):
             aa_v, nn_v, KK_v, xa_v, xs_v, va_v, vs_v = pk.unpack(e_['z'])
             bb_v, cc_v, pa_v, *_ = D.bc(xa_v, xs_v, va_v, vs_v)
             return _wind_right_of_margin(bb_v, cc_v, aa_v, nn_v, KK_v, list(e_.get('watch') or []), pa_=pa_v)
-        _fin = next((e_ for e_ in reversed(_accepted) if np.array_equal(e_['z'], zbest)), None)
-        if _fin is None:
-            _fin = dict(round=None, z=zbest.copy(), g=float(gbest), watch=[q for q in (watch_cur or []) if q is not None],
-                        count=None, how='final')
+
+        def _tail_entry(e_):
+            # the count's tail cutoff, no march (milliseconds): the veto's pre-screen
+            aa_v, nn_v, KK_v, xa_v, xs_v, va_v, vs_v = pk.unpack(e_['z'])
+            bb_v, cc_v, pa_v, *_ = D.bc(xa_v, xs_v, va_v, vs_v)
+            return D.tail_check(pa_v, bb_v, cc_v, aa_v, nn_v, KK_v, -a.eps)
         # a further count only while it fits before the job's deadline with a quarter
         # of --deadline-final left for the rest of the save (the record's gain curve,
         # the figures: ~3 min on the test plant); never a provisional design
@@ -5688,21 +5917,47 @@ def main():
             _fin, [e_ for e_ in _accepted if not e_.get('prov') and not np.array_equal(e_['z'], zbest)],
             _count_entry, -a.eps, cap=int(a.veto_counts),
             time_ok=((lambda: (time.time() - t_start) + 1.25 * _wind_sec[0] + 0.25 * a.deadline_final <= a.deadline)
-                     if a.deadline > 0 else None))
-        if _chosen is None:
-            # (a deadline stop's checkpoint stays as it is: the next job counts its
-            # anchor right of -eps first and stops FATAL on a conclusive count > 0)
-            print(f"*** WINDING VETO: no accepted design of this job back to the anchor has a conclusive count of 0 "
-                  f"right of Re={-a.eps:g}: NOT SAVING (the veto is in {os.path.basename(tag)}_veto.json)", flush=True)
-            try:
-                json.dump(_js(dict(case=a.case, wind_veto=_veto, history=hist, code_version=_code_version(),
-                                   seconds=round(time.time() - t_start, 1))), open(tag + '_veto.json', 'w'), indent=1)
-            except Exception as _e:
-                print(f"    veto record failed: {_e!r}", flush=True)
-            return
-        if _veto is not None:
-            zbest, gbest = np.array(_chosen['z'], float), float(_chosen['g'])
-            watch_cur = [q for q in (_chosen.get('watch') or []) if q is not None]
+                     if a.deadline > 0 else None), tail_fn=_tail_entry)
+        # which design a checkpoint may hold now (ckpt_after_veto): the final one
+        # after a pass or a PRE-MARCH veto, the fallback otherwise, the anchor
+        # when nothing is saved
+        _ck_keep = ckpt_after_veto(_veto, _fin, _chosen, next((e_ for e_ in _accepted if e_.get('round') == -1), None))
+    if BFS:
+        _final_path = write_final_design(
+            tag, _fin, (_chosen if a.wind else _fin), _veto, lambda z_: design_arrays(pk, z_, MIMO, flags.get('loop_orders')),
+            extra=dict(_loop_state(), wlo=float(a.wlo), whi=float(a.whi),
+                       active_freqs=np.array(sorted(set(round(float(x), 6) for x in Omega)))))
+    if BFS and a.wind and _chosen is None:
+        print(f"*** WINDING VETO: no accepted design of this job back to the anchor has a conclusive count of 0 "
+              f"right of Re={-a.eps:g}: NOT SAVING (the veto is in {os.path.basename(tag)}_veto.json)", flush=True)
+        try:
+            json.dump(_js(dict(case=a.case, wind_veto=_veto, history=hist, code_version=_code_version(),
+                               seconds=round(time.time() - t_start, 1))), open(tag + '_veto.json', 'w'), indent=1)
+        except Exception as _e:
+            print(f"    veto record failed: {_e!r}", flush=True)
+        # the checkpoint (the last acceptance's: the final design) follows the
+        # deadline stop's rule below: kept after a PRE-MARCH veto, else moved back
+        # to the anchor, else removed -- never left at a vetoed design
+        _ck_e, _ck_why = _ck_keep
+        if _ck_e is _fin:
+            if _deadline_stop:
+                _write_ckpt(_fin['z'], _fin['g'], _fin.get('al', np.nan), list(Omega),
+                            note_=f'checkpoint (the deadline stop, NOT SAVING; {_ck_why})')
+        elif _ck_e is not None:
+            _write_ckpt(_ck_e['z'], _ck_e['g'], _ck_e.get('al', np.nan), list(Omega),
+                        note_=f'checkpoint (NOT SAVING; {_ck_why})')
+        else:
+            for _c in (tag + '_ckpt.npz', tag + '_ckpt.json'):
+                try:
+                    if os.path.exists(_c):
+                        os.remove(_c)
+                except OSError:
+                    pass
+        print(f"    checkpoint: {_ck_why}", flush=True)
+        return
+    if _veto is not None:
+        zbest, gbest = np.array(_chosen['z'], float), float(_chosen['g'])
+        watch_cur = [q for q in (_chosen.get('watch') or []) if q is not None]
     arow, nvec, K, xa, xs, va, vs = pk.unpack(zbest)
     b, c, pa, ps, na, ns = D.bc(xa, xs, va, vs)
     # the alpha recorded on disk MUST come from the certificate: it is what
@@ -5728,9 +5983,17 @@ def main():
         # the end-of-job loop state (inner budget, trust radius, peak members, tau
         # cap: the acceptance-time file held the state before that round's
         # adaptation and any later round's) and, after a veto, the fallback design
-        # -- the next job must not resume from a vetoed one (20261010j stage B)
-        _write_ckpt(zbest, gbest, al, list(Omega),
-                    note_=('checkpoint (the deadline stop' + (', the winding veto\'s fallback' if _veto else '') + ')'))
+        # -- the next job must not resume from a vetoed one (20261010j stage B) --
+        # unless the veto was PRE-MARCH (2026-10-16, ckpt_after_veto): nothing was
+        # counted, so the final design stays and the next job's start count decides
+        # (20261010n: the fallback here erased five decentral jobs' progress)
+        if _ck_keep is not None and _ck_keep[0] is _fin and _veto is not None:
+            _write_ckpt(_fin['z'], _fin['g'], _fin.get('al', np.nan), list(Omega),
+                        note_=f'checkpoint (the deadline stop; {_ck_keep[1]}; the record is the fallback)')
+            print(f"    checkpoint: {_ck_keep[1]} (gamma {_fin['g']:.6f}); the record is the veto's fallback", flush=True)
+        else:
+            _write_ckpt(zbest, gbest, al, list(Omega),
+                        note_=('checkpoint (the deadline stop' + (', the winding veto\'s fallback' if _veto else '') + ')'))
     # DENSE SAVE VETO -- check only, never part of the algorithm.  The
     # certificate above is conditional (continuation); a design about to be
     # written to disk deserves the standalone question, which at GL scale a
@@ -5804,7 +6067,8 @@ def main():
         # for this design (the anchor's count at the start, a count at acceptance)
         wind_n = 0
         wind_info = dict(count=0, line=float(-a.eps), npts=int(_wind_final.get('npts', 0) or 0),
-                         wtail=float(_wind_final.get('wtail', np.nan)), p_plant=int(_wind_final.get('p_plant', -1)),
+                         wtail=float(_wind_final.get('wtail', np.nan)), wstar=float(_wind_final.get('wstar', np.nan)),
+                         p_plant=int(_wind_final.get('p_plant', -1)),
                          seconds=_wind_final.get('seconds'), source=_wind_final.get('source'))
         print(f"winding certificate: 0 eigenvalue(s) right of Re={-a.eps:+.4f} over all frequencies "
               f"({wind_info['source']}; {wind_info['npts']} pts"
@@ -6093,6 +6357,7 @@ def main():
                 # save-time veto (None: the final design passed); GL: right of -eps/2
                 wind_count=wind_n, wind_info=wind_info, wind_line=(float(-a.eps) if BFS else float(-0.5 * a.eps)),
                 wind_veto=(_js(_veto) if _veto is not None else None),
+                final_file=(os.path.basename(_final_path) if _final_path else None),
                 code_version=_code_version(),
                 loop_state=dict(maxit_cur=int(_maxit_cur), sqp_trust=float(_sqp_trust_prev or 0.0), peak_members=len(_peakset),
                                 tau_rho=(float(_tau_rho) if _tau_rho is not None else None), tau_streak=int(_tau_streak)),
@@ -6147,7 +6412,7 @@ def main():
                 norm_psi_a=([D.norm_M(pa[:, j]) for j in range(pa.shape[1])] if MIMO else D.norm_M(pa)),
                 norm_psi_s=([D.norm_M(ps[:, j]) for j in range(ps.shape[1])] if MIMO else D.norm_M(ps)),
                 wind_accept=dict(on=bool(_wind_accept), checks=int(n_wind_accept[0]), refused=int(n_wind_refused[0]),
-                                 gate_inconclusive_cleared=int(n_gate_wind[0])),
+                                 gate_inconclusive_cleared=int(n_gate_wind[0]), pre_march=int(n_wind_premarch[0])),
                 mimo=(dict(m=int(flags['m']), p=int(flags['p']), struct=flags['struct'], loop_orders=list(flags['loop_orders']),
                            start=a.mimo_start, D_c=[[str(v) for v in row] for row in np.asarray(K).reshape(flags['m'], flags['p'])])
                       if MIMO else None),
