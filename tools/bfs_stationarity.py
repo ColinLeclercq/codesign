@@ -9,7 +9,7 @@ measured check of that promise.
         [--deltas 1e-8,...,1e-1] [--trust T] [--complete off|on] [--complete-eps 1e-2,1e-3]
         [--strip off|on] [--cl-line problem|qp] [--fd-cl on|off]
         [--descent off|on|certify] [--descent-deltas 1e-7,...,1e-3] [--descent-ts 1]
-        [--scale-from FILE.npz] [--wpad 3] [--margin 0.05] [--lu-cap 8]
+        [--scale-from FILE.npz] [--wpad 3] [--margin 0.05] [--progress 8:0.0015] [--lu-cap 8]
     python tools/bfs_stationarity.py --selftest      # the convex core on designed toys (no plant, no MPI)
 
 Run from the repository (the sandbox: PATH=<mamba>/fx/bin:$PATH OMP_NUM_THREADS=1
@@ -109,10 +109,19 @@ piece set is certified, and the stop reason -- never "optimal", "converged" or
 lam_i |g_i|) (with constraints) is within a factor 2 of the smallest over the
 list (rho itself is non-increasing in eps: more pieces and cones; its
 normalisations are not).  Its class (design.md 4.2) comes from the measured decrease at
-Delta_v: <= 1e-6 gamma "stationary at the certificate's resolution"; <= 5e-4
-(the progress rule's per-round scale, 0.15 % over 3 rounds) "near
-eps-stationary"; above, "NOT STATIONARY (measured, uncertified)"; a
-level-set-certified lower admissible design, "NOT STATIONARY (certified)".  Without --complete on the piece set is the seeds' and the peakset's:
+Delta_v: <= 1e-6 gamma "stationary at the certificate's resolution"; <= tol / k
+of --progress k:tol (the run's progress rule; default 8:0.0015, the BFS rule
+since 20261010r: 1.9e-4 per round; the 20261010g/n runs used 3:0.0015, 5e-4)
+"near eps-stationary"; above, "NOT STATIONARY (measured, uncertified)"; a
+level-set-certified lower admissible design, "NOT STATIONARY (certified)", the
+level set on the band the run would use at the step (max(whi, max|Im
+lambda(A_c)| + wpad): central 123.90's band end is its compensator pole) and
+the design saved (--json OUT.json -> OUT_certified.npz).  A certified lower
+design at a finite step is not by itself a proof of non-stationarity; that is
+the measured/predicted ratio ~1 at the smallest step (pred linear in Delta:
+the directional derivative is negative).  --complete on watches the known
+tops by location (a region within 1e-3 of one is that top's), re-asking with
+a re-located region watched at its estimate (at most 6 calls per level).  Without --complete on the piece set is the seeds' and the peakset's:
 rho is then an UPPER bound of the true rho(eps) (a missed piece can only add
 to the hull) and pred an optimistic estimate; the "stationary to" statement
 stands, a large rho is not proof.
@@ -145,8 +154,10 @@ gradient has it: exact where v2 is active) and the position rows; with
 z +- h u (two factorisations each).
 
 COST on 2 ranks (test plant, n = 33,593): 5-10 minutes per record with
---complete off --descent on (the Evaluator call is mostly the line), 40-90
-minutes with --complete on --descent certify.  At most mpiexec -n 2 in the
+--complete off --descent on (the Evaluator call is mostly the line), 14-31
+minutes with --descent certify (the level sets at the step's max: 6-22
+minutes), about 30 minutes with --complete on (5 level-set calls on
+decentral 369.87).  At most mpiexec -n 2 in the
 shared sandbox.
 
 DESIGN NOTES (wf_stat/design.md, fixed where the code says otherwise).  The
@@ -180,7 +191,8 @@ GTOL_FD = 1e-6         # FD pass threshold, relative to max(|g.u|, 1e-3 |g|)
 FD_H = 1e-5            # the Richardson pair (h, h/10)
 BIND = 1e-9            # a row binds when mu ||h|| > BIND x gscale (not relative to the largest mu)
 BIND_MN = 1e-6         # ... and, in the min-norm decomposition, when mu ||h|| > BIND_MN x gscale (below: the solver's slack)
-PROGRESS = 5e-4        # the progress rule's per-round scale (0.15 % over 3 rounds): the verdict's class boundary
+PROGRESS = '8:0.0015'  # the BFS progress rule k:tol (20261010r: 0.15 % over 8 rounds; 3:0.0015 before): its per-round
+                       # scale tol / k (1.9e-4; 5e-4 under the 3-round rule) is the verdict's class boundary (--progress)
 
 
 # ============================================================== convex core
@@ -680,6 +692,9 @@ def _args(argv):
     ap.add_argument('--scale-from', dest='scale_from', default=None)
     ap.add_argument('--wpad', type=float, default=3.0, help="the line's band beyond whi (the run's --wpad)")
     ap.add_argument('--margin', type=float, default=0.05, help="the ports' margin (the run's --bfs-margin)")
+    ap.add_argument('--progress', default=PROGRESS,
+                    help="the run's progress rule k:tol (--stop-progress; default 8:0.0015, the BFS rule since 20261010r; "
+                         "the 20261010g/n runs used 3:0.0015): the class boundary of the verdict is its per-round scale tol / k")
     ap.add_argument('--eps-s', dest='eps_s', type=float, default=None, help="stability margin (default the JSON's eps)")
     ap.add_argument('--lu-cap', dest='lu_cap', type=int, default=8)
     ap.add_argument('--json', default=None)
@@ -812,9 +827,17 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
     if a.complete == 'on':
         t0 = time.time()
         ce = sorted(set(float(v) for v in (a.complete_eps.split(',') if a.complete_eps else [eps_max, 1e-3])), reverse=True)
+        # WATCHED BY LOCATION (the review of 2026-10-17): a region within 1e-3 of a known top is that top's (tol 1:
+        # lattice._level then compares the row's value with 0).  With tol 1e-9 a region around a known top whose
+        # top estimate (the cubic Hermite fit on its crossings, wide at gamma (1 - 1e-2)) overshot the Newton top by
+        # 1e-9 was reported, re-located onto the known top, and the loop stopped there -- the rest of the band
+        # unexamined and the piece set never certified.  A located region that lands on a known top is watched at
+        # its estimate from the next call on.  (A second top inside a known top's region is not separated: the
+        # finer levels of --complete-eps are what can separate it.)
         for ec in ce:
+            extra = []
             for rep in range(6):
-                lev = lat.level(z0, gam * (1 - ec), 0.0, whi, watch=(1e-9, [(t['w'], t['s']) for t in tops]))
+                lev = lat.level(z0, gam * (1 - ec), 0.0, whi, watch=(1.0, [(t['w'], t['s']) for t in tops] + extra))
                 comp.append(dict(eps=ec, outcome=lev['outcome'], uncovered=float(lev['uncovered']), cross=lev['cross'],
                                  shifts=int(lev['shifts']), waves=int(lev['waves'])))
                 P(f"  level set at gamma (1 - {ec:g}): {lev['outcome']}, uncovered {lev['uncovered']:.2e}, "
@@ -828,10 +851,11 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
                 tops = merge_tops(tops + [dict(w=float(w_), s=float(s_), top=bool(st.get('top')) or w0_ > whi, edge=bool(st.get('edge')) and w0_ <= whi,
                                                seed=float(c_[0]), end=bool(w0_ > whi))
                                           for (w_, s_), (w0_, _), st, c_ in zip(new, new0, sts, lev['cross'])])
+                extra += [(float(c_[0]), float(s_)) for (w_, s_), c_ in zip(new, lev['cross'])]
                 if len(tops) == n0:
-                    P("    the regions' tops are known tops (the region estimate above the watched value): stop")
+                    P("    the regions' tops are known tops (a region seen more than 1e-3 from its top): asked again "
+                      "with the regions watched at their estimates")
                     comp[-1]['outcome'] += ' (re-located onto known tops)'
-                    break
         tm['complete'] = time.time() - t0
     out['completeness'] = comp
     final = {}
@@ -1177,15 +1201,18 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
         sc_, bl_ = active_set(ep); ac, hp = cons_at(ep)
         gs2, gs1, res = measure(ep, sc_, bl_, ac, hp)
         gmin = min(pieces[i]['gn2'] for i, _ in sc_ + bl_)
+        gsw = max(res['group_sep'].items(), key=lambda kv: kv[1]) if res['group_sep'] else (None, None)
         prof.append(dict(eps=ep, n_pieces=len(sc_) + len(bl_), n_cons=len(ac) + len(hp), rho2_rel=res['r2']['rho'] / gs2,
                          rho2_nc_rel=res['r2_nc']['rho'] / gs2, rho2_rel_min=res['r2']['rho'] / gmin,
-                         rho2_rel_w=res['r2']['rho'] / max(res['r2']['wgt'], 1e-300)))
+                         rho2_rel_w=res['r2']['rho'] / max(res['r2']['wgt'], 1e-300), group_sep_worst=gsw))
     out['profile'] = prof
     tm['measure'] += time.time() - t1
     if prof:
         P(f"  profile (rho_2 just past each entry eps of P({eps_p:g})): " + '; '.join(
             f"{q['eps']:.2e}: {q['rho2_rel']:.2e} ({q['n_pieces']}p {q['n_cons']}c, /min|g| {q['rho2_rel_min']:.2g}, "
-            f"/wgt {q['rho2_rel_w']:.2g})" for q in prof))
+            f"/wgt {q['rho2_rel_w']:.2g}, worst group {q['group_sep_worst'][0]} {q['group_sep_worst'][1]:.2g})" for q in prof))
+        P(f"  (worst group: the group-wise necessary condition, scale-free; 1 = no convex combination of the active pieces "
+          f"and cones cancels in that group's coordinates: not eps-stationary at that eps whatever the packer's scales)")
     hs = (J.get('history') or [{}])[-1] if J.get('history') else {}
     if 'stat_value' in hs:
         P(f"  (the record's stat_value {hs['stat_value']:.4g} is ||grad_L|| of the last QP, not this residual)")
@@ -1350,6 +1377,17 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
     # ---------------------------------------------------------------- 10. descent test
     dsc = []; Dv = None; cert = None; zsteps = {}
 
+    def band_at(zz):
+        """The band's upper end the run would use at zz (run_case_epi band_from_controller, BFS: it only grows,
+        to cover every compensator pole: max(whi, max|Im lambda(A_c)| + wpad))."""
+        im_ = np.abs(np.linalg.eigvals(ctl.A_of(*pk.unpack(zz)[0])).imag)
+        return max(whi, (float(im_.max()) + a.wpad) if im_.size else 0.0)
+    wb0 = band_at(z0)
+    out['band_rule_at_record'] = wb0
+    if wb0 > whi * (1 + 1e-9):
+        P(f"  WARNING: the record's band [0, {whi:.6f}] is narrower than the run's rule at its own design "
+          f"(max|Im lambda(A_c)| + wpad = {wb0:.6f}): its gamma, the tops and this measure are over too narrow a band")
+
     def ctrl_check(zz):
         """The compensator's abscissa and the modal rows' max v - L at zz (exact, r x r)."""
         ar_ = pk.unpack(zz)[0]
@@ -1479,16 +1517,23 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
             cert_tries = []
             for best in sorted(good, key=lambda q: q['actual'])[:3]:
                 zt = zsteps[(best['Delta'], best['t'])]        # the step as the descent test measured it (corrected)
-                ln = lat.line(zt, eps_s, 0.0, whi + a.wpad)
+                # the band the run would certify z + d on: it only grows, to max|Im lambda(A_c)| + wpad
+                # (run_case_epi band_from_controller, BFS; central 123.90's whi 24.9237 IS its pole at 21.924i + 3):
+                # the step's own band, not the record's, or a step that moves that pole up is judged on too narrow a band
+                whi_t = band_at(zt)
+                ln = lat.line(zt, eps_s, 0.0, whi_t + a.wpad)
                 mt = gref * (1 + best['actual'])
                 lv = None; found = []
                 ok_line = bool(ln['clear']) and float(ln['alpha']) <= -eps_s - mg
+                if whi_t > whi * (1 + 1e-12):
+                    # (a peak in the new part of the band is the level set's to find: it covers [0, whi_t])
+                    P(f"    the step widens the band: whi {whi:.6f} -> {whi_t:.6f} (compensator |Im| + wpad)")
                 if ok_line:
                     for rep in range(3):
-                        lv = lat.level(zt, mt * (1 + CERT_RTOL), 0.0, whi)
+                        lv = lat.level(zt, mt * (1 + CERT_RTOL), 0.0, whi_t)
                         if lv['outcome'] != 'region' or not lv['cross']:
                             break
-                        new = clip_band(lat, zt, lat.peak_tops(zt, [float(w_) for w_, _ in lv['cross']], RAD), whi)
+                        new = clip_band(lat, zt, lat.peak_tops(zt, [float(w_) for w_, _ in lv['cross']], RAD), whi_t)
                         found += [(float(w_), float(s_)) for w_, s_ in new]
                         m2 = max([mt] + [float(s_) for _, s_ in new])
                         P(f"    level set at {mt * (1 + CERT_RTOL):.6f} (Delta {best['Delta']:.0e}): region(s) "
@@ -1501,10 +1546,11 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
                 c_ = dict(Delta=best['Delta'], t=best['t'], max_top=mt, actual=mt / gref - 1, pred=best['pred'],
                           measured=best['actual'], line_clear=bool(ln['clear']), alpha=float(ln['alpha']),
                           level=(lv['outcome'] if lv else None), uncovered=(float(lv['uncovered']) if lv else None),
-                          found=found, certified=bool(ok), gamma_bound=mt * (1 + CERT_RTOL))
+                          found=found, certified=bool(ok), gamma_bound=mt * (1 + CERT_RTOL), whi_t=whi_t)
                 cert_tries.append(c_)
                 P(f"  certificate at Delta {best['Delta']:.0e}: line clear {ln['clear']} alpha {ln['alpha']:+.7f} "
-                  f"(needs <= {-eps_s - mg:+.7f}); level set at {mt * (1 + CERT_RTOL):.6f}: {lv['outcome'] if lv else 'not run'} -> "
+                  f"(needs <= {-eps_s - mg:+.7f}, Im in [0, {whi_t + a.wpad:.4f}]); level set on [0, {whi_t:.4f}] at "
+                  f"{mt * (1 + CERT_RTOL):.6f}: {lv['outcome'] if lv else 'not run'} -> "
                   + (f"CERTIFIED: gamma(z + d) <= {mt * (1 + CERT_RTOL):.6f} < {gam:.6f} ({mt / gref - 1:+.3e} relative)" if ok else
                      'not certified'))
                 if ok:
@@ -1512,6 +1558,28 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
             cert = next((c_ for c_ in cert_tries if c_['certified']), cert_tries[-1] if cert_tries else None)
             if cert is not None:
                 cert['tries'] = [dict((k_, v_) for k_, v_ in c_.items() if k_ != 'tries') for c_ in cert_tries]
+            if cert is not None and cert['certified']:
+                # the certified design itself (the review of 2026-10-17: it was in no file): packed and unpacked in the
+                # JSON, and as an npz with the record's design keys beside it (--json OUT.json -> OUT_certified.npz)
+                try:
+                    zc_ = zsteps[(cert['Delta'], cert['t'])]
+                    u_ = pk.unpack(zc_)
+                    des = dict(d=np.asarray(u_[0][0]), e=np.asarray(u_[0][1]), f=np.asarray(u_[0][2]), nvec=np.asarray(u_[1]),
+                               K=np.asarray(u_[2]), xa=np.asarray(u_[3], float), xs=np.asarray(u_[4], float))
+                    if len(u_[0]) > 3:
+                        des['Bc'] = np.asarray(u_[0][3])
+                    for k_ in ('m', 'p', 'struct', 'loop_orders'):
+                        if k_ in z.files:
+                            des[k_] = z[k_]
+                    cert['design'] = dict(z=np.asarray(zc_, float), **{k_: v_ for k_, v_ in des.items() if k_ not in ('struct',)})
+                    if a.json:
+                        fn_ = os.path.splitext(a.json)[0] + '_certified.npz'
+                        np.savez(fn_, **des, gamma_bound=cert['gamma_bound'], alpha=cert['alpha'], whi=cert['whi_t'],
+                                 parent=os.path.abspath(a.record), parent_gamma=gam, Delta=cert['Delta'])
+                        cert['design_file'] = fn_
+                        P(f"  the certified design: {fn_}")
+                except Exception as _e:
+                    P(f"  (the certified design was not saved: {type(_e).__name__}: {_e})")
             # the level set's tops correct the measured decrease (a lower bound of the step's max): Delta_v again
             corr = {c_['Delta']: c_['actual'] for c_ in cert_tries}
             for q in good:
@@ -1566,7 +1634,12 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
     pick = min([m_ for m_ in ml if m_['rho2_rel_w'] <= 2 * rmin], key=lambda q: q['eps'])
     clk = [m_ for m_ in meas if m_['eps'] == CERT_RTOL][0]
     # the class (design.md 4.2): pred(Delta_v)/gamma -- measured where the first-order model holds -- against the
-    # certificate's rtol and the progress rule's per-round scale (0.15 % over 3 rounds, ~5e-4)
+    # certificate's rtol and the progress rule's per-round scale tol / k (--progress; 8:0.0015 since 20261010r: 1.9e-4.
+    # The constant was 5e-4, the 3-round rule's, so a 3.4e-4 decrease read "near eps-stationary" where the current
+    # rule would go on)
+    pk_, pt_ = a.progress.split(':')[:2]
+    prog = float(pt_) / max(int(pk_), 1)
+    prog_txt = f"~{prog:.1e} per round ({a.progress})"
     if cert and cert['certified']:
         # the size of the certified decrease belongs in the head: a lower admissible design 1.4e-4 below (central
         # 123.90, 13 tops within 4e-4: an equiripple plateau) and one 8e-3 below (central 153.62) are not the same reading
@@ -1575,14 +1648,15 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
         # stability line on [0, whi + wpad], the compensator and the positions); the run's acceptance also counts
         # windings over ALL w (the tail bound), which this tool does not run
         head = (f"NOT STATIONARY (certified: a design {dec:.1e} gamma lower at Delta {cert['Delta']:.0e}, admissible on the "
-                f"line test Im in [0, {whi + a.wpad:g}] -- the winding count over all w not run"
-                + ("; below the progress rule's ~5e-4 per round: near eps-stationary at that scale" if dec <= PROGRESS else '')
+                f"line test Im in [0, {cert.get('whi_t', whi) + a.wpad:g}] -- the winding count over all w not run"
+                + (f"; below the progress rule's {prog_txt}: near eps-stationary at that scale" if dec <= prog else
+                   f"; above the progress rule's {prog_txt}")
                 + "): ")
     elif Dv:
         av = -av_of(Dv)
         head = ('stationary at the certificate\'s resolution (measured): ' if av <= CERT_RTOL else
-                ('near eps-stationary (measured decrease below the progress rule\'s ~5e-4 per round): ' if av <= PROGRESS
-                 else 'NOT STATIONARY (measured, uncertified: a first-order decrease above the progress rule\'s scale): '))
+                (f'near eps-stationary (measured decrease below the progress rule\'s {prog_txt}): ' if av <= prog
+                 else f'NOT STATIONARY (measured, uncertified: a first-order decrease above the progress rule\'s {prog_txt}): '))
     else:
         head = ''
     bgc = dict(pick.get('group_sep') or {})
