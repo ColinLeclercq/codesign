@@ -29,11 +29,13 @@
 # whose arm ended first, as soon as it ends (20261010n: the 774364 c151 async
 # half sat idle 1.8 h after its progress stop), unless less than QUEUE_MIN
 # seconds (default 3600) are left in the job -- it is then reported, not
-# started.  Each arm writes logs/bfs_testplant_<job>_<OUT's name>.log, a log of
-# the same form as a testplant job's (the names must differ); this job's own
-# log says where and when each arm ran and how it ended.  STRIP=1 (common or an
-# arm's) is refused before anything starts: the strip arm was removed on
-# 2026-10-16 (BFS.md 8).
+# started (a remaining time it cannot read: started).  Each arm writes
+# logs/bfs_testplant_<job>_<OUT's name>.log, a log of the same form as a
+# testplant job's (the names must differ); this job's own log says where and
+# when each arm ran and how it ended, at a signal (the time limit) too.  STRIP=1
+# (common or an arm's) is refused before anything starts: the strip arm was
+# removed on 2026-10-16 (BFS.md 8); so is a DEADLINE that would reach a queued
+# arm (it is counted from the driver's start).
 #
 # Why (2026-10-15): sator cancels a second job of the same user started on a
 # node, as root, 6 s in, before its prolog (774342, 774343, 774346: "CANCELLED
@@ -84,6 +86,16 @@ for L in {A..Z}; do
 done
 NA=${#TAGS[@]}
 [ "$NA" -ge 1 ] || { echo "*** no arm: ARM_A=\"OUT=... ...\" ARM_B=\"OUT=... ...\" (ARM_C, ... queue behind them)"; exit 1; }
+# DEADLINE, the driver's seconds from ITS start (testplant.slurm reads the job's end when it is
+# unset), cannot be given for an arm the queue starts later: counted from that arm's start, it
+# would run the driver past the job's end, cut by the time limit before its save (the review of
+# 2026-10-17).  The first two arms start at once and may carry it, as before the queue.
+for ((i = 2; i < NA; i++)); do
+    dl=${DEADLINE:-}
+    read -ra wa <<< "${WORDS[$i]}"
+    for w in "${wa[@]}"; do case "$w" in DEADLINE=*) dl=${w#DEADLINE=} ;; esac; done
+    [ -z "$dl" ] || { echo "*** DEADLINE=$dl reaches the queued arm ${TAGS[$i]}: leave it unset (each arm then takes the job's end) or give it in ARM_A/ARM_B's words only"; exit 1; }
+done
 for ((i = 0; i < NA; i++)); do
     for ((j = i + 1; j < NA; j++)); do
         [ "$(realpath -m "${OUTS[$i]}")" != "$(realpath -m "${OUTS[$j]}")" ] \
@@ -136,6 +148,26 @@ start_arm() {          # start_arm HALF I: arm I on half HALF, in the background
     HOW[$i]="half $k, started $(date -Is)"
     echo "=== arm ${TAGS[$i]} ($((i + 1))/$NA) on half $k (CPUs ${H[$k]}): ${WORDS[$i]} -> ${OUTS[$i]} (log ${LOGS[$i]}, pid ${PIDS[$k]}, $(date -Is)) ==="
 }
+# the time limit (or scancel): Slurm signals every process of the job, the arms' with it
+# (their subshells reset the trap), and the summary at the end of this script never comes; this
+# log then says which arms were cut and which never started (the review of 2026-10-17)
+on_signal() {
+    trap - TERM INT
+    echo ""
+    echo "*** pair job ${SLURM_JOB_ID:-none}: signal received $(date -Is); the queue then:"
+    local i
+    for ((i = 0; i < NA; i++)); do
+        if [ -n "${RCS[$i]}" ]; then
+            echo "    arm ${TAGS[$i]}: ended with exit ${RCS[$i]} (${HOW[$i]})"
+        elif [ -n "${HOW[$i]}" ] && [[ "${HOW[$i]}" != "not started"* ]]; then
+            echo "    arm ${TAGS[$i]}: CUT by the signal (${HOW[$i]}; its log ${LOGS[$i]})"
+        else
+            echo "    arm ${TAGS[$i]}: ${HOW[$i]:-not started}: ${WORDS[$i]}"
+        fi
+    done
+    exit 143
+}
+trap on_signal TERM INT
 PIDS=("" ""); ON=("" ""); NEXT=0
 for k in 0 1; do
     if [ "$NEXT" -lt "$NA" ]; then start_arm "$k" "$NEXT"; NEXT=$((NEXT + 1)); fi

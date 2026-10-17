@@ -2142,7 +2142,9 @@ def ckpt_after_veto(veto, final, chosen, anchor):
     the veto's fallback; else (NOT SAVING) the anchor, the job's start; else
     None (no design may stay).  Never a design whose march came back
     INCONCLUSIVE or with a count > 0 (20261010j stage B: the next job must not
-    resume from a vetoed design; the NOT SAVING path used to leave it there)."""
+    resume from a vetoed design; the NOT SAVING path used to leave it there).
+    The save applies it right after the veto (2026-10-17), before anything that
+    can end the save early."""
     if veto is None:
         return final, 'the final design'
     if veto['final'].get('outcome') == 'pre-march':
@@ -5280,9 +5282,16 @@ def main():
                     # (None in the veto's ledger, which counts or screens it at the save) --
                     # instead of a refusal that would repeat on every later candidate as
                     # long as the tail cannot be cut (a stall; 2026-10-16)
+                    # -- on the BFS only, where that veto exists (`if BFS and a.wind` at the
+                    # save): GL has no save-time veto (its dense save check refuses the whole
+                    # record) and keeps its refusal, as before 9bfdee0 (the review, 2026-10-17)
                     n_wind_premarch[0] += 1
-                    print(f"    *** winding check at acceptance: no count (pre-march: {_e}): accepted on the "
-                          f"gate, the save-time veto decides", flush=True)
+                    if BFS and a.wind:
+                        print(f"    *** winding check at acceptance: no count (pre-march: {_e}): accepted on the "
+                              f"gate, the save-time veto decides", flush=True)
+                    else:
+                        _okc = False
+                        print(f"    winding check at acceptance failed (pre-march: {_e}): refused", flush=True)
                 except Exception as _e:
                     _okc = False
                     print(f"    winding check at acceptance failed ({type(_e).__name__}): refused", flush=True)
@@ -5927,6 +5936,27 @@ def main():
         # after a pass or a PRE-MARCH veto, the fallback otherwise, the anchor
         # when nothing is saved
         _ck_keep = ckpt_after_veto(_veto, _fin, _chosen, next((e_ for e_ in _accepted if e_.get('round') == -1), None))
+        if _ck_keep[0] is not _fin:
+            # APPLIED AT ONCE (the review of 2026-10-17): until here the checkpoint is
+            # the last acceptance's file, the final design the veto just refused, and
+            # whatever ends the save from now on -- the time limit inside the record's
+            # certificate or figures, an exception, the NOT SAVING of an unstable record
+            # below, which returns before any checkpoint line -- left it there for the
+            # next job.  The deadline stop rewrites it below with the end-of-job state,
+            # a finished run removes it.
+            _ck_e, _ck_why = _ck_keep
+            if _ck_e is not None:
+                _write_ckpt(_ck_e['z'], _ck_e['g'], _ck_e.get('al', np.nan), list(Omega),
+                            note_=f"checkpoint (the save-time veto{', NOT SAVING' if _chosen is None else ''}; {_ck_why})")
+            else:
+                for _c in (tag + '_ckpt.npz', tag + '_ckpt.json'):
+                    try:
+                        if os.path.exists(_c):
+                            os.remove(_c)
+                    except OSError:
+                        pass
+            print(f"    checkpoint: {_ck_why}" + (f" (gamma {_ck_e['g']:.6f})" if _ck_e is not None else '')
+                  + ", set at the veto", flush=True)
     if BFS:
         _final_path = write_final_design(
             tag, _fin, (_chosen if a.wind else _fin), _veto, lambda z_: design_arrays(pk, z_, MIMO, flags.get('loop_orders')),
@@ -5940,25 +5970,16 @@ def main():
                                seconds=round(time.time() - t_start, 1))), open(tag + '_veto.json', 'w'), indent=1)
         except Exception as _e:
             print(f"    veto record failed: {_e!r}", flush=True)
-        # the checkpoint (the last acceptance's: the final design) follows the
-        # deadline stop's rule below: kept after a PRE-MARCH veto, else moved back
-        # to the anchor, else removed -- never left at a vetoed design
+        # the checkpoint follows the deadline stop's rule below: kept after a
+        # PRE-MARCH veto (refreshed at a deadline stop with the end-of-job state),
+        # else moved back to the anchor or removed at the veto above -- never left
+        # at a vetoed design
         _ck_e, _ck_why = _ck_keep
         if _ck_e is _fin:
             if _deadline_stop:
                 _write_ckpt(_fin['z'], _fin['g'], _fin.get('al', np.nan), list(Omega),
                             note_=f'checkpoint (the deadline stop, NOT SAVING; {_ck_why})')
-        elif _ck_e is not None:
-            _write_ckpt(_ck_e['z'], _ck_e['g'], _ck_e.get('al', np.nan), list(Omega),
-                        note_=f'checkpoint (NOT SAVING; {_ck_why})')
-        else:
-            for _c in (tag + '_ckpt.npz', tag + '_ckpt.json'):
-                try:
-                    if os.path.exists(_c):
-                        os.remove(_c)
-                except OSError:
-                    pass
-        print(f"    checkpoint: {_ck_why}", flush=True)
+            print(f"    checkpoint: {_ck_why}", flush=True)
         return
     if _veto is not None:
         zbest, gbest = np.array(_chosen['z'], float), float(_chosen['g'])

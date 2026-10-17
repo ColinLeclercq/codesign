@@ -503,8 +503,10 @@ class BFSPlant(FECoDesign):
         64 iterations, 0.3 s, cM = 738.0455, the LU value), and a CG that does not
         converge only loosens it.  It needs C zero off the free velocity dofs
         (Cauchy-Schwarz in M_vv): checked, else None; None too, logged, when the
-        L2 computation fails at all (the H^1 tail then stands alone: a failure
-        here must not become a failed count)."""
+        L2 computation fails at all, the element floor included (the H^1 tail then
+        stands alone: a failure here must not become a failed count).  A C with
+        entries on pressure dofs has no tail bound at all (cL = inf: neither bound
+        sees c^H p)."""
         import hashlib
         c = np.asarray(c, complex)
         self._Llu()
@@ -519,13 +521,29 @@ class BFSPlant(FECoDesign):
         LC = np.column_stack([self._Llu_.solve(Cv[:, j]) for j in range(Cv.shape[1])])
         cL = float(np.sqrt(max(np.linalg.eigvalsh(Cv.conj().T @ LC).max(), 0.0)))
         cM = None
+        cr = c.reshape(self.n, -1)
         off = np.ones(self.n, bool); off[self._Lv] = False
-        lf = self._mvv_floor()
-        if np.any(c.reshape(self.n, -1)[off] != 0):
-            print("    gbound: the sensor has entries off the free velocity dofs: the H^1 tail alone", flush=True)
-        elif lf is not None:
+        if np.any(cr[self.comp >= 2] != 0):
+            # c^H x then reads the pressure, which neither bound controls (both bound
+            # c^H u through the velocity alone): no tail bound at all -- gbound inf, the
+            # count's TailBoundError before any march -- not the H^1 bound on c_v this
+            # branch claimed (the review of 2026-10-17; the shear sensor has no pressure
+            # entries, so no run took it)
+            print("    gbound: the sensor has entries on pressure dofs: no tail bound (neither the H^1 nor the L2 "
+                  "one bounds c^H p)", flush=True)
+            cL = np.inf
+        elif np.any(cr[off] != 0):
+            # on the Dirichlet dofs only: the response is zero there (M's rows are zero,
+            # A's -I), so c^H x = c_v^H u_v and the H^1 bound holds; the L2 one keeps its
+            # stricter premise
+            print("    gbound: the sensor has entries on Dirichlet dofs: the H^1 tail alone", flush=True)
+        else:
+            # the floor inside the try too (the review of 2026-10-17): a failure of its
+            # reassembly must leave the H^1 tail, not fail the count
             try:
-                cM = self._cM_bound(Cv, lf)
+                lf = self._mvv_floor()
+                if lf is not None:
+                    cM = self._cM_bound(Cv, lf)
             except Exception as _e:
                 print(f"    gbound: the L2 tail norm failed ({type(_e).__name__}: {_e}): the H^1 tail alone", flush=True)
         if len(cache) >= 8:

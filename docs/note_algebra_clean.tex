@@ -1483,7 +1483,7 @@ so the factorisation is \code{qdldl}'s, in real arithmetic: $3$\,s at $n=191{,}7
 Validated on a $1{,}279$-dof mesh against dense generalised eigenproblems on $\ker B$:
 equal to $10^{-7}$, from above.  On the test plant $\max\mathrm{Re}\,W\le1.76$, $|\mathrm{Im}|\le87.9$.
 
-\subsection{The winding count for a wall-shear sensor: an $H^1$ tail}
+\subsection{The winding count for a wall-shear sensor: an $H^1$ tail and an $L^2$ tail}
 The count of \eqref{eq:count} needs $|k(s)G(s)|<\tfrac12$ beyond a frequency $W_T$, from a
 bound on $G(s)=c\hp(sM-A)^{-1}M\psi_a$.  With $x=(u,p)$ the response,
 \[
@@ -1491,7 +1491,9 @@ s\|u\|_M^2-u\hp A_{vv}u=(u,\psi_a)_M,\qquad Bu=0 .
 \]
 (i) $\mathrm{dist}(s,W)\,\|u\|_M^2\le\|u\|_M\|\psi_a\|_M$, so $\|u\|_M\le\|\psi_a\|_M/d$,
 $d\le\mathrm{dist}(s,W)$ from the heights (\code{numrange\_distance}).  (ii) The shear sensor
-is bounded only in $H^1$: $|c\hp u|\le\|c\|_{L^{-1}}\|u\|_L$, $L$ the velocity stiffness,
+is not bounded in $L^2$ in the continuum (a trace of the gradient; the discrete one is, with a
+constant that grows as the wall mesh is refined: (iv) below), but it is in $H^1$:
+$|c\hp u|\le\|c\|_{L^{-1}}\|u\|_L$, $L$ the velocity stiffness,
 $\|c\|_{L^{-1}}^2=c\tp L^{-1}c$ (one solve).  (iii) With
 $\beta\ge\lambda_{\max}(\tfrac12(A_{vv}+A_{vv}\tp)+\nu'L,\,M)$ on $\ker B$ (certified as above,
 $\nu'=\nu/2$), $-\mathrm{Re}\,u\hp A_{vv}u\ge\nu'\|u\|_L^2-\beta\|u\|_M^2$, and the real part of
@@ -1513,7 +1515,10 @@ $\lambda_{\max}(C_v\hp Y+Y\hp R)+\|R\|_2^2/\lambda_{\mathrm{floor}}$, $\lambda_{
 element floor $\min_e\lambda_{\min}(M_e)\le\lambda_{\min}(M_{vv})$ (thrift level (b) of the GL tail,
 \S\ref{sec:winding-num}; interlacing: $M_{vv}$ is a principal submatrix of the assembled mass,
 and the floor's premise is checked by reassembling $M$ from the mesh).  The count uses
-$\min(H^1, L^2)$.  Test plant, decentral $2\times2$ record $369.87$: $\|C\|_{M_{vv}^{-1}}=738.05$
+$\min(H^1, L^2)$.  Both bounds read $c\hp x$ through the velocity alone: $c$ must be zero on the
+pressure dofs (else no tail bound at all, the count's \code{TailBoundError}), while entries on
+the Dirichlet dofs, where the response is zero, leave the $H^1$ bound (the $L^2$ one keeps its
+stricter premise).  Test plant, decentral $2\times2$ record $369.87$: $\|C\|_{M_{vv}^{-1}}=738.05$
 (floor $1.94\times10^{-5}$ against $\lambda_{\min}=1.08\times10^{-4}$); the $L^2$ bound is the
 smaller from $w\approx100$ ($51.9$ against $102.5$), and $W_T$ falls from $7.86\times10^6$ to
 $7680$.  ERRATA (2026-10-16): this subsection claimed the $d^{-1/2}$ decay was genuine, from the
