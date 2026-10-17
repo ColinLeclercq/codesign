@@ -784,7 +784,8 @@ class Evaluator:
             # MODAL compensator (controller.modal_rows): two smooth rows per 2 x 2
             # block, exact (Routh-Hurwitz), also where poles merge
             Acm = self.ctl.A_of(*arow)
-            for v_, gd_ in self.ctl.modal_rows(pk.modal, arow[0], arow[1], arow[2], max(-self.eps, self.ctrl_max)):
+            for v_, gd_ in self.ctl.modal_rows(pk.modal, arow[0], arow[1], arow[2], max(-self.eps, self.ctrl_max),
+                                               scales=getattr(pk, 'modal_s', None)):
                 gc = pk.zero_grad() if (getattr(pk, 'mimo', False) or getattr(pk, 'vec_pos', False)) \
                     else dict(n=np.zeros(Acm.shape[0], complex), K=0j, xa=0.0, xs=0.0)
                 gd = np.zeros(Acm.shape[0], complex); ge = np.zeros(max(Acm.shape[0] - 1, 0), complex); gf = ge.copy()
@@ -1608,7 +1609,7 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
         modal_rows minus the line) and their packed gradients."""
         ar_ = pk.unpack(zz_)[0]; rr_ = len(ar_[0])
         H_, G_ = [], []
-        for v_, gd_ in ev_fn.ctl.modal_rows(pk.modal, ar_[0], ar_[1], ar_[2], lim):
+        for v_, gd_ in ev_fn.ctl.modal_rows(pk.modal, ar_[0], ar_[1], ar_[2], lim, scales=getattr(pk, 'modal_s', None)):
             gc = pk.zero_grad() if (getattr(pk, 'mimo', False) or getattr(pk, 'vec_pos', False)) \
                 else dict(n=np.zeros(rr_, complex), K=0j, xa=0.0, xs=0.0)
             gd = np.zeros(rr_, complex); ge = np.zeros(max(rr_ - 1, 0), complex); gf = ge.copy()
