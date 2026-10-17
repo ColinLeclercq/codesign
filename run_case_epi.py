@@ -3714,7 +3714,16 @@ def main():
         pk = Packer(D, flags, *pk_args)
     z = pk.z0()
     _sp_rec = None
-    if a.start_perturb:
+    _sp_file = tag + '_start_perturb.json'
+    if a.start_perturb and os.path.exists(_sp_file):
+        # once per arm: a later job of the same arm (CONTINUE, the same flags) goes on from
+        # its own checkpoint, already moved -- not moved again at every job boundary
+        try:
+            _sp_rec = json.load(open(_sp_file))
+        except Exception:
+            _sp_rec = dict(note='unreadable')
+        print(f"start perturbed in an earlier job of this run ({_sp_file}: {_sp_rec}): not again", flush=True)
+    elif a.start_perturb:
         # THE A/A PAIR (20261010s): one arm from the parent as it is, the other from
         # the parent moved by --start-perturb (1e-12 moved GL paths by 9-20 % mid-run,
         # 0.014-0.7 % at the stop, LESSONS 21); never measured on the BFS
@@ -3748,7 +3757,9 @@ def main():
                 raise SystemExit(f"--start-perturb {a.start_perturb:g}: the moved start is not certified inside the "
                                  f"closed loop's line (alpha {_alp:+.10f}, clear {_clp})")
         _sp_rec = dict(eps=float(a.start_perturb), seed=int(a.start_perturb_seed), size=float(np.linalg.norm(_dz)),
-                       inf=float(np.max(np.abs(_dz))), n=int(len(z)))
+                       inf=float(np.max(np.abs(_dz))), n=int(len(z)), job=os.environ.get('SLURM_JOB_ID'),
+                       when=time.strftime('%Y-%m-%dT%H:%M:%S'), code_version=_code_version())
+        json.dump(_sp_rec, open(_sp_file, 'w'), indent=1)
         print(f"start perturbed (--start-perturb {a.start_perturb:g}, seed {a.start_perturb_seed}): |dz|_2 "
               f"{_sp_rec['size']:.3e}, |dz|_inf {_sp_rec['inf']:.3e} over {len(z)} packed coordinates; compensator "
               f"abscissa {_alc[0]:+.12f} -> {_alc[1]:+.12f}", flush=True)
