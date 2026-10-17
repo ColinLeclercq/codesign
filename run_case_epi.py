@@ -3714,7 +3714,7 @@ def main():
             _dK = float(np.abs(_ctl_m.tf_samples(_d, _e, _f, _B, _C, K0, _wg) - _K0s).max())
             _tf_err = _dK / float(np.abs(_K0s).max()) if np.any(_K0s) else _dK
             _om = [x_ for x_ in _ninfo['om'] if x_ is not None]
-            print(f"normal form (--ctrl-modal normal): the start's {_was} converted, om re-centred "
+            print(f"normal form (--ctrl-modal normal): the start's {_was} {'re-centred' if _was == 'normal form' else 'converted, om centred'} "
                   f"({len(_om)} blocks, om {min(_om, default=np.nan):.4g} .. {max(_om, default=np.nan):.4g}, "
                   f"cond [b, M b] <= {max([c_ for c_ in _ninfo['condQ'] if c_ is not None], default=np.nan):.3g}"
                   + (f", pivots {_ninfo['pivots']}" if MIMO and flags.get('struct') != 'decentral' else '')
