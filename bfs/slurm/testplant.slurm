@@ -19,7 +19,8 @@
 #         total order R = 10 by default, decentral = two loops of 5; each case has its
 #         own directory, e.g. testplant_bfs/zero_m2p2_central_o10_s0_r300)
 #        (as many rounds as fit: the driver stops before the job's end, or when
-#         progress stops)
+#         progress stops -- under 0.15 % over 8 rounds, SISO and MIMO, since
+#         2026-10-16; bfs/run_bfs.sh)
 #   RESUME=1 OUT=testplant_bfs/zero_s0_r5 OUTER=10 sbatch bfs/slurm/testplant.slurm
 #        (10 more rounds for that run: from its checkpoint if it was stopped, from
 #         its record if it finished; CONTINUE=1 is the same.  A directory that
@@ -39,10 +40,6 @@
 #   ORACLE=lattice LATTICE_K=2 ... sbatch ...
 #        (two eigenvalues per disk centre of the stability line, each with its
 #         row, --lattice-k 2; the directories get _k2)
-#   ORACLE=lattice STRIP=0 ... sbatch ...
-#        (no strip, --lattice-strip off: the stability rows are those of the
-#         eigenvalues the line's disks see -- the A/B of whether the strip pays;
-#         the directories get _nostrip)
 #   ORACLE=lattice CROSS=cut ... sbatch ...
 #        (a trial across the closed loop's line from an admissible iterate is
 #         halved, as up to 20261010c, instead of weighed by the merit; the
@@ -55,10 +52,21 @@
 #         batch with --dependency=afterok:<that job>: a job finding the plant being
 #         built by another job stops with that hint instead of waiting on its
 #         node; WAIT_PLANT=1 waits)
-#   ORACLE=lattice ASYNC=1 STRIP=0 ... sbatch ...
-#        (the no-strip level set beside the next SQP iteration, --lattice-async on,
-#         20261010j: the same iterates as without, bit for bit in the sandbox; a
-#         wall-time measurement; the directories get _async)
+#   ORACLE=lattice ASYNC=0 ... sbatch ...
+#        (the missed-peak level set synchronous, --lattice-async off: the
+#         measurement arm.  The default since 2026-10-16 runs it beside the next
+#         SQP iteration -- the same iterates, 0.71-0.80 x the round wall in
+#         20261010n; the directories get _sync)
+#   EXTRA_ARGS="--inner-maxit 20 --sqp-trust 0.02" ... sbatch ...
+#        (driver flags appended last, so they win over bfs/run_bfs.sh's; words
+#         split on spaces, no quoting inside.  The directory name does not change:
+#         a flag that changes the method needs its own OUT=)
+#   STRIP=1 is refused: the strip arm was removed on 2026-10-16 (BFS.md 8).
+#   Directories: until then a lattice directory WITHOUT _nostrip held a strip
+#   run, and the default names are those again -- a RESUME/CONTINUE of one
+#   continues it without the strip.  An old *_nostrip* (or *_nostrip_async)
+#   run continues with its explicit OUT=, e.g.
+#   RESUME=1 OUT=testplant_bfs/zero_m2p2_central_o10_lat_nostrip_s0_r300 ORACLE=lattice M=2 P=2 STRUCT=central ... sbatch ...
 #   bash bfs/abcopy.sh testplant_bfs/<run> testplant_bfs/<copy>; CONTINUE=1 OUT=testplant_bfs/<copy> ... sbatch ...
 #        (an A/B arm from a shared parent, BFS.md 8: the copy carries the
 #         parent's checkpoint or record and its loop state)
@@ -81,6 +89,11 @@ cd "$SLURM_SUBMIT_DIR"
 mkdir -p logs
 source ./env.sh
 python bfs/version_check.py || { echo "*** mixed code versions (bfs/version_check.py): stop"; exit 1; }
+source bfs/lib.sh
+strip_refused || exit 1                                # STRIP=1: removed on 2026-10-16 (BFS.md 8)
+unset STRIP
+AF=$(lattice_async_flag) || exit 1                     # ASYNC: 1 (default) or 0
+read -ra XA <<< "${EXTRA_ARGS:-}"                      # EXTRA_ARGS: driver flags, appended last
 LAUNCHER=${LAUNCHER:-mpiexec}
 KIND=${KIND:-zero}; OUTER=${OUTER:-3}; SEED=${SEED:-0}
 export M=${M:-1} P=${P:-1} STRUCT=${STRUCT:-central}   # MIMO: M actuators, P sensors, central | decentral
@@ -93,15 +106,12 @@ if [ "${ORACLE:-reduced}" = lattice ]; then SUF="${SUF}_lat"; fi
 if [ "${ORACLE:-reduced}" = lattice ] && [ -n "${RETIRE:-}" ]; then SUF="${SUF}_ret"; fi
 if [ "${ORACLE:-reduced}" = lattice ] && [ "${SHRINK:-0}" = 1 ]; then SUF="${SUF}_shr"; fi
 if [ "${ORACLE:-reduced}" = lattice ] && [ "${LATTICE_K:-1}" != 1 ]; then SUF="${SUF}_k${LATTICE_K}"; fi
-if [ "${ORACLE:-reduced}" = lattice ] && [ "${STRIP:-1}" = 0 ]; then SUF="${SUF}_nostrip"; fi
 if [ "${ORACLE:-reduced}" = lattice ] && [ "${CROSS:-merit}" = cut ]; then SUF="${SUF}_cut"; fi
-if [ "${ORACLE:-reduced}" = lattice ] && [ "${ASYNC:-0}" = 1 ]; then SUF="${SUF}_async"; fi
-export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-24} RETIRE=${RETIRE:-} SHRINK=${SHRINK:-0} LATTICE_K=${LATTICE_K:-1} STRIP=${STRIP:-1} CROSS=${CROSS:-merit}
-# ASYNC=1: the no-strip level set beside the next SQP iteration (--lattice-async on,
-# 20261010j stage D: the same iterates as off, bit for bit in the sandbox; off by
-# default until a cluster run has measured the wall time; directories get _async)
-EXTRA=()
-if [ "${ORACLE:-reduced}" = lattice ] && [ "${ASYNC:-0}" = 1 ]; then EXTRA+=(--lattice-async on); fi
+# ASYNC=0: the synchronous level set, a measurement arm (bfs/run_bfs.sh passes
+# --lattice-async; on by default since 2026-10-16, no suffix then -- the _async
+# directories of 20261010n were named by hand)
+if [ "${ORACLE:-reduced}" = lattice ] && [ "$AF" = off ]; then SUF="${SUF}_sync"; fi
+export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-24} RETIRE=${RETIRE:-} SHRINK=${SHRINK:-0} LATTICE_K=${LATTICE_K:-1} CROSS=${CROSS:-merit} ASYNC=${ASYNC:-1}
 IDX=${SLURM_ARRAY_TASK_ID:-}                           # array job: the start index (catalogue entry)
 NSTART=${NSTART:-64}
 if [ -n "$IDX" ]; then
@@ -123,7 +133,6 @@ if [ "$MIMO" = 1 ]; then TAG=K_B_C_s0_bfs_mimo${M}x${P}_${STRUCT}; fi
 # flock was node-local) with its job id in it (bfs/lib.sh: a dead owner's
 # lock is taken over, a live one waited for).  Each file is written under a
 # private name and renamed into place whole.
-source bfs/lib.sh
 export HDF5_USE_FILE_LOCKING=FALSE
 PD=$(python bfs/plant_id.py --dir coarse)
 OPS=$PD/ops_coarse.npz
@@ -177,6 +186,7 @@ fi
 # the run directory, for bfs/report.sh (20261010n: this script printed none, so
 # report.sh found no run of a testplant job; it now also reads "RESUME: DIR/run")
 echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none}${PAIR_ARM:+ (pair arm $PAIR_ARM)}  ${SLURM_NTASKS:-24} ranks  $(date -Is) -> $OUT ==="
+[ ${#XA[@]} -eq 0 ] || echo "=== EXTRA_ARGS: ${XA[*]} (appended to bfs/run_bfs.sh's flags) ==="
 # NEVER delete a run (2026-10-06: CONTINUE=1, codesign.slurm's word, was not
 # read here, and the directory of a 12.5 h run was started over): RESUME=1 or
 # CONTINUE=1 continues it; without them a directory holding a run is refused,
@@ -222,7 +232,7 @@ export OPS OUTER PY=python LAUNCH="$LAUNCHER -n ${SLURM_NTASKS:-24}"
 # save counts right of -eps with the absolute step floor (the 369.87 record: 5434
 # points against 3208 right of -eps/2) and a veto counts up to --veto-counts more
 # designs while the deadline holds one
-time bash bfs/run_bfs.sh "$OUT/run" "$OUT/starts/$NAME.npz" --deadline-final 1200 "${CONT[@]}" "${EXTRA[@]}"
+time bash bfs/run_bfs.sh "$OUT/run" "$OUT/starts/$NAME.npz" --deadline-final 1200 "${CONT[@]}" "${XA[@]}"
 # the figures are made by the driver itself (--post 1, same job and pool); a
 # second launch only if they are missing, bounded in time (a launch that hangs
 # must not hold the allocation to its limit)

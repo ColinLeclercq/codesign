@@ -21,7 +21,9 @@ What it checks
 --------------
 Every command line in the tree that invokes run_case_epi carries `--eps`, and
 every one that invokes verify_dense or winding_cert does too, since their
-defaults disagree with each other (1e-3 and 0.05 respectively).
+defaults disagree with each other (1e-3 and 0.05 respectively).  And no
+invocation passes a REMOVED flag (LESSONS.md 18 rule 2; 2026-10-16: the strip
+arm's `--lattice-strip`, which the driver now refuses).
 
 Deliberately a dumb textual scan.  It cannot be fooled by a flag that is present
 but wrong -- that is what the harness's own EPS row check is for -- but it also
@@ -52,6 +54,14 @@ REQUIRED = {
     'winding_cert.py': [
         ('--eps', 'defaults to 0.05 while verify_dense defaults to 1e-3; the '
                   'two disagreeing is how one design got opposite verdicts'),
+    ],
+}
+
+# script -> flags no invocation of it may carry any more, and why
+REMOVED = {
+    'run_case_epi.py': [
+        ('--lattice-strip', 'removed on 2026-10-16 (BFS.md 8: the 20261010n A/B); the lattice runs without the '
+                            'strip, and the driver refuses the flag'),
     ],
 }
 
@@ -118,16 +128,21 @@ def main() -> int:
                         if flag not in cmd:
                             bad.append((rel, lineno, script, flag, why,
                                         ' '.join(cmd.split())[:100]))
+                    for flag, why in REMOVED.get(script, ()):
+                        if re.search(re.escape(flag) + r'(?![\w-])', cmd):
+                            bad.append((rel, lineno, script, 'no ' + flag, why,
+                                        ' '.join(cmd.split())[:100]))
 
     print(f"scanned {n_files} files, {n_calls} invocation(s)")
     if not bad:
         print("OK: every invocation carries its required flags")
         return 0
-    print(f"\n*** {len(bad)} invocation(s) missing a required flag\n")
+    print(f"\n*** {len(bad)} invocation(s) missing a required flag or passing a removed one\n")
     for rel, lineno, script, flag, why, cmd in bad:
         print(f"  {rel}:{lineno}")
-        print(f"    calls {script} without {flag}")
-        print(f"    {flag} {why}")
+        gone = flag.startswith('no ')
+        print(f"    calls {script} " + (f"with the removed {flag[3:]}" if gone else f"without {flag}"))
+        print(f"    {flag[3:] if gone else flag}: {why}")
         print(f"    > {cmd}")
         print()
     return 1

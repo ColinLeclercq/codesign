@@ -18,9 +18,11 @@ Checks, at the record's design:
           peaks) just above and just below the largest top found: clear above,
           a region found below; --level-ref: the same decisions by the 2n
           certificate (certify_sparse.certify_greater);
-  strip   the strip [-eps - ROW_REACH, -eps] (evaluate): complete, and every
-          eigenvalue an independent search finds in it (30 nearest eigenvalues
-          at shifts every 0.5 along its middle) among the exhibited ones;
+  strip   the strip [-eps - ROW_REACH, -eps] (evaluate(strip=True), a
+          diagnostic since 2026-10-16: no optimiser path covers it, BFS.md 8):
+          complete, and every eigenvalue an independent search finds in it (30
+          nearest eigenvalues at shifts every 0.5 along its middle) among the
+          exhibited ones;
   reuse   the same calls at a design moved by 1e-4 (the followed rows and the
           line in one evaluation, as the SQP calls them): waves, shifts,
           factorisations; the line again alone and from scratch.
@@ -205,7 +207,7 @@ print(f"  vectors of the two rightmost: {[None if q is None else q[0].shape for 
 out['line_alpha'] = L['alpha']; out['line_clear'] = L['clear']
 
 # ---- strip: complete, and nothing an independent search finds missing from it
-t0 = time.perf_counter(); _, _, _, _, _, LS = lat.evaluate(z0, np.zeros(0), line=(a.eps, 0.0, a.whi)); t1 = time.perf_counter()
+t0 = time.perf_counter(); _, _, _, _, _, LS = lat.evaluate(z0, np.zeros(0), line=(a.eps, 0.0, a.whi), strip=True); t1 = time.perf_counter()
 st = LS['strip']
 inside = [l_ for l_ in LS['seen'] if -a.eps - lattice.ROW_REACH <= l_.real <= -a.eps]
 print(f"strip [{-a.eps - lattice.ROW_REACH:.3f}, {-a.eps:.3f}] x [0, {a.whi:g}]: {'complete' if st['complete'] else 'INCOMPLETE'}, "
@@ -229,7 +231,8 @@ n0, h0 = lat.counts()
 t0 = time.perf_counter(); s4, _, _, _, info4, _ = lat.evaluate(z1, W); t1 = time.perf_counter()
 n1, h1 = lat.counts()
 print(f"moved design: {len(W)} fixed rows {t1 - t0:.1f} s, {n1 - n0} factorisations, {h1 - h0} cached", flush=True)
-# the SQP's evaluation: followed rows and the line in the same waves
+# the SQP's evaluation: followed rows and the line in the same waves (no strip: evaluate's default since
+# 2026-10-16; before, this call covered the strip too)
 t0 = time.perf_counter()
 s5, _, _, _, info5, L1 = lat.evaluate(z1, Wf, follow=fol, w_star=w_star, state=state, line=(a.eps, 0.0, a.whi))
 t1 = time.perf_counter()

@@ -2376,10 +2376,6 @@ def main():
                     help='--oracle lattice: a trial across the closed loop\'s line from an admissible iterate is weighed by '
                          'the merit (merit; only admissible iterates become the result) or halved (cut, as 2026-10-06 to '
                          '20261010c) (sqp_inner.LAT_CROSS)')
-    ap.add_argument('--lattice-strip', dest='lattice_strip', choices=['on', 'off'], default='on',
-                    help='--oracle lattice: on = the strip [-eps - reach, -eps] covered at every iterate the QP reads, '
-                         'every eigenvalue in it a stability row; off = the rows of the eigenvalues the line\'s disks see '
-                         '(sqp_inner.LAT_STRIP)')
     ap.add_argument('--lattice-reach', dest='lattice_reach', type=float, default=0.25,
                     help='--oracle lattice: stability rows for the closed-loop eigenvalues within this of the line')
     ap.add_argument('--lattice-k', dest='lattice_k', type=int, default=1,
@@ -2403,20 +2399,22 @@ def main():
                          'at rounding level (driver vs worker 7e-13): another placement is another MIMO path')
     ap.add_argument('--lattice-memo', dest='lattice_memo', type=int, default=2,
                     help='--oracle lattice: designs whose row requests are kept for the next evaluation of the same design '
-                         '(the strip arm\'s accepted trial, the refine\'s re-evaluation; lattice.REQ_MEMO); 0 = off')
+                         '(the refine\'s re-evaluation; lattice.REQ_MEMO); 0 = off')
     ap.add_argument('--lattice-row-merge', dest='lattice_row_merge', type=float, default=0.0,
                     help='--oracle lattice: > 1e-8: stability rows whose eigenvalues agree within this x max(1, |lambda|) '
                          'are one row, the copy from the nearest shift kept (lattice.ROW_MERGE; strip-ab.md AB3, e.g. '
                          '1e-6; changes the QP\'s rows, hence the path); <= 1e-8 (default 0): 1e-8 and the first copy, as '
                          'before, the copies within lattice.ROW_DUP counted and tagged in the QP rows\' line')
-    # 20261010j stage D (level-set-waves.md LS3, eval-waves.md P5, driver-serial.md P3)
-    ap.add_argument('--lattice-async', dest='lattice_async', choices=['off', 'on', 'redo'], default='off',
-                    help='--oracle lattice, --lattice-strip off: the missed-peak level set after an accepted step runs '
-                         'BESIDE the next iteration (on: its disks on the worker ranks, never the driver, while the next '
-                         'QP and line-search trials run on the others; the look-ahead kept when the call adds no member, '
-                         'else put back and the synchronous continuation taken -- the same iterates); redo: every '
-                         'look-ahead put back and redone (the restore\'s test); off (default): the synchronous call '
-                         '(sqp_inner.LAT_ASYNC)')
+    # 20261010j stage D (level-set-waves.md LS3, eval-waves.md P5, driver-serial.md P3); on by default since
+    # 2026-10-16, measured in 20261010n (BFS.md 8)
+    ap.add_argument('--lattice-async', dest='lattice_async', choices=['off', 'on', 'redo'], default='on',
+                    help='--oracle lattice: the missed-peak level set after an accepted step runs BESIDE the next '
+                         'iteration (on, the default since 2026-10-16: its disks on the worker ranks, never the driver, '
+                         'while the next QP and line-search trials run on the others; the look-ahead kept when the call '
+                         'adds no member, else put back and the synchronous continuation taken -- the same iterates: '
+                         'identical traces over 8 central and 11 decentral rounds on the cluster, 0.71-0.80 x the round '
+                         'wall, 20261010n); redo: every look-ahead put back and redone (the restore\'s test); off: the '
+                         'synchronous call, for measurements (sqp_inner.LAT_ASYNC)')
     ap.add_argument('--oracle-nvec', dest='oracle_nvec', type=int, default=3,
                     help='singular pairs per anchor')
     ap.add_argument('--oracle-tol', dest='oracle_tol', type=float, default=1e-3,
@@ -2760,11 +2758,14 @@ def main():
     ap.add_argument('--n-act', dest='n_act', type=int, default=1,
                     help='MIMO (STAGE6): number of actuators (with --n-sens > 1 or > 1 itself: the MIMO path)')
     ap.add_argument('--n-sens', dest='n_sens', type=int, default=1, help='MIMO: number of sensors')
+    # (%% in the help: argparse formats it, and the unescaped '0.08 % higher' made --help raise TypeError until 2026-10-16)
     ap.add_argument('--sqp-stat', dest='sqp_stat', choices=['auto', 'pred', 'rel'], default='auto',
                     help="SQP stationarity: 'rel' stat < 1e-4 x the active rows' gradient scale (to 2026-09-29); "
                          "'pred' also requires the QP's predicted decrease <= 1e-7 t (STAGE6 6.14); "
                          "'auto': pred for MIMO, rel for SISO (the ne=100 K+B+C A/B: 6.404012 in 22.2 min vs "
-                         "6.399134 in 22.6 -- faster early, stopped 0.08 % higher; SISO adoption waits for the cluster)")
+                         "6.399134 in 22.6 -- faster early, stopped 0.08 %% higher; SISO adoption waits for the cluster).  "
+                         "The BFS passes pred for SISO too (bfs/run_bfs.sh, 2026-10-16: rel fired code 0 at the SISO records "
+                         "with a certified step still gaining 0.20 %%)")
     ap.add_argument('--cert-all-w', dest='cert_all_w', choices=['on', 'off'], default='on',
                     help='every full certificate also proves the value over ALL w: tail bound + one level-set '
                          'question on [-W, W] (STAGE6 6.21)')
@@ -2940,6 +2941,10 @@ def main():
                          'many survive: 0.10 keeps 36, 0.02 keeps 106.')
     ap.add_argument('--seed_frac', type=float, default=0.02,
                     help='seed Omega where sigma_1 >= frac * peak')
+    if any(v_ == '--lattice-strip' or v_.startswith('--lattice-strip=') for v_ in sys.argv[1:]):
+        # removed 2026-10-16 (user, after the 20261010n A/B): a clear refusal, not argparse's 'unrecognized'
+        raise SystemExit("--lattice-strip: removed on 2026-10-16 -- the lattice oracle runs without the strip, as "
+                         "--lattice-strip off did (BFS.md 8: the A/B of 20261010n); drop the flag")
     a = ap.parse_args()
     if a.plant == 'bfs':
         # MPI job (BFS.md 3): ranks > 0 are the full-model pool's workers
@@ -2970,7 +2975,7 @@ def main():
     REDUCED_CERT = a.reduced_cert
     import sqp_inner as _sqi; _sqi.REDUCED_CERT = a.reduced_cert; _sqi.FOLLOW_SCAN = a.follow_scan; _sqi.PAIR_MANIFOLD = (a.sqp_pair_manifold == 'on'); _sqi.FIELD_KMAX2 = (a.field_kmax ** 2 if a.field_kmax else None); _sqi.FIELD_ORDER = a.field_order
     _sqi.PARTIAL_SHRINK = (a.sqp_partial_shrink == 'on')
-    _sqi.LAT_STRIP = (a.lattice_strip == 'on'); _sqi.LAT_CROSS = a.lattice_cross; _sqi.DEBUG_LS = (a.sqp_debug_ls == 'on')
+    _sqi.LAT_CROSS = a.lattice_cross; _sqi.DEBUG_LS = (a.sqp_debug_ls == 'on')
     _sqi.LAT_ASYNC = a.lattice_async
     if a.oracle == 'lattice':
         _sqi.QP_DUMP = a.outdir
@@ -4189,8 +4194,7 @@ def main():
               f"to |sigma'| <= {_lat_mod.FOLLOW_GTOL:g} sigma, missed peaks by the level-set certificate ("
               f"{_lat_mod.LEVEL_K} pencil eigenvalues per axis disk, through the plant factors); the line from "
               f"{_lat.base_grid(0.0, 1.0).__len__()} equispaced centres, "
-              + (f"the strip [-eps - {_lat_mod.ROW_REACH:g}, -eps] covered and every eigenvalue in it a row"
-                 if _sqi.LAT_STRIP else "NO strip (the rows of the eigenvalues the line's disks see)")
+              + "the stability rows those of the eigenvalues the line's disks see (no strip since 2026-10-16)"
               + f"; rows aimed {1 + _sqi.LAT_CUSHION:g} mg inside the line, trials across it "
               + ("cut back" if _sqi.LAT_CROSS == 'cut' else "weighed by the merit")
               + f"; {_lat_mod.LINE_K} eigenvalue(s) per disk; batches by "
@@ -4200,13 +4204,15 @@ def main():
               + (f"; rows merged within {_lat_mod.ROW_MERGE:g}, the nearest shift's copy kept" if _lat_mod.ROW_MERGE > 1e-8
                  else f"; rows merged within 1e-8 (copies within {_lat_mod.ROW_DUP:g} counted, not merged)") + ")",
               flush=True)
+        # 20261010j stage D: a line of its own (the oracle line above is the same in every arm); the
+        # synchronous call (off, a measurement arm since 2026-10-16) says so too
         if _sqi.LAT_ASYNC != 'off':
-            # 20261010j stage D: a line of its own (the oracle line above is the same in every arm)
             print(f"oracle: the missed-peak level set BESIDE the next SQP iteration (--lattice-async {_sqi.LAT_ASYNC}"
                   + ("; every look-ahead put back and redone -- the restore's test" if _sqi.LAT_ASYNC == 'redo' else '')
-                  + ("): NOT applied -- the strip arm runs it in the accepted trial's re-evaluation" if _sqi.LAT_STRIP else
-                     (f"): its disks on the {_lat.size - 1} worker rank(s), never the driver" if _lat.size > 1 else
-                      "): NOT applied -- one rank")), flush=True)
+                  + (f"): its disks on the {_lat.size - 1} worker rank(s), never the driver" if _lat.size > 1 else
+                     "): NOT applied -- one rank"), flush=True)
+        else:
+            print("oracle: the missed-peak level set synchronous, after each accepted step (--lattice-async off)", flush=True)
         # the ports' positions behind every (b, c) this process builds: the gates
         # call D.alpha_certified with b and c, and the ranks build them from the
         # positions
@@ -4699,8 +4705,7 @@ def main():
                 _li = inner_stats['lattice']
                 print(f"    lattice: {_li['evaluations']} evaluations, {_li['gain_evals']} sigma evaluations (Newton: at "
                       f"most {_li['newton_max']} per member); line {_li['line_shifts']} shifts (at most "
-                      f"{_li['line_waves_max']} waves, {_li['line_not_clear']} not clear); strip up to "
-                      f"{_li['strip_shifts_max']} shifts, {_li['strip_incomplete']} incomplete; up to {_li['stab_rows_max']} "
+                      f"{_li['line_waves_max']} waves, {_li['line_not_clear']} not clear); up to {_li['stab_rows_max']} "
                       f"stability rows (up to {_li.get('rows_dup_max', 0)} copies "
                       + (f"merged beyond 1e-8" if _lat_mod.ROW_MERGE > 1e-8 else f"within {_lat_mod.ROW_DUP:g}, kept")
                       + "); "

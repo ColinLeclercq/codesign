@@ -2,7 +2,8 @@
 # abcopy.sh -- an A/B arm from a shared parent run (BFS.md 8; strip-ab.md AB1).
 #
 #   bash bfs/abcopy.sh testplant_bfs/<parent run> testplant_bfs/<arm>
-#   CONTINUE=1 OUT=testplant_bfs/<arm> STRIP=0|1 ... sbatch ... bfs/slurm/testplant.slurm
+#   CONTINUE=1 OUT=testplant_bfs/<arm> <the arm's one switch, e.g. ASYNC=0> ... sbatch ... bfs/slurm/testplant.slurm
+#   (the strip A/B of 20261010n used STRIP=0|1; the strip was removed on 2026-10-16, BFS.md 8)
 #
 # A clean A/B starts both arms from the SAME state: the copy carries the
 # parent's record or checkpoint and, since 20261010j, its loop state (inner

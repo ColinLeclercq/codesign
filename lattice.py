@@ -14,7 +14,7 @@ dropped beyond LU_CAP), and the driver sends every task to the rank that holds
 its point (`LatticeOracle`): a task is then a few tens of solves instead of a
 factorisation plus those solves.
 
-What runs per SQP evaluation -- rows, line and strip TOGETHER, in waves
+What runs per SQP evaluation -- rows and line TOGETHER, in waves
 (LatticeOracle.evaluate): each wave sends every outstanding request at once,
 one batch per rank, the driver computing its own share:
   rows      sigma_1 and its gradient at every member of Omega.  A fixed member at
@@ -38,11 +38,14 @@ one batch per rank, the driver computing its own share:
             an eigenvalue is found on or right of it (not clear), or a gap is
             shorter than the finest level (inconclusive, never clear).  The proof
             is the cover; where the centres sit changes the cost, not the rigour.
-  strip     the strip [-eps - ROW_REACH, -eps], covered by a quadtree of cells and
-            the disks of every shift of the evaluation (LatticeOracle._strip):
-            every eigenvalue in it is exhibited and gets its stability row (left
-            eigenvector on the same factor), exact.  The line alone saw only the
-            eigenvalues nearest to some point of it (2026-10-09).
+  strip     (a DIAGNOSTIC since 2026-10-16: evaluate(strip=True), tools/
+            check_lattice.py and the Evaluator's sqp_inner.LAT_STRIP; no
+            optimiser path covers it -- the strip arm of 2026-10-09 to 20261010n
+            was removed, BFS.md 8) the strip [-eps - ROW_REACH, -eps], covered by
+            a quadtree of cells and the disks of every shift of the evaluation
+            (LatticeOracle._strip): every eigenvalue in it is exhibited and gets
+            its stability row (left eigenvector on the same factor), exact.  The
+            line alone sees only the eigenvalues nearest to some point of it.
   sweep     sigma_1 and its slope on a coarse level of the band (missed peaks),
             values for the certificate's reference sweep.
 
@@ -89,7 +92,7 @@ LINE_K = 1           # nearest eigenvalues per centre (k = 3 costs 2-4 x the app
 LINE_SHRINK = 0.9    # disk used = LINE_SHRINK x the distance to the nearest eigenvalue (serial code: 0.9)
 LINE_WAVES = 60      # waves before the sweep is declared inconclusive
 LINE_TOL = 1e-9      # ARPACK tolerance at a centre (the serial certificate's)
-ROW_REACH = 0.25     # the STRIP [-eps - ROW_REACH, -eps]: covered at every evaluation, every eigenvalue in it a row
+ROW_REACH = 0.25     # the reach of the line's rows (its memo) and the diagnostic STRIP [-eps - ROW_REACH, -eps]
 STRIP_RHO = 2.0 ** -6   # the cover may leave out a ball of this radius around each eigenvalue it exhibits
 STRIP_HMIN = 2.0 ** -10 # a cell this small and still uncovered: the strip is reported incomplete
 STRIP_SPLIT = 2      # geometric refinements of an uncovered cell per wave before new shifts are placed
@@ -139,10 +142,11 @@ COST_UNIT = 26.0     # 'measured': solves per static unit before a kind has been
 COST_EMA = 0.02      # the running means' weight once a kind has more than 1 / COST_EMA samples (drift: the level
                      # set's disks got 6x dearer over 770632's 12 rounds)
 REQ_MEMO = 2         # designs whose row requests (row, block, rowx, slopex, blockx) evaluate() keeps for the next
-                     # evaluation of the SAME design (--lattice-memo; 20261010j stage C, eval-waves.md P8): the strip arm
-                     # re-evaluates every accepted trial with its strip, and the refine every iterate it adds members
-                     # at, and both recomputed every fixed row and every first Newton point.  The line's centres are
-                     # memoised apart (_line_memo), the strip's never (it reads every centre of the evaluation, R).
+                     # evaluation of the SAME design (--lattice-memo; 20261010j stage C, eval-waves.md P8): the refine
+                     # re-evaluates every iterate it adds members at (and the strip arm, until 2026-10-16, every
+                     # accepted trial with its strip), recomputing every fixed row and every first Newton point.  The
+                     # line's centres are memoised apart (_line_memo), the strip's never (it reads every centre of the
+                     # evaluation, R).
                      # 0: off
 ROW_MERGE = 1e-8     # stability rows whose eigenvalues agree within this x max(1, |lambda|) are ONE row (--lattice-row-
                      # merge).  <= 1e-8 (the default): the rule before, 1e-8 and the first copy in centre order.  > 1e-8
@@ -870,7 +874,6 @@ class LatticeOracle:
         self.verbose = False
         self._dkey = None; self._dz = None
         self._line_memo = {}             # (design key, eps, wlo, whi, eps_int) -> (reach, result): the last few designs
-        self._level_memo = {}            # (design key, gam, wlo, whi) -> the level set computed beside an evaluation
         self._req_memo = {}              # design key -> {row request: result}, the last REQ_MEMO designs (evaluate)
         self._rot = 0                    # the ranks' tie-break order rotates from one wave to the next
         # ---- 20261010j stage C: the measured costs (TASK_COSTS) and the ledger's measurements
@@ -1173,15 +1176,14 @@ class LatticeOracle:
     def level_start(self, z, gam, wlo, whi, watch=None):
         """level() BESIDE the next iteration: the call's first wave sent, its job
         returned for level_join.  None where it cannot run so (one rank, the
-        serial path, or a level already computed beside an evaluation: the caller
-        then calls level()).  Every rank is idle here (no task out): their designs
-        and line vectors are marked first (vecstate_task), for a discarded
-        look-ahead to put back."""
+        serial path: the caller then calls level()).  Every rank is idle here
+        (no task out): their designs and line vectors are marked first
+        (vecstate_task), for a discarded look-ahead to put back."""
         if self._bg is not None:
             raise RuntimeError("lattice: a level set is already running beside the look-ahead")
         dz = z if isinstance(z, dict) else self.design(z)
         lk = (dz['key'], float(gam), float(wlo), float(whi))
-        if self.pool is None or self.size < 2 or lk in self._level_memo:
+        if self.pool is None or self.size < 2:
             return None
         self._vecstate('mark')
         R = {}
@@ -1551,18 +1553,18 @@ class LatticeOracle:
         """The driver's state an evaluation changes and a later one reads, as at a
         look-ahead's start (20261010j stage D; put back by look_restore when the
         look-ahead is discarded): the followed tops, the line's and the strip's
-        kept centres (the next call's first wave: the no-strip rows depend on the
-        line's cover), the line, level and request memos, the last design.  Not
+        kept centres (the next call's first wave: the rows depend on the line's
+        cover), the line and request memos, the last design.  Not
         level_prev (the level call running beside sets it, as the synchronous
         call did before the next iteration), nor the placement (held, the
         rotation, the measured costs: the cost only) and the ledger."""
         return dict(tops=dict(self.tops), line_prev=dict(self.line_prev), strip_prev=dict(self.strip_prev),
-                    line_memo=dict(self._line_memo), level_memo=dict(self._level_memo),
+                    line_memo=dict(self._line_memo),
                     req_memo={k: dict(v) for k, v in self._req_memo.items()}, dkey=self._dkey, dz=self._dz)
 
     def look_restore(self, S):
         self.tops = dict(S['tops']); self.line_prev = dict(S['line_prev']); self.strip_prev = dict(S['strip_prev'])
-        self._line_memo = dict(S['line_memo']); self._level_memo = dict(S['level_memo'])
+        self._line_memo = dict(S['line_memo'])
         self._req_memo = {k: dict(v) for k, v in S['req_memo'].items()}
         self._dkey, self._dz = S['dkey'], S['dz']
 
@@ -1572,23 +1574,24 @@ class LatticeOracle:
         return sum(o['miss'] for o in res.values()), sum(o['hit'] for o in res.values())
 
     # -------------------------------------------------------------- evaluation
-    def evaluate(self, z, W, follow=None, w_star=None, state=None, enroll=(), line=None, strip=True, level=None,
-                 watch=None, dedup=False):
+    def evaluate(self, z, W, follow=None, w_star=None, state=None, enroll=(), line=None, strip=False, dedup=False):
         """sigma_1 rows at every member of W and, with line = (eps, wlo, whi),
-        the stability line and the strip -- in ONE sequence of waves: the first
-        carries the fixed rows, every followed member's first Newton point, the
-        line's and the strip's first centres; the later ones the Newton steps,
-        the line's gap centres and the strip's new shifts side by side.
-        follow: {member key: radius} (the followed peaks); w_star / state: per
-        member, the last top and the carried curvature (updated here); enroll:
-        the members whose sigma_2 block is built, at the row point.  Returns
-        (s, Gs, blocks, tops, info, line result or None); the line result's rows
-        are every eigenvalue the line and the strip exhibited in the strip.
-        strip = False: the line only (a line-search trial: its admissibility is
-        the line's certificate; the rows the QP reads come from the iterate).
-        level = (gam, wlo, whi): the level-set certificate (level()) in the same
-        waves, its result kept for the call of level() that asks for it; watch:
-        its followed rows (level()).
+        the stability line -- in ONE sequence of waves: the first carries the
+        fixed rows, every followed member's first Newton point, the line's first
+        centres; the later ones the Newton steps and the line's gap centres side
+        by side.  follow: {member key: radius} (the followed peaks); w_star /
+        state: per member, the last top and the carried curvature (updated
+        here); enroll: the members whose sigma_2 block is built, at the row
+        point.  Returns (s, Gs, blocks, tops, info, line result or None); the
+        line result's rows are every eigenvalue the line (and the strip)
+        exhibited in the strip [-eps - ROW_REACH, -eps].
+        strip = True: a DIAGNOSTIC since 2026-10-16 (tools/check_lattice.py, the
+        Evaluator's sqp_inner.LAT_STRIP): the strip covered in the same waves,
+        its shifts beside the line's, every eigenvalue in it a row.  The
+        optimiser's evaluations are the line alone (the strip arm, which covered
+        it at every iterate the QP read and re-evaluated each accepted trial with
+        it and the level set in the same waves -- evaluate(level=...), removed
+        with it -- is gone: BFS.md 8).
         dedup (20261010j, missed-peaks.md P4; the reduced path's FOLLOW_DEDUP,
         STAGE5 29.2, on the lattice): (i) a member without a hint starts on the
         nearest top of an earlier evaluation within half its radius only if no
@@ -1601,11 +1604,11 @@ class LatticeOracle:
         a shared top marks the member merged (state 'merged'), not restarted
         again near that top (the round's end merges it).
         The row requests of the last REQ_MEMO designs are kept (20261010j stage
-        C, eval-waves.md P8): an evaluation of the same design (the strip arm's
-        accepted trial, the refine's re-evaluation) finds its fixed rows and the
-        points its Newton chains revisit answered -- the same values, the same
-        decisions, fewer tasks; the centres are not (the line has its own memo,
-        the strip reads every centre of its evaluation).  info['members']: per
+        C, eval-waves.md P8): an evaluation of the same design (the refine's
+        re-evaluation) finds its fixed rows and the points its Newton chains
+        revisit answered -- the same values, the same decisions, fewer tasks;
+        the centres are not (the line has its own memo, the strip reads every
+        centre of its evaluation).  info['members']: per
         member kind the points asked for and the tasks caused, by s / smax, and
         which agents set the last wave (omega-growth.md P1, strip-ab.md AB4)."""
         dz = self.design(z)
@@ -1674,13 +1677,6 @@ class LatticeOracle:
                 agents['line'] = self._line(eps, wlo, whi, ROW_REACH, None, R)
             if strip and (lr is None or 'strip' not in lr):
                 agents['strip'] = self._strip(eps, wlo, whi, ROW_REACH, R)
-        lk = None
-        if level is not None:
-            if self._bg is not None:
-                raise RuntimeError("lattice: evaluate(level=...) while a level set runs beside the look-ahead")
-            lk = (dz['key'],) + tuple(float(v) for v in level)
-            if lk not in self._level_memo:
-                agents['level'] = self._level(*lk[1:], R, watch=watch)
         done, waves = self._drive(dz, agents, 'eval', R, track=track)
         ndedup = nev_redo = 0
         if dedup and follow:
@@ -1736,10 +1732,6 @@ class LatticeOracle:
             self._req_memo[dz['key']] = mem_
             while len(self._req_memo) > int(REQ_MEMO):
                 self._req_memo.pop(next(iter(self._req_memo)))
-        if 'level' in done:
-            self._level_memo[lk] = done['level']
-            while len(self._level_memo) > 4:
-                self._level_memo.pop(next(iter(self._level_memo)))
         if 'line' in done:
             lr = done['line']
         if 'strip' in done:
@@ -1987,12 +1979,9 @@ class LatticeOracle:
         region above gam found that no followed row watches (a top estimate;
         empty when clear); watched the regions a followed row does (_level).
         watch = (tol, [(w, sigma_1)]): the followed rows' tops and values at
-        this design.  A call that finds the result computed beside an evaluation
-        (evaluate(level=...): the same design and level) returns it."""
+        this design."""
         dz = z if isinstance(z, dict) else self.design(z)
         lk = (dz['key'], float(gam), float(wlo), float(whi))
-        if lk in self._level_memo:
-            return self._level_memo[lk]                    # computed beside an evaluation (evaluate(level=...))
         if self._bg is not None:
             # level_prev is the running call's to set (stage D: the look-ahead never asks for a level set)
             raise RuntimeError("lattice: level() while a level set runs beside the look-ahead")
@@ -2192,13 +2181,16 @@ class LatticeOracle:
 
     # ------------------------------------------------------------------- strip
     def _strip(self, eps, wlo, whi, d, R):
-        """The strip [-eps - d, -eps] x [wlo, whi], COVERED AT EVERY EVALUATION
-        (user, 2026-10-09), a generator of ('centre', sre, theta, -eps - d)
-        requests for _drive beside the line's.  Every eigenvalue in the strip is
-        then exhibited, and each gets its stability row: the line's centres see
-        only the eigenvalues nearest to some point of the line, and one behind
-        another (-0.1444 behind -0.0723 on the central record 191.11) had no row,
-        so the QP could not see it coming.
+        """The strip [-eps - d, -eps] x [wlo, whi], covered (evaluate(strip=True):
+        a DIAGNOSTIC since 2026-10-16 -- tools/check_lattice.py, the closed-loop
+        eigenvalues left of the line for a stationarity measure; from 2026-10-09
+        to 20261010n the strip arm covered it at every iterate the QP read, and
+        the 20261010n A/B removed that arm: BFS.md 8), a generator of ('centre',
+        sre, theta, -eps - d) requests for _drive beside the line's.  Every
+        eigenvalue in the strip is then exhibited, and each gets its stability
+        row: the line's centres see only the eigenvalues nearest to some point
+        of the line, and one behind another (-0.1444 behind -0.0723 on the
+        central record 191.11) has no row there.
 
         The cover: a quadtree of cells over the strip (first cells d x d); a cell
         is covered when it lies inside one eigenvalue-free disk of ANY shift of
@@ -2430,5 +2422,5 @@ class LatticeOracle:
         if self._bg is not None:
             raise RuntimeError("lattice: drop() while a level set runs beside the look-ahead")
         self._run(drop_task, {r: None for r in self._ranks()}, 'drop')
-        self.held.clear(); self.line_prev.clear(); self.strip_prev.clear(); self.level_prev = []; self.tops.clear(); self._line_memo.clear(); self._level_memo.clear()
+        self.held.clear(); self.line_prev.clear(); self.strip_prev.clear(); self.level_prev = []; self.tops.clear(); self._line_memo.clear()
         self._req_memo.clear()           # the row requests too (the review of stage C: a plant change would serve stale rows)

@@ -48,9 +48,14 @@ PARTIAL_SHRINK = False  # everywhere (not only on S): after a step accepted at a
                         # region the line search found the model good for (--sqp-partial-shrink; off: the frozen GL path.
                         # 2026-10-08: the SISO lattice run spent 5-8 evaluations per SQP iteration in its last rounds,
                         # against 2-3 in its first -- line-search trials of steps the box kept proposing at its corner)
-LAT_STRIP = True        # lattice: the strip [-eps - reach, -eps] covered at every iterate the QP reads, every eigenvalue in it
-                        # a stability row (--lattice-strip; off: the rows of the eigenvalues the line's disks see, as before
-                        # 20261009a -- the A/B of whether the strip pays, user 2026-10-09)
+LAT_STRIP = False       # lattice, a DIAGNOSTIC of the Evaluator only (tools; e.g. a stationarity measure that needs the
+                        # closed-loop eigenvalues LEFT of the line): every evaluation also covers the strip [-eps - reach,
+                        # -eps] (lattice._strip), every eigenvalue in it a stability row.  The optimiser has no strip since
+                        # 2026-10-16 (user, after the 20261010n A/B, BFS.md 8, LESSONS 19-20: it bought no stability, cost
+                        # ~45 % more evaluations a round, and the level set beside the next iteration runs only without
+                        # it): --lattice-strip and the strip arm's branches (trials on the line alone, the accepted trial
+                        # re-evaluated with its strip and the level set in the same waves) are gone, and the SQP refuses
+                        # to run with this set.  The rows are those of the eigenvalues the line's disks see
 LAT_CUSHION = 1.0       # lattice: the stability rows (and the closed-loop Hermite block) aim at -eps - (1 + this) mg, one mg inside
                         # the admissibility line -eps - mg.  Aimed AT that line, every step that kept an active eigenvalue on its
                         # linearised boundary landed on it to rounding, half the time just outside: the trial was cut, its halvings
@@ -77,13 +82,16 @@ FOLLOW_SCAN = 21        # value-only window scan points per followed member per 
 FIELD_KMAX2 = None      # FB/FC shape constraint (v^H K v)/(v^H M v) <= this (squared RMS wavenumber; driver --field-kmax; STAGE5 32)
 FIELD_ORDER = 1         # 1: H^1 form v^H K v; 2: H^2 form v^H K M^-1 K v <= kmax^4 v^H M v (driver --field-order; STAGE5 32)
 FOLLOW_DEDUP = True     # members sharing a top: all but the nearest restart from their own base (2026-09-26)
-LAT_ASYNC = 'off'       # lattice, no strip: the missed-peak level set after an accepted step BESIDE the next iteration
+LAT_ASYNC = 'on'        # lattice: the missed-peak level set after an accepted step BESIDE the next iteration
                         # (--lattice-async; 20261010j stage D, level-set-waves.md LS3 with its verifier's corrections,
-                        # eval-waves.md P5, driver-serial.md P3).  'on': its disks on the worker ranks while the next QP and
-                        # line-search trials run on the others (the look-ahead); kept when the call adds no member (the
-                        # look-ahead WAS the synchronous continuation), else everything it changed put back and the
-                        # synchronous continuation taken.  'redo': every look-ahead discarded and redone (the restore's own
-                        # test: the iterates must not change).  'off' (default): the synchronous call, as before
+                        # eval-waves.md P5, driver-serial.md P3).  'on' (the default since 2026-10-16): its disks on the
+                        # worker ranks while the next QP and line-search trials run on the others (the look-ahead); kept
+                        # when the call adds no member (the look-ahead WAS the synchronous continuation), else everything
+                        # it changed put back and the synchronous continuation taken.  Measured in 20261010n (it was off
+                        # until then): traces identical to the synchronous arms' over 8 central and 11 decentral rounds on
+                        # the cluster, rounds 0.71-0.80 x their wall (BFS.md 8).  'redo': every look-ahead discarded and
+                        # redone (the restore's own test: the iterates must not change).  'off': the synchronous call
+                        # (measurements; one rank or no pool runs it anyway)
 _SP_OUT = []            # (the real stdout, the lattice, the look-ahead's captured output) while a look-ahead is out
 
 
@@ -193,9 +201,6 @@ class Evaluator:
         self._E_ctrl = None       # dA_c/dz_j (A_c affine in z), for the exact block gradient
         self.force_full_alpha = False    # set when the reduced abscissa disagrees with the certified one at the start
         self.lattice = lattice               # lattice.LatticeOracle: the full model on cached factors (BFS.md 5)
-        self.lat_strip = True                # lattice: cover the strip (every eigenvalue near the line a row); off for trials
-        self.level_req = None                # lattice: (gam, wlo, whi) -> the level-set certificate beside the evaluation
-        self.level_watch = None              # ... and its followed rows, (tol, [(top, sigma_1)]) (lattice._level, 20261010j)
         self.lat_info, self.lat_line, self.level_log = [], [], []
 
     def _ctrl_dirs(self):
@@ -503,12 +508,12 @@ class Evaluator:
             # the MPI ranks holding its factor; followed members by bracket and
             # refine (the row is an exact value at a lattice point); sigma_2
             # blocks at the row point.  The stability line in the same waves
-            # (followed members sharing a top: FOLLOW_DEDUP on the lattice too, 20261010j)
+            # (followed members sharing a top: FOLLOW_DEDUP on the lattice too, 20261010j);
+            # the strip only as the diagnostic LAT_STRIP (tools: the SQP refuses it)
             s, Gs, blocks, _tops_l, _info_l, _lr_l = self.lattice.evaluate(
                 z, W, follow=self.follow, w_star=self.w_star, state=self.follow_state,
                 enroll=(self.enroll if self.kink_block else ()),
-                line=(self.eps, 0.0, float(getattr(D, 'stab_whi', 10.0))), strip=(self.lat_strip and LAT_STRIP), level=self.level_req,
-                watch=self.level_watch, dedup=FOLLOW_DEDUP)
+                line=(self.eps, 0.0, float(getattr(D, 'stab_whi', 10.0))), strip=bool(LAT_STRIP), dedup=FOLLOW_DEDUP)
             self.lat_info.append(_info_l)
             if self.follow:
                 self.n_dedup.append(int(_info_l.get('dedup', 0)))
@@ -724,7 +729,7 @@ class Evaluator:
             if not al_rows:
                 al_rows.append((al_line, np.zeros(NZ)))      # nothing within reach: alpha without a gradient
             self.n_alpha_rows.append(len(pairs))
-            _st = lr.get('strip') or {}
+            _st = lr.get('strip') or {}                   # (the diagnostic LAT_STRIP only: tools)
             self.lat_line.append(dict(nshift=lr['nshift'], waves=lr['waves'], clear=clr, rows=len(pairs),
                                       strip_shifts=int(_st.get('shifts', 0)), strip_complete=bool(_st.get('complete', True)),
                                       rows_dup=int(lr.get('rows_dup', 0))))
@@ -929,7 +934,7 @@ class Evaluator:
                     pos_rows=pos_rows, follow_rows=follow_rows,
                     al=float(al), ga=ga, clr=bool(clr), al_rows=al_rows_qp, al_rows_all=al_rows, al_dup=al_dup,
                     al_ctrl=al_ctrl, al_ctrl_rest=al_ctrl_rest, ctrl_rows=ctrl_rows, lmi=lmi, hermite=hermite, pair=pair,
-                    hermite_cl=hermite_cl, lat_eigs=lat_eigs, lat_strip=(self.lattice is None or self.lat_strip or not LAT_STRIP), z=z.copy())
+                    hermite_cl=hermite_cl, lat_eigs=lat_eigs, z=z.copy())
 
     def _closed_loop_block(self, pr2, cl, clf, clg, arow, nvec, K, xa, xs, pa, ps, na, ns, flags, NZ):
         """Hermite data for the two rightmost near-line closed-loop eigenvalues.
@@ -1426,6 +1431,12 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
     # budget alone (every frozen path).
     if clarabel is None:
         raise RuntimeError("clarabel is not installed (pip install clarabel)")
+    if lattice is not None and LAT_STRIP:
+        # the strip is a diagnostic of the Evaluator since 2026-10-16: with it the
+        # solve would cover it at every trial too -- neither the strip arm of
+        # 20261009a-20261010n nor the no-strip path (BFS.md 8)
+        raise RuntimeError("sqp: sqp_inner.LAT_STRIP is a diagnostic of the Evaluator; the optimiser has no strip "
+                           "since 2026-10-16 (BFS.md 8)")
     W = np.asarray(sorted(Omega), float)
     mg = sel_margin * eps
     mg_row = mg * (1.0 + (LAT_CUSHION if lattice is not None else 0.0))   # the rows' target (LAT_CUSHION)
@@ -1744,7 +1755,6 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
         return float(ev_fn.w_star.get(round(w0_, 6), w0_))
 
     _alpha_prev = 1.0; _last_pair_mu = None
-    _lev_at = None                                        # (design, level) the strip arm's level set was asked at (P1)
 
     def _offender(e_, en_):
         # DIAGNOSTIC (2026-10-08, the cold central run: up to 131 of 156 trials of
@@ -1796,7 +1806,7 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
         _last_adm[0] = (z.copy(), t)
     # ---- THE LEVEL SET BESIDE THE NEXT ITERATION (20261010j stage D, LAT_ASYNC /
     # --lattice-async; level-set-waves.md LS3 with its verifier's corrections,
-    # eval-waves.md P5, driver-serial.md P3).  Without the strip the missed-peak
+    # eval-waves.md P5, driver-serial.md P3).  Synchronous, the missed-peak
     # level set ran alone after every accepted step (central 770632: 65 % of the
     # wall, ranks busy 8 %, 46-127 s a call), and at least 82-88 % of the calls
     # added nothing.  Here, at the accepted step's C (the refine below), the call
@@ -1819,9 +1829,8 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
     # result does not depend on the rank that computed it (lattice 'Determinism';
     # the look-ahead's waves run on fewer ranks, the level disks never on rank 0).
     # One look-ahead deep (a deeper one would change level_prev, the next call's
-    # first wave: eval-waves.md P5 verifier).  The strip arm keeps its level set in
-    # the accepted trial's re-evaluation (its look-ahead would hold a level set).
-    _asy = (lattice is not None and LAT_ASYNC in ('on', 'redo') and refine_tol is not None and not LAT_STRIP
+    # first wave: eval-waves.md P5 verifier).  The default since 2026-10-16 (BFS.md 8).
+    _asy = (lattice is not None and LAT_ASYNC in ('on', 'redo') and refine_tol is not None
             and getattr(lattice, 'pool', None) is not None and int(getattr(lattice, 'size', 1)) > 1)
     _sp = None                                            # the look-ahead out: the call's job, the state at its C
     _rb = None                                            # a discarded look-ahead: resume at its C (state, result)
@@ -1843,7 +1852,7 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
         (restored at the loop's top), its lists and dicts (copies), the
         evaluator, the lattice driver's state (look_state)."""
         return dict(loc=(z, t, e, H, Delta, nu, W, code, exit_info, _deadline_hit, _it_wall, _t_it, _alpha_prev,
-                         _last_pair_mu, _lev_at, alpha, accepted, d, dt, sub, status, gL, stat, pred, m0, en, zn, tn),
+                         _last_pair_mu, alpha, accepted, d, dt, sub, status, gL, stat, pred, m0, en, zn, tn),
                     lists={nm_: list(v_) for nm_, v_ in _sp_lists().items()}, box=[dict(b_) for b_ in box_log],
                     best=dict(best), ev=ev_fn.look_state(), lat=lattice.look_state(),
                     ntr=(len(_trace) if _trace is not None else 0))
@@ -1916,7 +1925,7 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
             # back at the C of a discarded look-ahead (its level call found members, or 'redo'):
             # the loop's variables as they were there; the synchronous continuation follows
             (z, t, e, H, Delta, nu, W, code, exit_info, _deadline_hit, _it_wall, _t_it, _alpha_prev,
-             _last_pair_mu, _lev_at, alpha, accepted, d, dt, sub, status, gL, stat, pred, m0, en, zn, tn) = _rb['S']['loc']
+             _last_pair_mu, alpha, accepted, d, dt, sub, status, gL, stat, pred, m0, en, zn, tn) = _rb['S']['loc']
             if it != _rb['it']:
                 raise RuntimeError(f"sqp: a discarded look-ahead resumed at iteration {it}, not at its own {_rb['it']}")
         else:
@@ -2002,11 +2011,7 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                     # order 10, round 1: a step of 2.2 in z took a pole to +0.17 for 87
                     # of sigma against a penalty of 22, and the solve sat on
                     # inadmissible iterates from there)
-                    ev_fn.lat_strip = False           # a trial: the line only (strip and level set once accepted, below)
-                    try:
-                        _rc = _ctrl_restore(zn, None)
-                    finally:
-                        ev_fn.lat_strip = True
+                    _rc = _ctrl_restore(zn, None)
                     if _rc is not None:
                         zn, en = _rc; n_soc[0] += 1
                     elif not _close_at_line(zn):
@@ -2017,14 +2022,10 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                     # like the square root of the step, halving cannot bring it back --
                     # the merit decides, as before
                 if en is None:
-                    # a trial: the line's certificate decides its admissibility; the
-                    # strip (the rows of every eigenvalue near the line) is built for
-                    # the iterate only, once accepted (below)
-                    ev_fn.lat_strip = False
-                    try:
-                        en = ev_fn(zn)
-                    finally:
-                        ev_fn.lat_strip = True
+                    # a trial: the line's certificate decides its admissibility, and an
+                    # accepted trial's rows are the QP's at the next iterate (no strip
+                    # since 2026-10-16: no re-evaluation, BFS.md 8)
+                    en = ev_fn(zn)
                 if lattice is not None and admissible(e) and not admissible(en):
                     # a trial across the closed loop's line from an admissible
                     # iterate (lattice: every trial's line is certified on the full
@@ -2105,20 +2106,6 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                         continue
                     break
                 continue
-            if not en.get('lat_strip', True):
-                # the accepted trial with its strip (the QP's rows) and, in the same
-                # waves, the level-set certificate the missed-peak check below asks
-                # for at this design and level (lattice memo).  The level from the
-                # rows' maximum, not the epigraph's t alone (20261010j, P1, below),
-                # the trial's own rows (the same design) watching
-                _lev_at = (zn.copy(), max(tn, en['smax']))
-                ev_fn.level_req = ((_lev_at[1] * (1.0 + refine_tol), float(refine_grid[0]), float(refine_grid[-1]))
-                                   if refine_tol is not None else None)
-                ev_fn.level_watch = (refine_tol, en.get('follow_rows') or []) if refine_tol is not None else None
-                try:
-                    en = ev_fn(zn)
-                finally:
-                    ev_fn.level_req = None; ev_fn.level_watch = None
             # damped BFGS on the Lagrangian
             subn, _ = subproblem(en, tn, H, Delta, eps, ctrl_max, kink_block,
                                  disp=((zn - z_start, float(max_disp)) if max_disp is not None else None), pen=nu / 100.0, relax=lattice is not None)
@@ -2164,17 +2151,12 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
             # design certified 4.6 % above t.  At max(t, smax) (1 + tol) no row's own
             # peak is above gam: a region above is off the rows.  The lattice only
             # (the reduced path's dense certificate computes the maximum itself).
-            # The strip arm asked for it above, from the trial's rows: the same
-            # design, so its level (to 1e-9) and its memo
             # (20261010j stage D) the look-ahead of an earlier C joined first: discarded, back to its C
             if _sp is not None and _sp_join():
                 continue
             _lev = t
             if lattice is not None:
                 _lev = max(t, e['smax'])
-                if _lev_at is not None and np.array_equal(_lev_at[0], z) and _lev <= _lev_at[1] * (1.0 + 1e-9):
-                    _lev = _lev_at[1]
-            _lev_at = None
             _sp_here = None
             if _rb is not None:
                 # resumed here: the call's result, joined beside the discarded look-ahead, read as missed_peaks reads it
@@ -2390,8 +2372,6 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                  deadline_hit=bool(_deadline_hit), it_wall_max=float(_it_wall), t_loop_end=float(_t_loop_end),
                  lattice=(dict(evaluations=len(ev_fn.lat_info), gain_evals=int(sum(i_['nev'] for i_ in ev_fn.lat_info)),
                                newton_max=int(max((i_['newton_max'] for i_ in ev_fn.lat_info), default=0)),
-                               strip_shifts_max=int(max((l_['strip_shifts'] for l_ in ev_fn.lat_line), default=0)),
-                               strip_incomplete=int(sum(not l_['strip_complete'] for l_ in ev_fn.lat_line)),
                                line_shifts=int(sum(l_['nshift'] for l_ in ev_fn.lat_line)),
                                line_waves_max=int(max((l_['waves'] for l_ in ev_fn.lat_line), default=0)),
                                line_not_clear=int(sum(not l_['clear'] for l_ in ev_fn.lat_line)),
@@ -2411,7 +2391,7 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                                follow_ext=int(sum(i_.get('ext', 0) for i_ in ev_fn.lat_info)),
                                level_cg_max=int(max((l_['cg_max'] for l_ in ev_fn.level_log), default=0)),
                                level_pencil_max=int(max((l_['pencil'] for l_ in ev_fn.level_log), default=0)),
-                               strip=bool(LAT_STRIP), cross_policy=LAT_CROSS, back=int(n_back[0]),
+                               cross_policy=LAT_CROSS, back=int(n_back[0]),
                                # 20261010j stage C: copies merged into a row (AB3), the members' counts (omega P1),
                                # the level set's disks (LS1), the rows at the QP solutions (AB4)
                                rows_dup_max=int(max((l_.get('rows_dup', 0) for l_ in ev_fn.lat_line), default=0)),
