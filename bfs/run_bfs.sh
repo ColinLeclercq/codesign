@@ -28,6 +28,8 @@
 #             (--sqp-partial-shrink on; default 0 since 20261008c; only with TRUST=legacy)
 #   TRUST     the SQP's trust-radius rule (--sqp-trust-rule): ratio (default since 2026-10-17) or
 #             legacy (the rule of every run before; directories get _leg)
+#   TRUST_PARTIAL  with TRUST=ratio: 0 = the radius kept after a step accepted at alpha < 1 instead of
+#             2 alpha |d| (--sqp-trust-partial off, an A/B arm; directories get _nopart); default 1
 #   LATTICE_K with ORACLE=lattice: eigenvalues per disk centre of the line, each with its
 #             stability row (--lattice-k; default 1)
 #   STRIP     refused (bfs/lib.sh strip_refused): the strip arm (--lattice-strip on) was removed on
@@ -152,7 +154,13 @@ esac
 if [ "${TRUST:-ratio}" = ratio ] && [ "${SHRINK:-0}" = 1 ]; then
     echo "run_bfs.sh: SHRINK=1 (--sqp-partial-shrink on) is a legacy-rule arm: give TRUST=legacy with it"; exit 2
 fi
+case "${TRUST_PARTIAL:-1}" in
+    1) ;;
+    0) [ "${TRUST:-ratio}" = ratio ] || { echo "run_bfs.sh: TRUST_PARTIAL=0 is a leg of TRUST=ratio"; exit 2; } ;;
+    *) echo "run_bfs.sh: TRUST_PARTIAL must be 1 (default) or 0 (got ${TRUST_PARTIAL})"; exit 2 ;;
+esac
 TRF=(--sqp-trust-rule "${TRUST:-ratio}")
+if [ "${TRUST:-ratio}" = ratio ]; then TRF+=(--sqp-trust-partial "$([ "${TRUST_PARTIAL:-1}" = 0 ] && echo off || echo on)"); fi
 exec ${LAUNCH} ${PY:-python} -u run_case_epi.py --plant bfs --ops "${OPS:-bfs/data/ops_fx.npz}" --lu-order mumps \
     --init "$init" --cold --case K+B+C --r "${R:-5}" --eps 0.05 --start 0 --nproc 1 --cert_nseg "${CERT_NSEG:-16}" --cert-split "${CERT_SPLIT:-23}" --wlo 0 --whi 10 \
     --outer "${OUTER:-40}" --deadline "${DEADLINE:-0}" --wall "${WALL:-54000}" "${STAB[@]}" \

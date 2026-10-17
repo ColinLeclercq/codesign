@@ -62,8 +62,19 @@ TRUST_RULE = 'legacy'   # the trust radius's control (--sqp-trust-rule).  'legac
 TRUST_RHO = (0.25, 0.75)
 TRUST_MAX = 1.0         # 'ratio': the radius's cap, packed units (a controller entry scaled by its own size moves by 100 %,
                         # a port by 0.3); the BFS radius under 'legacy' grew to 0.17-0.70 (20261010n)
+TRUST_PARTIAL = True    # 'ratio': the leg 2 alpha |d| after a step ACCEPTED at alpha < 1 (--sqp-trust-partial; off: the radius
+                        # kept there).  Its own switch for an A/B: no source read ties the radius to an accepted step
+                        # (lit2/ADDENDUM 5.2: Burke-Engle shrink on a poor ratio, Apkarian-Noll-Ravanbod keep or double after
+                        # a serious step), and the project rejected it three times under defects since fixed (LESSONS 1)
+TRUST_PRED_FLOOR = 1e-5 # 'ratio': below |pred| = this x max(|t|, 1) (10 x the certificate's rtol 1e-6) rho is the oracle's
+                        # noise: no shrink and no growth on rho; the legacy growth (a full step on the boundary) instead, so a
+                        # radius the model cannot resolve is not locked in
+TRUST_REF_REL = 1e-3    # 'ratio': the exit's reference radius, this x max(|z|, 1) at the solve's start (the default start
+                        # radius; ~0.012 on the BFS, the scale of --sqp-trust 0.01): the 'pred' exit judges the QP's predicted
+                        # decrease there, not in a box the rule may have shrunk to 2 alpha |d| (pred small because the box is)
 QP_EQ_BOUNDS = (1e-2, 1e2)
 _QP_EQ = [0]            # QPs solved by that last try (the process's count)
+_TRUST_LEGS = ('partial', 'grow', 'keep', 'rho_low', 'rejected', 'partial_kept', 'partial_gated', 'floor', 'exit_refused')
 LAT_STRIP = False       # lattice, a DIAGNOSTIC of the Evaluator only (tools; e.g. a stationarity measure that needs the
                         # closed-loop eigenvalues LEFT of the line): every evaluation also covers the strip [-eps - reach,
                         # -eps] (lattice._strip), every eigenvalue in it a stability row.  The optimiser has no strip since
@@ -1538,7 +1549,11 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
     H = np.eye(NZ) if H0 is None else np.asarray(H0, float).copy()
     Delta = trust0 if trust0 else 1e-3 * max(float(np.linalg.norm(z)), 1.0)   # row gradients ~1e3-1e4: the linear model holds for steps ~1e-4 |z|
     _D_start = Delta
-    _trust_n = [0, 0, 0, 0, 0]          # TRUST_RULE 'ratio': steps at alpha < 1, x 2, kept, rho < TRUST_RHO[0], rejected searches
+    _D_ref = TRUST_REF_REL * max(float(np.linalg.norm(z)), 1.0)   # TRUST_RULE 'ratio': the exit's reference radius
+    _trust_n = [0] * len(_TRUST_LEGS)   # TRUST_RULE 'ratio': how often each leg fired (_TRUST_LEGS)
+    _trust_why = [0, 0, 0, 0]           # ... the failed trials that set a shrink: sigma rows, a stability row, an eigenvalue
+                                        # without a row (a piece the QP did not contain), the compensator's line
+    _trust_box = [0, 0, np.inf, 0.0]    # ... steps on the box, inside it (H or the rows limit them), min / max lambda_max(H)
     _qp_eq0 = _QP_EQ[0]
     # merit penalty nu, and the QP's elastic slack costs (nu for the rows, 10 nu
     # for the Hermite and LMI slacks).  Fixed at 100 (GL), or ADAPTIVE
@@ -1814,25 +1829,47 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
             return float(np.linalg.norm(v))
         return float(np.max(np.abs(v)))
 
-    def _trust_ratio(D_, a_, dn_, ared_, pred_):
+    def _trust_ratio(D_, a_, dn_, ared_, pred_, t_, why_):
         """TRUST_RULE 'ratio': the radius after a step accepted at alpha a_, the QP's
         step dn_ = |d| (trust norm) at radius D_, the merit's actual decrease ared_
-        against the model's pred_."""
+        against the model's pred_, at t_; why_ the cause of the failed trial at 2 a_
+        (alpha < 1).  Returns (radius, leg, rho)."""
+        cap_ = max(TRUST_MAX, _D_start, D_)
         if a_ < 1.0:
-            _trust_n[0] += 1
-            return max(2.0 * a_ * dn_, 1e-10)       # where the model held (2 alpha failed)
+            if not TRUST_PARTIAL:
+                return D_, 'partial_kept', None
+            if why_ == 'unseen':
+                # the trial at 2 alpha failed on an eigenvalue the QP had no row for, not on
+                # the QP's own rows: the radius is not the model's fault (ANR 2018 step 7)
+                return D_, 'partial_gated', None
+            return max(2.0 * a_ * dn_, 1e-10), 'partial', None   # where the model held (2 alpha failed)
         if not pred_ > 0.0:
-            _trust_n[2] += 1
-            return D_
+            return D_, 'keep', None
+        if abs(pred_) < TRUST_PRED_FLOOR * max(abs(t_), 1.0):
+            # rho is the oracle's noise here: the legacy growth only (a full step on the boundary)
+            return (min(2.0 * D_, cap_) if dn_ > 0.9 * D_ else D_), 'floor', None
         rho_ = ared_ / pred_
         if rho_ >= TRUST_RHO[1] and dn_ >= 0.9 * D_:
-            _trust_n[1] += 1
-            return min(2.0 * D_, max(TRUST_MAX, _D_start, D_))
+            return min(2.0 * D_, cap_), 'grow', rho_
         if rho_ < TRUST_RHO[0]:
-            _trust_n[3] += 1
-            return max(0.5 * dn_, 1e-10)
-        _trust_n[2] += 1
-        return D_
+            return max(0.5 * dn_, 1e-10), 'rho_low', rho_
+        return D_, 'keep', rho_
+
+    def _trust_note(leg_, why_, D0_, D1_, rho_, dn_, H_):
+        """TRUST_RULE 'ratio': count the leg, and (verbose) one line per iteration --
+        the leg and its cause, the radius, rho, whether the box or H / the rows limit
+        the step, lambda_max(H)."""
+        _trust_n[_TRUST_LEGS.index(leg_)] += 1
+        if leg_ in ('partial', 'rejected', 'partial_gated') and why_ in ('sigma', 'stab', 'unseen', 'ctrl'):
+            _trust_why[('sigma', 'stab', 'unseen', 'ctrl').index(why_)] += 1
+        on_box_ = dn_ >= 0.999 * D0_
+        _trust_box[0 if on_box_ else 1] += 1
+        lmax_ = float(np.max(np.linalg.eigvalsh(0.5 * (H_ + H_.T)))) if H_.size else 0.0
+        _trust_box[2] = min(_trust_box[2], lmax_); _trust_box[3] = max(_trust_box[3], lmax_)
+        if verbose:
+            print(f"      trust: {leg_}{f' ({why_})' if why_ and leg_ in ('partial', 'rejected', 'partial_gated') else ''} "
+                  f"D {D0_:.2e} -> {D1_:.2e}{f', rho {rho_:.3f}' if rho_ is not None else ''}, |d| {dn_:.2e} "
+                  f"({'on the box' if on_box_ else 'inside the box'}), lambda_max(H) {lmax_:.2e}", flush=True)
     cands = []                                            # (smax, z, al, t) admissible iterates, for the certified fallback
     def _note(e_, t_):
         if admissible(e_):
@@ -1915,7 +1952,7 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                   sub_status_log=sub_status_log, stab_cross=stab_cross, cands=cands, added=added, n_soc=n_soc,
                   n_ctrl_cut=n_ctrl_cut, n_stab_cut=n_stab_cut, n_stab_unseen=n_stab_unseen, _last_adm=_last_adm,
                   _n_out=_n_out, n_back=n_back, _QP_DUMPED=_QP_DUMPED,   # (the QP dumps' count: theirs, not the look-ahead's)
-                  _trust_n=_trust_n, _QP_EQ=_QP_EQ)
+                  _trust_n=_trust_n, _trust_why=_trust_why, _trust_box=_trust_box, _QP_EQ=_QP_EQ)
         if _trace is not None:
             L_['_trace'] = _trace
         return L_
@@ -2050,8 +2087,10 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                       f"compensator rows {len(_cr)} predicted max {max(_cr) if _cr else float('nan'):+.8f} (line {lim:+.5f}), "
                       f"at z + d {_alc_cheap(z + d):+.8f}; hermite blocks {[k_ for k_ in ('hermite', 'hermite_cl') if e.get(k_) is not None]}",
                       flush=True)
+            _why = None                                   # (TRUST_RULE 'ratio') why the last failed trial failed
             for _ls in range(8):
                 zn = z + alpha * d; tn = t + alpha * dt
+                _tc = 'sigma'
                 if ev_fn.pair_mode:
                     zn, _rres = ev_fn.retract(zn)             # back onto the manifold (second order in the step)
                 _kc = 'al_ctrl_rest' if ev_fn.pair_mode else 'al_ctrl'
@@ -2070,7 +2109,7 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                         zn, en = _rc; n_soc[0] += 1
                     elif not _close_at_line(zn):
                         n_ctrl_cut[0] += 1
-                        alpha *= 0.5
+                        alpha *= 0.5; _why = 'ctrl'
                         continue
                     # a nearly double pole at the line off the face S: its crossing moves
                     # like the square root of the step, halving cannot bring it back --
@@ -2089,6 +2128,7 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                     # test below decides, as on the reduced path
                     n_stab_cut[0] += 1
                     _w, _j = _offender(e, en)
+                    _tc = 'unseen' if (_w is not None and _j is None) else 'stab'
                     if _w is not None and _j is None:
                         n_stab_unseen[0] += 1
                     if _w is not None:
@@ -2109,7 +2149,7 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                                   + (f", its row predicted Re {stab_cross[-1]['pred'] - eps:+.6f}" if _j is not None else
                                      " (no row within 0.05)"), flush=True)
                     if LAT_CROSS == 'cut':
-                        alpha *= 0.5
+                        alpha *= 0.5; _why = _tc
                         continue
                 if DEBUG_LS:
                     # the row attaining the trial's max: actual value vs its linear model
@@ -2126,7 +2166,7 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                           f"res {(_rres if ev_fn.pair_mode else 0.0):.1e} viol {viol(en, tn):.2e})", flush=True)
                 if merit(en, tn) <= m0 - 1e-4 * alpha * max(pred, 0.0):
                     accepted = True; break
-                alpha *= 0.5
+                alpha *= 0.5; _why = _tc
             if DEBUG_LS and not accepted:
                 _er = ev_fn(z)
                 print(f"      ls it {it}: REJECTED; the current iterate re-evaluated: smax {_er['smax']:.7f} (recorded {e['smax']:.7f})", flush=True)
@@ -2155,8 +2195,12 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
             if not accepted:
                 if TRUST_RULE == 'ratio':
                     # the model failed at every trial down to the last alpha tried (2 x the
-                    # halved alpha left by the search): the next QP inside twice that step
-                    Delta = min(0.5 * Delta, 4.0 * alpha * _tnorm(d)); _trust_n[4] += 1
+                    # halved alpha left by the search): the next QP inside twice that step.
+                    # Not gated on an eigenvalue without a row (the partial leg is): the
+                    # iterate stays, its rows too, and the same QP would fail the same way
+                    _D0 = Delta
+                    Delta = min(0.5 * Delta, 4.0 * alpha * _tnorm(d))
+                    _trust_note('rejected', _why, _D0, Delta, None, _tnorm(d), H)
                 else:
                     Delta *= 0.5
                 if Delta < 1e-10:
@@ -2166,6 +2210,7 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                     break
                 continue
             # damped BFGS on the Lagrangian
+            _H_qp = H                                     # (the QP's H: the update below makes a new array)
             subn, _ = subproblem(en, tn, H, Delta, eps, ctrl_max, kink_block,
                                  disp=((zn - z_start, float(max_disp)) if max_disp is not None else None), pen=nu / 100.0, relax=lattice is not None)
             gLn = grad_L(en, subn) if subn is not None else gL
@@ -2195,7 +2240,8 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                         path_info.append(_pinfo(e, it=int(it), alpha=None, prev_adm=True, backs=0, how='pair entry'))
             if TRUST_RULE == 'ratio':
                 # (before the refine: the level set's look-ahead state at this C carries it)
-                Delta = _trust_ratio(_D_qp, alpha, _tnorm(d), _ared, pred)
+                Delta, _leg, _rho = _trust_ratio(_D_qp, alpha, _tnorm(d), _ared, pred, t, _why)
+                _trust_note(_leg, _why, _D_qp, Delta, _rho, _tnorm(d), _H_qp)
             elif (PARTIAL_SHRINK or (PAIR_BALL and ev_fn.pair_mode)) and alpha < 1.0:
                 # the line search found where the model holds: a radius of twice the
                 # accepted step (2 alpha failed), so the next QP picks its direction
@@ -2313,6 +2359,32 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
         # predicting a decrease.  The predicted decrease is in the objective's
         # own units, independent of the parametrisation.
         _pred_small = pred_rel is None or pred <= pred_rel * max(abs(t), 1.0)
+        _pr = None
+        if (TRUST_RULE == 'ratio' and pred_rel is not None and _pred_small and stat >= tol
+                and stat < stat_rel * _gscale and _v < tol):
+            # A RADIUS-FREE EXIT (TRUST_RULE 'ratio', lit2/ADDENDUM 5.2 item 3): pred is
+            # the decrease predicted in the box of this iteration's QP, which the rule
+            # may have shrunk to 2 alpha |d| -- small because the box is.  The exit
+            # judges the QP at this iterate with the reference radius _D_ref instead
+            # (one QP, no evaluation; a larger box only predicts more, so it is needed
+            # only when the box is smaller); a decrease worth a step there refuses the
+            # exit and gives the next QP that radius
+            if Delta < _D_ref:
+                _sr, _ = subproblem(e, t, H, _D_ref, eps, ctrl_max, kink_block, mg_row=mg_row,
+                                    disp=((z - z_start, float(max_disp)) if max_disp is not None else None),
+                                    pen=nu / 100.0, relax=lattice is not None)
+                _pr = (merit(e, t) - (t + float(_sr['dt']))) if _sr is not None else None
+            _refuse = _pr is not None and _pr > pred_rel * max(abs(t), 1.0)
+            if verbose:
+                print(f"    sqp: exit test (pred): QP pred {pred:.3e} at D {Delta:.2e}; at the reference radius "
+                      f"{_D_ref:.2e}: " + (f"pred {_pr:.3e}" if _pr is not None else
+                                           ('(not needed: D >= it)' if Delta >= _D_ref else '(its QP failed)'))
+                      + f" against {pred_rel * max(abs(t), 1.0):.3e} -> "
+                      + ('exit REFUSED, the next QP at the reference radius' if _refuse else 'exit'), flush=True)
+            if _refuse:
+                _pred_small = False
+                _trust_n[_TRUST_LEGS.index('exit_refused')] += 1
+                Delta = max(Delta, _D_ref)
         if (stat < tol or (stat < stat_rel * _gscale and _pred_small)) and _v < tol:
             if (ev_fn.pair_mode and _last_pair_mu is not None and e.get('pair') is not None
                     and e['pair']['c'][0] < -10 * PAIR_KAPPA and abs(_last_pair_mu[2]) > PAIR_EXIT_TOL):
@@ -2329,6 +2401,8 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                 e = ev_fn(z); t = max(t, e['smax'])
                 continue
             code = 0; exit_info = dict(stat=stat, gscale=_gscale, viol=_v, n_active=len(_act), pred=float(pred), t=float(t))
+            if TRUST_RULE == 'ratio':
+                exit_info.update(Delta=float(Delta), D_ref=float(_D_ref), pred_ref=(None if _pr is None else float(_pr)))
             if hasattr(pk, 'blocks') and _act:
                 # where the active rows' gradient lives (STAGE6 6.14): the row of
                 # largest gradient norm, by block of the design vector
@@ -2404,10 +2478,18 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
               f"{n_ctrl_cut[0]} trial(s) cut back inside the compensator's line"
               + (f", {n_stab_cut[0]} inside the closed loop's (lattice)" if lattice is not None else ''), flush=True)
     if verbose and TRUST_RULE == 'ratio':
-        print(f"    sqp: trust radius by the ratio rule, {_D_start:.2e} -> {Delta:.2e}: {_trust_n[0]} step(s) at alpha < 1 "
-              f"(-> 2 alpha |d|), {_trust_n[1]} doubled, {_trust_n[2]} kept, {_trust_n[3]} at rho < {TRUST_RHO[0]:g} "
-              f"(-> |d| / 2), {_trust_n[4]} rejected line search(es); {_QP_EQ[0] - _qp_eq0} QP(s) solved only with "
-              f"the equilibration bounded to {QP_EQ_BOUNDS[0]:g} .. {QP_EQ_BOUNDS[1]:g}", flush=True)
+        _tn = dict(zip(_TRUST_LEGS, _trust_n))
+        print(f"    sqp: trust radius by the ratio rule (partial leg {'on' if TRUST_PARTIAL else 'off'}), {_D_start:.2e} -> "
+              f"{Delta:.2e} (reference {_D_ref:.2e}): {_tn['partial']} step(s) at alpha < 1 -> 2 alpha |d|, "
+              f"{_tn['partial_kept']} kept there (leg off), {_tn['partial_gated']} kept there (an eigenvalue without a row), "
+              f"{_tn['grow']} doubled, {_tn['keep']} kept, {_tn['rho_low']} at rho < {TRUST_RHO[0]:g} -> |d| / 2, "
+              f"{_tn['floor']} below the oracle floor (no rho), {_tn['rejected']} rejected line search(es), "
+              f"{_tn['exit_refused']} exit(s) refused at the reference radius; the failed trials behind a shrink: "
+              f"{_trust_why[0]} sigma rows, {_trust_why[1]} a stability row, {_trust_why[2]} an eigenvalue without a row, "
+              f"{_trust_why[3]} the compensator's line; steps {_trust_box[0]} on the box / {_trust_box[1]} inside it, "
+              f"lambda_max(H) {(_trust_box[2] if np.isfinite(_trust_box[2]) else float('nan')):.2e} .. {_trust_box[3]:.2e}; "
+              f"{_QP_EQ[0] - _qp_eq0} QP(s) solved only with the equilibration bounded to "
+              f"{QP_EQ_BOUNDS[0]:g} .. {QP_EQ_BOUNDS[1]:g}", flush=True)
     _asy_info = None
     if _asy:
         # the asynchronous level set's share of this solve (20261010j stage D): look-aheads kept / discarded,
@@ -2431,8 +2513,13 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                  wall=_wall_pre, inner='sqp', kink_block=kink_block,
                  ctrl_lmi=bool(ctrl_lmi), alpha_rows=ev_fn.n_alpha_rows, alpha_fallback=ev_fn.n_fallback,
                  trust_final=float(Delta),
-                 **(dict(trust_rule=TRUST_RULE, trust_counts=dict(zip(('partial', 'grow', 'keep', 'rho_low', 'rejected'),
-                                                                      _trust_n)), qp_eq_rescued=int(_QP_EQ[0] - _qp_eq0))
+                 **(dict(trust_rule=TRUST_RULE, trust_partial=bool(TRUST_PARTIAL), trust_ref=float(_D_ref),
+                         trust_counts=dict(zip(_TRUST_LEGS, _trust_n)),
+                         trust_why=dict(zip(('sigma', 'stab', 'unseen', 'ctrl'), _trust_why)),
+                         trust_steps=dict(on_box=int(_trust_box[0]), inside=int(_trust_box[1]),
+                                          lam_max_H=([float(_trust_box[2]), float(_trust_box[3])]
+                                                     if _trust_box[0] + _trust_box[1] else None)),
+                         qp_eq_rescued=int(_QP_EQ[0] - _qp_eq0))
                     if TRUST_RULE == 'ratio' else {}),
                  added_freqs=added, W_final=[float(w) for w in ev_fn.W], pair_log=pair_log, pair_mode_end=bool(ev_fn.pair_mode), z_last=[float(x) for x in z], e_last_al_ctrl=float(e["al_ctrl"]), e_last_al=float(e["al"]),
                  screen=(ev_fn.screen_stats[-1] if ev_fn.screen_stats else None),

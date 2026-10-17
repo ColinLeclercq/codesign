@@ -52,6 +52,10 @@
 #        (the trust-radius rule of every run before 2026-10-17, --sqp-trust-rule
 #         legacy; the default is the ratio rule, sqp_inner.TRUST_RULE; the
 #         directories get _leg)
+#   TRUST_PARTIAL=0 ... sbatch ...
+#        (the ratio rule without its partial-step leg, --sqp-trust-partial off:
+#         the radius kept after a step accepted at alpha < 1; the directories
+#         get _nopart)
 #   PLANT_ONLY=1 sbatch --ntasks=48 --mem=100G --time=03:00:00 bfs/slurm/testplant.slurm
 #        (build this code's test plant files, if missing, and stop; then submit the
 #         batch with --dependency=afterok:<that job>: a job finding the plant being
@@ -119,7 +123,9 @@ if [ "${ORACLE:-reduced}" = lattice ] && [ "$AF" = off ]; then SUF="${SUF}_sync"
 # TRUST=legacy: the trust-radius rule of every run before 2026-10-17 (bfs/run_bfs.sh
 # passes --sqp-trust-rule; ratio by default, no suffix then)
 if [ "${TRUST:-ratio}" = legacy ]; then SUF="${SUF}_leg"; fi
-export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-24} RETIRE=${RETIRE:-} SHRINK=${SHRINK:-0} LATTICE_K=${LATTICE_K:-1} CROSS=${CROSS:-merit} ASYNC=${ASYNC:-1} TRUST=${TRUST:-ratio}
+# TRUST_PARTIAL=0 (with the ratio rule): the radius kept after a partial step, an A/B arm
+if [ "${TRUST_PARTIAL:-1}" = 0 ]; then SUF="${SUF}_nopart"; fi
+export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-24} RETIRE=${RETIRE:-} SHRINK=${SHRINK:-0} LATTICE_K=${LATTICE_K:-1} CROSS=${CROSS:-merit} ASYNC=${ASYNC:-1} TRUST=${TRUST:-ratio} TRUST_PARTIAL=${TRUST_PARTIAL:-1}
 IDX=${SLURM_ARRAY_TASK_ID:-}                           # array job: the start index (catalogue entry)
 NSTART=${NSTART:-64}
 if [ -n "$IDX" ]; then
