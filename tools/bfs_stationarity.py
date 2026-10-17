@@ -49,7 +49,21 @@ over the eps-active pieces and the eps-active constraints (c / 0.05 >= -eps;
 with and without the constraints, q = 2 (Euclidean) and q = 1 (the dual of
 the trust box's l_inf), normalised by the mean ||g_i||_q of the active pieces
 (the SQP's own _gscale, the GL convention of tools/stationarity.py): 1 = no
-cancellation at all, 0 = exact (eps-)stationarity.  The decomposition: the
+cancellation at all, 0 = exact (eps-)stationarity.  The mean misleads when the
+|g_i| spread (GL KSP+B+C: rows 44.1 and 1734.1, the minimiser puts no weight on
+the large one: a false "stationary kink"), so the residual is also printed over
+the smallest active |g_i|, over the minimiser's own weights sum lam_i |g_i|
+(blocks: sum_a Y_aa |Hs_aa|), and over that plus sum mu_j |h_j| (the
+cancellation ratio in [0, 1]); per variable group the same cancellation ratio
+on the group's coordinates, invariant under a uniform rescaling of the group
+(the packed coordinates are badly scaled: sc, sx, the modal 2 x 2 blocks'
+2-dimensional similarity gauge).  None of these is coordinate-free; the
+measured decrease below is the number the verdict rests on.  The constraint
+qualification: the distance from 0 to the hull of the unit active constraint
+gradients (MFCQ when > 0; the residual's normalisation sum lam + sum tr Y = 1
+is the KKT form, lambda_0 = 1 of Fritz John, meaningful only under MFCQ).
+Every eigenvalue the line saw within eps_pred of it without a row is flagged
+(a missing normal cone).  The decomposition: the
 weights, each block's tr Y and eigenvalues, each mu_j and mu_j ||h_j||, the
 residual by variable group.  (iv) The predicted first-order decrease
 
@@ -63,10 +77,15 @@ discounted by their gaps).  Also the ball (|d|_2 <= Delta) and the box
 without constraints; at the record's sqp_trust too.  Delta_set = gamma
 eps_pred / max ||g_i||_1: beyond it a piece below gamma (1 - eps_pred) could
 reach the max within the box, and pred is optimistic.  (v) The descent test:
-d*(Delta) from the box LP, z + t d* re-evaluated (the tops of P(eps_pred)
-re-located by peak_tops, the compensator, the positions): Delta_v = the
-largest Delta at which the actual decrease is at least half the predicted
-one, and pred_inf(Delta_v) / gamma -- "the first-order decrease available
+d*(Delta) from the box LP with its closed-loop rows on the QP's line -eps_s -
+2 mg (as the SQP), z + t d* re-evaluated (the tops of P(eps_pred) re-located
+by peak_tops, the compensator, the positions, and the closed-loop eigenvalues
+of every row that can reach -eps_s - mg within the step, tracked by
+lattice._nearest; a compensator over its line is first put back by the SQP's
+own second-order correction, sqp_inner _ctrl_restore_modal, as the run's line
+search does): Delta_v = the largest Delta at which the actual decrease
+is at least half the predicted one and the step is admissible on those
+checks, and pred_inf(Delta_v) / gamma -- "the first-order decrease available
 where the first-order model holds", the decision-relevant number.  (With
 P(eps_max = 0.01) alone, SISO 598.11 at Delta = 1e-5 read -8.96e-3 over its 3
 tops while the top at 1.373, 0.986 gamma, rose to 0.993: -7.04e-3.)
@@ -74,17 +93,22 @@ tops while the top at 1.373, 0.986 gamma, rose to 0.993: -7.04e-3.)
 the stability line (clear, alpha <= -eps_s - mg) and the level set at the
 step's max (1 + 1e-6); a region it finds is located, the max raised to its
 top and the level set asked again (at most 3 times).  A clear outcome below
-gamma is a certified strictly better admissible design (NOT STATIONARY
-(certified)); otherwise the level set's tops correct the measured decrease
+gamma is a certified strictly better design, admissible on the line test the
+SQP's line search and the gate use (NOT STATIONARY (certified)); the run's
+acceptance also counts windings over all w with a tail bound (winding_cert),
+which is not run here, so an eigenvalue crossing above whi + wpad is not
+excluded.  Otherwise the level set's tops correct the measured decrease
 and Delta_v.
 
-THE VERDICT (LESSONS 4, 18.8): "stationary to rho_2/gscale = X at eps = Y"
-with the Clarke reading at the certificate's eps = 1e-6, the measured
-pred_inf(Delta_v)/gamma, whether the piece set is certified, and the stop
-reason -- never "optimal", "converged" or "local minimum".  (eps, rho) is the
-smallest eps of --eps whose rho_2/gscale (with constraints) is within a factor
-2 of the smallest over the list (rho is non-increasing in eps: more pieces and
-cones).  Its class (design.md 4.2) comes from the measured decrease at
+THE VERDICT (LESSONS 4, 18.8, 21): "stationary to rho_2/(sum lam_i |g_i|) = X
+at eps = Y" (with rho_2/gscale, rho_2/min|g_i|, the worst group-wise necessary
+condition and the MFCQ margin beside it) with the Clarke reading at the
+certificate's eps = 1e-6, the measured pred_inf(Delta_v)/gamma, whether the
+piece set is certified, and the stop reason -- never "optimal", "converged" or
+"local minimum".  (eps, rho) is the smallest eps of --eps whose rho_2/(sum
+lam_i |g_i|) (with constraints) is within a factor 2 of the smallest over the
+list (rho itself is non-increasing in eps: more pieces and cones; its
+normalisations are not).  Its class (design.md 4.2) comes from the measured decrease at
 Delta_v: <= 1e-6 gamma "stationary at the certificate's resolution"; <= 5e-4
 (the progress rule's per-round scale, 0.15 % over 3 rounds) "near
 eps-stationary"; above, "NOT STATIONARY (measured, uncertified)"; a
@@ -136,6 +160,12 @@ and both active (near-defective); its normal cone is restricted to the
 eigenvectors of H0 with eigenvalue <= eps tr H0 (complementarity), a
 heuristic, and the block sits on the QP's line (-eps_s - 2 mg).  The
 --sqp-view of the design (the QP's own -dt on its Omega) is not implemented.
+The descent test (2026-10-17, decentral 369.87 / 412.28): its LP holds the
+closed-loop rows on the QP's line -eps_s - 2 mg, its steps are checked against
+the tracked closed-loop eigenvalues (-eps_s - mg) and corrected back onto the
+compensator line like the SQP's trials; before, a step binding a closed-loop
+row was quoted though it sat on -eps_s, and a step binding an active v2 row
+was thrown out for a 1.2e-8 second-order crossing the SQP corrects.
 """
 from __future__ import annotations
 import os as _os_root, sys as _sys_root
@@ -548,6 +578,17 @@ def grid_seeds(z, gam, eps_max, whi):
     return out, len(ix), nps
 
 
+def clip_band(lat, z, res, whi):
+    """peak_tops results (w, s) inside the band: a Newton top beyond whi (the curve still rising at the band's end)
+    is the end point whi with its own value -- the problem's max is over [0, whi] (the descent test and the
+    completeness and certificate loops re-locate from points at or near whi; locate() does the same for the seeds)"""
+    res = [(float(w_), float(s_)) for w_, s_ in res]
+    if any(w_ > whi for w_, _ in res):
+        sw = float(lat.sigmas(z, [whi])[0])
+        res = [((whi, sw) if w_ > whi else (w_, s_)) for w_, s_ in res]
+    return res
+
+
 def merge_tops(tops):
     """Tops closer than MERGE are one: the higher kept."""
     kept = []
@@ -781,10 +822,12 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
                 if not lev['cross']:
                     break
                 sts = [{} for _ in lev['cross']]
-                new = lat.peak_tops(z0, [float(w_) for w_, _ in lev['cross']], RAD, states=sts)
+                new0 = lat.peak_tops(z0, [float(w_) for w_, _ in lev['cross']], RAD, states=sts)
+                new = clip_band(lat, z0, new0, whi)
                 n0 = len(tops)
-                tops = merge_tops(tops + [dict(w=float(w_), s=float(s_), top=bool(st.get('top')), edge=bool(st.get('edge')),
-                                               seed=float(c_[0]), end=False) for (w_, s_), st, c_ in zip(new, sts, lev['cross'])])
+                tops = merge_tops(tops + [dict(w=float(w_), s=float(s_), top=bool(st.get('top')) or w0_ > whi, edge=bool(st.get('edge')) and w0_ <= whi,
+                                               seed=float(c_[0]), end=bool(w0_ > whi))
+                                          for (w_, s_), (w0_, _), st, c_ in zip(new, new0, sts, lev['cross'])])
                 if len(tops) == n0:
                     P("    the regions' tops are known tops (the region estimate above the watched value): stop")
                     comp[-1]['outcome'] += ' (re-located onto known tops)'
@@ -859,6 +902,13 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
         S2m = lat.sigmas(z0, [pc['w'] for pc in moved], k=2)
         for pc, (s1, s2) in zip(moved, S2m):
             pc['s2'] = float(s2)
+            if pc['s2'] >= gam * (1 - eps_p):
+                # its sigma_2 now qualifies at the walked top (enrolment was decided at the seed's top): the 2 x 2 block
+                # on the driver (driver_block, FD-checked against sigma_1, sigma_2 at +-h in central/block_fd.py)
+                sigb, Gcb = driver_block(lat, z0, pc['w'], 2)
+                pc['sig'] = sigb; pc['Hs'] = hsym(Gcb)
+                log.append(f"top {pc['w']:.6f}: walked by the Evaluator, its sigma_2 {sigb[1]:.6f} within {eps_p:g}: "
+                           f"2x2 block built on the driver")
     # multiplicity >= 3: the r x r block on the driver
     for pc in pieces:
         if pc['Hs'] is not None and not pc['end']:
@@ -921,6 +971,16 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
                          scale=float(a.margin)))
     for cc in cons:
         cc['ct'] = cc['c'] / cc['scale']; cc['entry'] = max(-cc['ct'], 0.0); cc['hn'] = float(np.linalg.norm(cc['h']))
+    # every eigenvalue the line SAW within eps_pred of it must have a row: one without (its left vector failed,
+    # sqp_inner's "the rightmost seen has no row") is an active constraint missing from the normal cone, and the
+    # residual would read non-stationarity the cone removes (the SQP lacks the row as well)
+    seen_ = [complex(l_) for l_ in (lat_eigs[1] if lat_eigs is not None else [])]
+    no_row = []
+    for l_ in seen_:
+        ent_ = -(l_.real + eps_s) / eps_s
+        if ent_ <= eps_p and all(min(abs(l_ - q_), abs(l_ - np.conj(q_))) > 1e-6 * max(1.0, abs(l_)) for q_ in lams) \
+                and all(min(abs(l_ - q_), abs(l_ - np.conj(q_))) > 1e-6 * max(1.0, abs(l_)) for q_, _ in no_row):
+            no_row.append((l_, max(ent_, 0.0)))
     # the closed-loop Hermite block: only for a near-defective active pair (design.md 2.5)
     herm = None
     cl_j = [j for j, cc in enumerate(cons) if cc['kind'] == 'cl']
@@ -938,6 +998,10 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
     P(f"line: clear {e['clr']}, alpha {e['al']:+.7f} (record {float(z['alpha']) if 'alpha' in z.files else np.nan:+.7f}); "
       f"{len(cls)} closed-loop row(s), {sum(c_['kind'] == 'modal' for c_ in cons)} modal row(s), "
       f"{sum(c_['kind'] == 'pos' for c_ in cons)} position row(s)")
+    if no_row:
+        P(f"  WARNING: {len(no_row)} eigenvalue(s) the line saw within eps_pred of it have NO row (no gradient): "
+          + ', '.join(f"{l_.real:+.6f}{l_.imag:+.4f}i (entry eps {en_:.1e})" for l_, en_ in no_row)
+          + " -- their normal cones are missing from the residual and their rows from the decrease LP")
     for s_ in log:
         if s_.startswith(('row at', 'top ', 'closed-loop pair')):
             P("  " + s_)
@@ -968,7 +1032,8 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
     out['constraints'] = [dict(name=cc['name'], kind=cc['kind'], c=cc['c'], ct=cc['ct'], entry=cc['entry'], hn=cc['hn'],
                                lam=cc.get('lam'), h=cc['h']) for cc in cons]
     out['gamma_tops'] = gref; out['gamma_rel'] = gref / gam - 1
-    out['line'] = dict(clear=bool(e['clr']), alpha=float(e['al']), alpha_record=float(z['alpha']) if 'alpha' in z.files else None)
+    out['line'] = dict(clear=bool(e['clr']), alpha=float(e['al']), alpha_record=float(z['alpha']) if 'alpha' in z.files else None,
+                       seen_without_row=[dict(lam=l_, entry=en_) for l_, en_ in no_row])
     out['log'] = log
     # ---------------------------------------------------------------- 6. the measure per eps
     t0 = time.time()
@@ -1007,7 +1072,54 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
             r = min_norm(NZ, G, Bl, H_, ps_, q=q)
             r['r'] = r['r'] * gs2; r['rho'] = float(np.linalg.norm(r['r'], q))
             r['mu'] = np.array([m_ * gs2 / max(cons[j]['hn'], 1e-300) for m_, j in zip(r['mu'], ac)]) if H_ is not None else np.zeros(0)
+            # the multiplier-weighted scales (LESSONS 21: the mean |g_i| read the GL KSP+B+C residual 6.2e-4 as a
+            # stationary kink while the min-norm element put no weight on its large row, 1734 against 44): wgt =
+            # sum lam_i |g_i| + sum_b sum_a Y_b,aa |Hs_b,aa| (the objective's weights only), and the total mass
+            # mass = wgt + sum mu_j |h_j|, so that rho / mass in [0, 1] is the cancellation ratio of the minimiser
+            # (1: its terms all aligned, 0: exact cancellation).  Per variable group the same ratio on the group's
+            # coordinates: invariant under a uniform rescaling of the group (the packer's sc, sx = 0.30, a gauge
+            # representative changes the metric between groups much more than within one)
+            def _wsum(ix=None):
+                sel = (lambda v: v) if ix is None else (lambda v: v[ix])
+                w_ = sum(float(l_) * float(np.linalg.norm(sel(gfun(i)), q)) for (i, _), l_ in zip(sc_, r['lam']))
+                w_ += sum(float(np.real(Y[a_, a_])) * float(np.linalg.norm(sel(np.real(hfun(i, k)[a_, a_])), q))
+                          for (i, k), Y in zip(bl_, r['Y']) for a_ in range(k))
+                m_ = sum(float(mm) * float(np.linalg.norm(sel(cons[j]['h']), q)) for mm, j in zip(r['mu'], ac)) if H_ is not None else 0.0
+                return w_, m_
+            wg, ms = _wsum()
+            r['wgt'] = wg; r['mass'] = wg + ms
+            r['by_group_cancel'] = {}
+            for k_, ix in groups:
+                wgG, msG = _wsum(ix)
+                r['by_group_cancel'][k_] = (float(np.linalg.norm(r['r'][ix], q)) / (wgG + msG) if wgG + msG > 0 else None)
             res[key] = r
+        # the constraint qualification (MFCQ: the active gradients positively linearly independent): the distance
+        # from 0 to the convex hull of the unit active gradients.  0 means a Fritz-John point with lambda_0 = 0 can
+        # exist, the KKT residual's multipliers are unbounded and its value means little; ~1 is orthogonal rows
+        res['cq'] = float(min_norm(NZ, Hn)['rho']) if len(ac) else None
+        # the group-wise NECESSARY condition: at a stationary point the projection of the eps-subdifferential plus
+        # the cones on each group's coordinates contains 0 as well, so each group's own min-norm problem (its own
+        # weights) must reach 0.  rho_G over that problem's own mass (sum lam |g_iG| + sum Y_aa |Hs_aaG| + sum mu,
+        # the rows unit in the group) is invariant under ANY rescaling of the groups against each other and under a
+        # uniform one within the group, unlike every joint number above (their minimiser moves with the metric):
+        # a large value proves non-stationarity at this eps whatever the packer's scales (an upper bound only on
+        # the joint residual: small in every group is not stationarity)
+        sep = {}
+        for k_, ix in groups:
+            Gg = G[:, ix]
+            Blg = [B_[:, :, ix] for B_ in Bl]
+            hsel = [jj for jj in range(len(Hn)) if float(np.linalg.norm(Hn[jj, ix])) > 1e-12]
+            Hg = np.array([Hn[jj, ix] / float(np.linalg.norm(Hn[jj, ix])) for jj in hsel]).reshape(-1, len(ix))
+            psg = [h_[ix] for h_ in hp_n if float(np.linalg.norm(h_[ix])) > 1e-12]
+            rg = min_norm(len(ix), Gg, Blg, Hg if len(hsel) else None, psg, q=2)
+            mass_g = sum(float(l_) * float(np.linalg.norm(Gg[ii])) for ii, l_ in enumerate(rg['lam']))
+            mass_g += sum(float(np.real(Y[a_, a_])) * float(np.linalg.norm(np.real(Blg[bi][a_, a_])))
+                          for bi, Y in enumerate(rg['Y']) for a_ in range(Y.shape[0]))
+            mass_g += float(np.sum(rg['mu'])) if len(hsel) else 0.0
+            typ = float(np.mean([np.linalg.norm(Gg[ii]) for ii in range(len(Gg))] +
+                                [np.linalg.norm(np.real(B_[0, 0])) for B_ in Blg]))
+            sep[k_] = (float(rg['rho']) / mass_g) if mass_g > 1e-9 * max(typ, 1e-300) else 0.0
+        res['group_sep'] = sep
         return gs2, gs1, res
 
     meas = []
@@ -1026,25 +1138,34 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
                for j, m_ in zip(ac, r2['mu'])]
         byg = {k_: float(np.linalg.norm(r2['r'][ix])) / gs2 for k_, ix in groups}
         jr = np.argsort(-np.abs(r2['r']))[:4]
-        st_ = sorted(set(res[k_]['status'] for k_ in res))
+        st_ = sorted(set(res[k_]['status'] for k_ in res if k_ not in ('cq', 'group_sep')))
         meas.append(dict(eps=ep, n_scalar=len(sc_), n_block=len(bl_), n_cons=len(ac), n_psd=len(hp), gscale2=gs2, gscale1=gs1,
                          rho2=r2['rho'], rho2_rel=r2['rho'] / gs2, rho2_nc_rel=res['r2_nc']['rho'] / gs2,
                          rho1=r1['rho'], rho1_rel=r1['rho'] / gs1, rho1_nc_rel=res['r1_nc']['rho'] / gs1,
-                         rho2_rel_max=r2['rho'] / gmax, rho2_rel_min=r2['rho'] / gmin, weights=wts, mu=mus, by_group=byg,
+                         rho2_rel_max=r2['rho'] / gmax, rho2_rel_min=r2['rho'] / gmin,
+                         rho2_rel_w=r2['rho'] / max(r2['wgt'], 1e-300), rho1_rel_w=r1['rho'] / max(r1['wgt'], 1e-300),
+                         rho2_cancel=r2['rho'] / max(r2['mass'], 1e-300), cq_margin=res['cq'],
+                         by_group_cancel=r2['by_group_cancel'], group_sep=res['group_sep'], weights=wts, mu=mus, by_group=byg,
                          r_top=[(names[j], float(r2['r'][j])) for j in jr], status=st_, nc_le_min=bool(ok_min),
                          pieces=[pieces[i]['w'] for i, _ in sc_ + bl_], cons=[cons[j]['name'] for j in ac]))
     tm['measure'] = time.time() - t0
     out['measure'] = meas
     P(f"Clarke residual (min-norm element of the eps-subdifferential + the active normal cones; / mean |g_i|_q):")
     P(f"  {'eps':>7s} {'pieces':>9s} {'cons':>4s} {'rho2/gs':>9s} {'(no cons)':>9s} {'rho1/gs':>9s} {'(no cons)':>9s} "
-      f"{'rho2/max|g|':>11s} {'rho2/min|g|':>11s} {'rho2 abs':>9s} {'gscale2':>9s}  status")
+      f"{'rho2/max|g|':>11s} {'rho2/min|g|':>11s} {'rho2/wgt':>9s} {'rho2/mass':>9s} {'rho2 abs':>9s} {'gscale2':>9s} {'CQ':>8s}  status")
     for m_ in meas:
         P(f"  {m_['eps']:7.0e} {m_['n_scalar']:5d}+{m_['n_block']:<3d} {m_['n_cons'] + m_['n_psd']:4d} {m_['rho2_rel']:9.2e} "
           f"{m_['rho2_nc_rel']:9.2e} {m_['rho1_rel']:9.2e} {m_['rho1_nc_rel']:9.2e} {m_['rho2_rel_max']:11.2e} "
-          f"{m_['rho2_rel_min']:11.2e} {m_['rho2']:9.2e} "
-          f"{m_['gscale2']:9.2e}  {','.join(m_['status'])}" + ('' if m_['nc_le_min'] else '  <-- min_norm > min |g_i|'))
+          f"{m_['rho2_rel_min']:11.2e} {m_['rho2_rel_w']:9.2e} {m_['rho2_cancel']:9.2e} {m_['rho2']:9.2e} "
+          f"{m_['gscale2']:9.2e} {(_f(m_['cq_margin'], 1) if m_['cq_margin'] is not None else '-'):>8s}  {','.join(m_['status'])}"
+          + ('' if m_['nc_le_min'] else '  <-- min_norm > min |g_i|')
+          + ('  <-- MFCQ nearly fails: the KKT multipliers are unbounded, read the residual with care'
+             if m_['cq_margin'] is not None and m_['cq_margin'] < 1e-6 else ''))
     P(f"  (rho2/min|g| near 1: no cancellation -- the residual is the smallest active piece's gradient, and rho2/gs < 1 "
-      f"then only reflects the spread of |g_i|, not progress towards stationarity)")
+      f"then only reflects the spread of |g_i|, not progress towards stationarity.  rho2/wgt: over the minimiser's own "
+      f"weights, sum lam_i |g_i| (blocks: sum_a Y_aa |Hs_aa|), the normalisation that ignores rows the minimiser does not "
+      f"use; rho2/mass: over wgt + sum mu_j |h_j|, the cancellation ratio in [0, 1].  CQ: the distance from 0 to the hull "
+      f"of the unit active constraint gradients (MFCQ holds when > 0; 1 = one row or orthogonal rows))")
     # the profile: rho_2 just past each entry eps of the pieces and rows of P(eps_pred) -- where the peaks start to
     # cancel (SISO 598.11: 1.0 up to eps = 1e-2, 3.9e-3 once the top at -1.03e-2 enters, 1.1e-3 with all five
     # tops within 1.4e-2: eps-stationary only at the scale of the ripple between its peaks)
@@ -1057,12 +1178,14 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
         gs2, gs1, res = measure(ep, sc_, bl_, ac, hp)
         gmin = min(pieces[i]['gn2'] for i, _ in sc_ + bl_)
         prof.append(dict(eps=ep, n_pieces=len(sc_) + len(bl_), n_cons=len(ac) + len(hp), rho2_rel=res['r2']['rho'] / gs2,
-                         rho2_nc_rel=res['r2_nc']['rho'] / gs2, rho2_rel_min=res['r2']['rho'] / gmin))
+                         rho2_nc_rel=res['r2_nc']['rho'] / gs2, rho2_rel_min=res['r2']['rho'] / gmin,
+                         rho2_rel_w=res['r2']['rho'] / max(res['r2']['wgt'], 1e-300)))
     out['profile'] = prof
     tm['measure'] += time.time() - t1
     if prof:
         P(f"  profile (rho_2 just past each entry eps of P({eps_p:g})): " + '; '.join(
-            f"{q['eps']:.2e}: {q['rho2_rel']:.2e} ({q['n_pieces']}p {q['n_cons']}c, /min|g| {q['rho2_rel_min']:.2g})" for q in prof))
+            f"{q['eps']:.2e}: {q['rho2_rel']:.2e} ({q['n_pieces']}p {q['n_cons']}c, /min|g| {q['rho2_rel_min']:.2g}, "
+            f"/wgt {q['rho2_rel_w']:.2g})" for q in prof))
     hs = (J.get('history') or [{}])[-1] if J.get('history') else {}
     if 'stat_value' in hs:
         P(f"  (the record's stat_value {hs['stat_value']:.4g} is ||grad_L|| of the last QP, not this residual)")
@@ -1077,6 +1200,10 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
             P(f"    multipliers of the {len(m_['mu'])} active row(s): " + (mt_ or f"all mu|h| below {BIND_MN:g} gscale (the cones remove nothing)"))
         P(f"    residual by group (/ gscale2): " + ', '.join(f"{k_} {v_:.2e}" for k_, v_ in m_['by_group'].items() if v_ > 1e-12)
           + f"; largest coordinates " + ', '.join(f"{n_} {v_:+.2e}" for n_, v_ in m_['r_top']))
+        P(f"    cancellation by group at the joint minimiser (|r_G| / (sum lam |g_iG| + sum mu |h_jG|), 1 = none): "
+          + ', '.join(f"{k_} {v_:.2e}" for k_, v_ in m_['by_group_cancel'].items() if v_ is not None))
+        P(f"    group-wise necessary condition (each group's own min-norm over its own mass; scale-free, 0 at a "
+          f"stationary point): " + ', '.join(f"{k_} {v_:.2e}" for k_, v_ in m_['group_sep'].items()))
     # ---------------------------------------------------------------- 7. predicted decrease
     t0 = time.time()
     sc_m, bl_m = active_set(eps_p)
@@ -1094,6 +1221,16 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
 
     def pred_box(Dl, with_cons=True, norm='inf'):
         return pred(NZ, gref, a_s, G_s, B_s, C_all if with_cons else (), Ps if with_cons else (), Delta=Dl, norm=norm)
+    # the descent test's LP: the same box LP with its closed-loop rows on the QP's line -eps_s - 2 mg (the run's
+    # LAT_CUSHION), so that a step binding a row lands inside the admissibility line -eps_s - mg the certificate asks.
+    # On the problem line (the pred table) such a step sits on -eps_s to first order: inadmissible by mg (decentral
+    # 369.87, the row -0.050104 + 2.285i binds from Delta = 1e-4).  A row already between the two lines keeps h.d <= 0
+    sh_cl = 2 * mg if a.cl_line == 'problem' else 0.0
+    C_adm = [(min(cc['c'] + sh_cl, max(cc['c'], 0.0)) if cc['kind'] == 'cl' else cc['c'], cc['h'])
+             for j, cc in enumerate(cons) if j not in cl_idx]
+
+    def pred_desc(Dl):
+        return pred(NZ, gref, a_s, G_s, B_s, C_adm, Ps, Delta=Dl, norm='inf')
     prs = []
     for Dl in lad:
         pb = pred_box(Dl); p0 = pred_box(Dl, with_cons=False); p2 = pred_box(Dl, norm='2')
@@ -1211,50 +1348,125 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
         tm['fd'] = time.time() - t0
     out['fd'] = fd; out['fd_cons'] = fdc
     # ---------------------------------------------------------------- 10. descent test
-    dsc = []; Dv = None; cert = None
+    dsc = []; Dv = None; cert = None; zsteps = {}
+
+    def ctrl_check(zz):
+        """The compensator's abscissa and the modal rows' max v - L at zz (exact, r x r)."""
+        ar_ = pk.unpack(zz)[0]
+        al_ = float(np.max(np.linalg.eigvals(ctl.A_of(*ar_)).real))
+        mv_ = max((v_ - Lc for v_, _ in ctl.modal_rows(pk.modal, *[np.asarray(x_) for x_ in ar_[:3]], Lc)), default=np.nan) \
+            if getattr(pk, 'modal', None) else np.nan
+        return al_, mv_
+
+    def modal_h(zz):
+        """The modal rows at zz as h <= 0 and their packed gradients (sqp_inner _modal_h, the Evaluator's rows)."""
+        ar_ = pk.unpack(zz)[0]; rr_ = len(ar_[0])
+        H_, G_ = [], []
+        for v_, gd_ in ctl.modal_rows(pk.modal, ar_[0], ar_[1], ar_[2], Lc):
+            gc = pk.zero_grad() if (getattr(pk, 'mimo', False) or getattr(pk, 'vec_pos', False)) \
+                else dict(n=np.zeros(rr_, complex), K=0j, xa=0.0, xs=0.0)
+            gd = np.zeros(rr_, complex); ge = np.zeros(max(rr_ - 1, 0), complex); gf = ge.copy()
+            for i_, x_ in gd_['d'].items():
+                gd[i_] = x_
+            for i_, x_ in gd_['e'].items():
+                ge[i_] = x_
+            for i_, x_ in gd_['f'].items():
+                gf[i_] = x_
+            gc.update(d=gd, e=ge, f=gf)
+            H_.append(v_ - Lc); G_.append(np.real(np.asarray(pk.grad(gc), float)))
+        return np.array(H_), np.array(G_)
+
+    def modal_restore(zn_, zbase):
+        """sqp_inner _ctrl_restore_modal: Newton's least-norm steps on the violated modal rows (a trace is linear in
+        z, a determinant quadratic) to 1e-7 inside the line; None when that is not a small correction of the step
+        (more than half of it) or the abscissa stays over the line."""
+        zc_ = np.asarray(zn_, float).copy()
+        for _ in range(4):
+            H_, G_ = modal_h(zc_)
+            bad = np.flatnonzero(H_ > -1e-9)
+            if not len(bad):
+                break
+            Gb = G_[bad]
+            try:
+                zc_ = zc_ + Gb.T @ np.linalg.solve(Gb @ Gb.T, -1e-7 - H_[bad])
+            except np.linalg.LinAlgError:
+                return None
+        if not np.all(np.isfinite(zc_)) or np.linalg.norm(zc_ - zn_) > 0.5 * max(np.linalg.norm(zn_ - zbase), 1e-12) \
+                or ctrl_check(zc_)[0] > Lc + 1e-8:
+            return None
+        return zc_
     if a.descent != 'off':
         t0 = time.time()
         ts = [float(v) for v in a.descent_ts.split(',')]
         tmax = max(ts)
         wl = [pieces[i]['w'] for i, _ in sc_m + bl_m]
         for Dl in [float(v) for v in a.descent_deltas.split(',')]:
-            pb = pred_box(Dl); d = pb['d']
+            pb = pred_desc(Dl); d = pb['d']
             if pb['pred'] <= 1e-10:
                 dsc.append(dict(Delta=Dl, t=None, pred=pb['pred'], note='no first-order decrease predicted')); break
             fail = False
             for t in ts:
                 zt = z0 + t * d
                 tt0 = time.time()
-                tt = lat.peak_tops(zt, wl, RAD)
+                # the compensator first (exact, r x r): an active v2 (det) row is quadratic in z, so a step that binds it
+                # at first order crosses the line at second order (decentral 412.28, Delta = 1e-4: the pole at -0.05 to
+                # -0.04999999, 1.2e-8 over the 1e-8 tolerance, and the step that measured -8.2e-4 was thrown out).  The
+                # SQP puts such a trial back onto the line (sqp_inner _ctrl_restore_modal) before it evaluates the
+                # plant; the test does the same, so it judges the step the SQP would take
+                alc, mv = ctrl_check(zt)
+                soc = 0.0
+                if getattr(pk, 'modal', None) and (alc > Lc + 1e-8 or (np.isfinite(mv) and mv > 1e-8)):
+                    zc = modal_restore(zt, z0)
+                    if zc is not None:
+                        soc = float(np.max(np.abs(zc - zt))); zt = zc; alc, mv = ctrl_check(zt)
+                    else:
+                        soc = np.nan
+                zsteps[(Dl, t)] = zt
+                tt = clip_band(lat, zt, lat.peak_tops(zt, wl, RAD), whi)
                 fmax = max(v_ for _, v_ in tt)
                 mod = max([pieces[i]['s'] + t * float(pieces[i]['g'] @ d) for i, _ in sc_m] +
                           [float(np.linalg.eigvalsh(np.diag(pieces[i]['sig'][:k]) + t * np.einsum('abj,j->ab', pieces[i]['Hs'][:k, :k], d)).max())
                            for i, k in bl_m])
-                arow_t = pk.unpack(zt)[0]
-                alc = float(np.max(np.linalg.eigvals(ctl.A_of(*arow_t)).real))
-                mv = max((v_ - Lc for v_, _ in ctl.modal_rows(pk.modal, *[np.asarray(x_) for x_ in arow_t[:3]], Lc)), default=np.nan) \
-                    if getattr(pk, 'modal', None) else np.nan
                 u_ = pk.unpack(zt)
                 inside = all(D.inside(x_, 'a') for x_ in np.asarray(u_[3], float).reshape(-1, 2)) and \
                     all(D.inside(x_, 's') for x_ in np.asarray(u_[4], float).reshape(-1, 1))
+                # the closed loop at the step: every row the first-order bound (twice it, for curvature) lets reach
+                # the admissibility line -eps_s - mg, tracked by lattice._nearest from its predicted position
+                # (Re lambda + t h.d).  Before, a step was "good" on the compensator, modal and position checks
+                # alone, and the verdict quoted the decrease of a step the LP had put on the line.  Measured, not a
+                # certificate (a hidden eigenvalue is the line's business: --descent certify)
+                dinf_t = float(np.max(np.abs(t * d)))
+                trk = [cc for cc in cons if cc['kind'] == 'cl' and np.isfinite(cc['lam'].imag)
+                       and cc['c'] + 2 * dinf_t * float(np.sum(np.abs(cc['h']))) >= -mg]
+                clv = []
+                for cc in trk:
+                    lt = cl_eig_near(lat, zt, complex(cc['lam'].real + t * float(cc['h'] @ d), cc['lam'].imag))
+                    clv.append(float(lt.real) if lt is not None else np.nan)
+                clmax = max(clv) if clv else -np.inf
+                cl_ok = bool(all(np.isfinite(v_) for v_ in clv) and clmax <= -eps_s - mg)
                 pr_ = (mod - gref) / gref; ac_ = (fmax - gref) / gref
                 ratio = ac_ / pr_ if pr_ < 0 else np.nan
                 kmax = int(np.argmax([v_ for _, v_ in tt]))
                 ip_max = (sc_m + bl_m)[kmax][0]
                 row = dict(Delta=Dl, t=t, dinf=float(np.max(np.abs(t * d))), pred=pr_, actual=ac_, ratio=ratio, alc=alc, modal_max=mv,
-                           inside=bool(inside), tops=[(float(w_), float(v_ / gref)) for w_, v_ in tt], seconds=time.time() - tt0,
+                           soc=soc, inside=bool(inside), cl_max=clmax, cl_tracked=len(trk), cl_ok=cl_ok,
+                           tops=[(float(w_), float(v_ / gref)) for w_, v_ in tt], seconds=time.time() - tt0,
                            max_at=float(tt[kmax][0]), max_from=float(pieces[ip_max]['w']), max_from_rel=float(pieces[ip_max]['s'] / gref - 1))
                 dsc.append(row)
                 P(f"  descent Delta {Dl:.0e} t {t:g}: |t d*|_inf {row['dinf']:.1e}: predicted {pr_:+.3e}, actual {ac_:+.3e} "
                   f"(ratio {ratio:.2f}; max at {tt[kmax][0]:.5f}, the top of {pieces[ip_max]['w']:.5f} at "
-                  f"{row['max_from_rel']:+.2e}); compensator abscissa {alc:+.7f}, modal max v - L {mv:+.1e}, positions inside {inside} "
+                  f"{row['max_from_rel']:+.2e}); compensator abscissa {alc:+.7f}, modal max v - L {mv:+.1e}"
+                  + ('' if soc == 0.0 else (f" (after the SQP's second-order correction, |dz|_inf {soc:.1e})" if np.isfinite(soc)
+                                            else ' (the second-order correction FAILED)'))
+                  + f", positions inside {inside}, "
+                  f"closed loop max Re {clmax:+.7f} over {len(trk)} tracked row(s) ({'admissible' if cl_ok else 'NOT <= %.7f' % (-eps_s - mg)}) "
                   f"[{row['seconds']:.0f} s]")
                 if t == tmax and not (ratio >= 0.5):
                     fail = True
             if fail:
                 break
         good = [q for q in dsc if q.get('t') == tmax and q.get('ratio', 0) >= 0.5 and q.get('alc', 0) <= Lc + 1e-8
-                and (not np.isfinite(q.get('modal_max', np.nan)) or q['modal_max'] <= 1e-8) and q.get('inside')]
+                and (not np.isfinite(q.get('modal_max', np.nan)) or q['modal_max'] <= 1e-8) and q.get('inside') and q.get('cl_ok')]
         if good:
             Dv = max(good, key=lambda q: q['Delta'])
         tm['descent'] = time.time() - t0
@@ -1266,7 +1478,7 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
             t0 = time.time()
             cert_tries = []
             for best in sorted(good, key=lambda q: q['actual'])[:3]:
-                d = pred_box(best['Delta'])['d']; zt = z0 + best['t'] * d
+                zt = zsteps[(best['Delta'], best['t'])]        # the step as the descent test measured it (corrected)
                 ln = lat.line(zt, eps_s, 0.0, whi + a.wpad)
                 mt = gref * (1 + best['actual'])
                 lv = None; found = []
@@ -1276,7 +1488,7 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
                         lv = lat.level(zt, mt * (1 + CERT_RTOL), 0.0, whi)
                         if lv['outcome'] != 'region' or not lv['cross']:
                             break
-                        new = lat.peak_tops(zt, [float(w_) for w_, _ in lv['cross']], RAD)
+                        new = clip_band(lat, zt, lat.peak_tops(zt, [float(w_) for w_, _ in lv['cross']], RAD), whi)
                         found += [(float(w_), float(s_)) for w_, s_ in new]
                         m2 = max([mt] + [float(s_) for _, s_ in new])
                         P(f"    level set at {mt * (1 + CERT_RTOL):.6f} (Delta {best['Delta']:.0e}): region(s) "
@@ -1347,13 +1559,25 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
                   + ('' if r_['ok'] else '  <-- FAIL'))
     # the verdict
     ml = [m_ for m_ in meas if m_['eps'] in eps_list]
-    rmin = min(m_['rho2_rel'] for m_ in ml)
-    pick = min([m_ for m_ in ml if m_['rho2_rel'] <= 2 * rmin], key=lambda q: q['eps'])
+    # the pick and the head number: rho_2 over the minimiser's own weights sum lam_i |g_i| (LESSONS 21), not over the
+    # mean |g_i| -- the mean is not monotone in eps (its piece set changes) and reads a spread of |g_i| as progress:
+    # SISO 598.11 at eps = 1e-2 is 0.19 over the mean and 0.98 over the weights (no cancellation at all)
+    rmin = min(m_['rho2_rel_w'] for m_ in ml)
+    pick = min([m_ for m_ in ml if m_['rho2_rel_w'] <= 2 * rmin], key=lambda q: q['eps'])
     clk = [m_ for m_ in meas if m_['eps'] == CERT_RTOL][0]
     # the class (design.md 4.2): pred(Delta_v)/gamma -- measured where the first-order model holds -- against the
     # certificate's rtol and the progress rule's per-round scale (0.15 % over 3 rounds, ~5e-4)
     if cert and cert['certified']:
-        head = 'NOT STATIONARY (certified): '
+        # the size of the certified decrease belongs in the head: a lower admissible design 1.4e-4 below (central
+        # 123.90, 13 tops within 4e-4: an equiripple plateau) and one 8e-3 below (central 153.62) are not the same reading
+        dec = 1.0 - cert['gamma_bound'] / gam               # the certified bound against the record's gamma
+        # "admissible" as the SQP's line search and the gate's line test have it (the level set on [0, whi], the
+        # stability line on [0, whi + wpad], the compensator and the positions); the run's acceptance also counts
+        # windings over ALL w (the tail bound), which this tool does not run
+        head = (f"NOT STATIONARY (certified: a design {dec:.1e} gamma lower at Delta {cert['Delta']:.0e}, admissible on the "
+                f"line test Im in [0, {whi + a.wpad:g}] -- the winding count over all w not run"
+                + ("; below the progress rule's ~5e-4 per round: near eps-stationary at that scale" if dec <= PROGRESS else '')
+                + "): ")
     elif Dv:
         av = -av_of(Dv)
         head = ('stationary at the certificate\'s resolution (measured): ' if av <= CERT_RTOL else
@@ -1361,17 +1585,26 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
                  else 'NOT STATIONARY (measured, uncertified: a first-order decrease above the progress rule\'s scale): '))
     else:
         head = ''
-    v = (f"{head}stationary to rho_2/gscale = {pick['rho2_rel']:.1e} at eps = {pick['eps']:.0e} "
+    bgc = dict(pick.get('group_sep') or {})
+    kw_ = max(bgc, key=bgc.get) if bgc else None
+    v = (f"{head}stationary to rho_2/(sum lam_i |g_i|) = {pick['rho2_rel_w']:.1e} at eps = {pick['eps']:.0e} "
          f"({pick['n_scalar'] + pick['n_block']} piece(s){', %d block(s)' % pick['n_block'] if pick['n_block'] else ''}, "
-         f"{pick['n_cons'] + pick['n_psd']} active constraint(s); rho_1/gscale {pick['rho1_rel']:.1e}; rho_2/min|g_i| {pick['rho2_rel_min']:.2g}"
-         f"{' = no cancellation' if pick['rho2_rel_min'] >= 0.9 else ''}); "
-         f"Clarke at the certificate's eps = 1e-6: rho_2/gscale = {clk['rho2_rel']:.1e}; ")
+         f"{pick['n_cons'] + pick['n_psd']} active constraint(s); rho_2/gscale (mean |g_i|) {pick['rho2_rel']:.1e}; "
+         f"rho_2/min|g_i| {pick['rho2_rel_min']:.2g}{' = no cancellation' if pick['rho2_rel_min'] >= 0.9 else ''}; "
+         f"rho_1/(sum lam_i |g_i|_1) {pick['rho1_rel_w']:.1e}"
+         + (f"; worst group-wise necessary condition {kw_} {bgc[kw_]:.2g} (scale-free)" if kw_ else '')
+         + (f"; MFCQ margin {pick['cq_margin']:.1e}" + (' (NEARLY FAILS)' if pick['cq_margin'] < 1e-6 else '')
+            if pick.get('cq_margin') is not None else '') + "); "
+         f"Clarke at the certificate's eps = 1e-6: rho_2/(sum lam_i |g_i|) = {clk['rho2_rel_w']:.1e}; ")
+    if any(en_ <= eps_max for _, en_ in no_row):
+        v += (f"WARNING {sum(en_ <= eps_max for _, en_ in no_row)} eigenvalue(s) within eps_max of the line without a "
+              f"row (missing normal cones); ")
     prof = out.get('profile') or []
     if prof:
-        pm = min(q['rho2_rel'] for q in prof)
-        pq = min([q for q in prof if q['rho2_rel'] <= 2 * pm], key=lambda q: q['eps'])
-        if pq['eps'] > pick['eps'] * (1 + 1e-6) and pq['rho2_rel'] < 0.5 * pick['rho2_rel']:
-            v += (f"over P({eps_p:g}) the residual falls to {pq['rho2_rel']:.1e} only at eps = {pq['eps']:.1e} "
+        pm = min(q['rho2_rel_w'] for q in prof)
+        pq = min([q for q in prof if q['rho2_rel_w'] <= 2 * pm], key=lambda q: q['eps'])
+        if pq['eps'] > pick['eps'] * (1 + 1e-6) and pq['rho2_rel_w'] < 0.5 * pick['rho2_rel_w']:
+            v += (f"over P({eps_p:g}) the residual falls to {pq['rho2_rel_w']:.1e} only at eps = {pq['eps']:.1e} "
                   f"({pq['n_pieces']} pieces: eps-stationary at that scale only); ")
     if a.descent == 'off':
         pv = [q for q in prs if q['Delta'] <= D_set]
@@ -1389,10 +1622,14 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
         v += (f"certificate NOT obtained ({len(cert.get('tries', []))} step(s) tried; last at Delta {cert['Delta']:.0e}: line clear "
               f"{cert['line_clear']}, alpha {cert['alpha']:+.6f}, level set {cert['level']}, the step's max over the known tops "
               f"{cert['actual']:+.2e} relative); ")
-    v += ("piece set certified by the level set" if certified else "piece set uncertified (--complete off: rho an upper bound)") + \
+    v += ((f"piece set certified by the level set at gamma (1 - eps) for eps in {sorted(final)} (a second top inside a "
+           f"known top's region is not separated)") if certified else
+          ("piece set uncertified (" + ('--complete off' if not comp else 'the level set did not clear') + ": rho an upper bound)")) + \
          f"; stop: {stop_txt}"
     out['verdict'] = v
-    out['verdict_pick'] = dict(eps=pick['eps'], rho2_rel=pick['rho2_rel'], clarke_rho2_rel=clk['rho2_rel'])
+    out['verdict_pick'] = dict(eps=pick['eps'], rho2_rel_w=pick['rho2_rel_w'], rho2_rel=pick['rho2_rel'],
+                               rho2_rel_min=pick['rho2_rel_min'], clarke_rho2_rel_w=clk['rho2_rel_w'], clarke_rho2_rel=clk['rho2_rel'],
+                               group_sep_worst=((kw_, bgc[kw_]) if kw_ else None), cq_margin=pick.get('cq_margin'))
     P("VERDICT: " + v)
 
 
