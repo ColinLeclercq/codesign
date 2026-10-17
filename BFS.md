@@ -895,7 +895,7 @@ For comparison: the reduced path's cold central went to 191 in 44 rounds (Octobe
   - New ledger lines: rank 0's in-wave share separate from serial work, the critical path per request kind, the factors and cache misses, a per-disk log of the level set (kind, ncv tier, Arnoldi applications, CG, seconds), per-member counts, and a projection to 48 and 32 ranks.
   - Duplicate stability rows are counted and tagged. Merging them (`--lattice-row-merge`) and measured task costs (`--lattice-costs measured`) stay opt-in (review, and LESSONS.md: measure first; placement by wall-clock seconds is not deterministic).
   - Checks: end to end against the previous commit at the old geometry, the 38 record arrays bitwise equal; `check_lattice` 0.0 on every saved number; GL bit-identical.
-- **D, asynchronous level set** (`1cbeecf`, `--lattice-async off|on|redo`, default off):
+- **D, asynchronous level set** (`1cbeecf`, `--lattice-async off|on|redo`, default off; on since 2026-10-16, below):
   - In the no-strip arm the missed-peak level set runs on the ranks it needs, while the next SQP iteration runs on the others. Every state the look-ahead touches is snapshotted, and it is restored when the level set adds members.
   - Checks:
     - on against off: the SQP trace (every iterate, trial, t, smax, level decision) and the 38 record arrays are identical;
@@ -982,6 +982,11 @@ For comparison: the reduced path's cold central went to 191 in 44 rounds (Octobe
 - **The BFS stop and stationarity** (`run_bfs.sh`; GL untouched): `--stop-progress 8:0.0015` for SISO and MIMO, `--sqp-stat pred` for SISO as for MIMO (section 7 has the evidence). `EXTRA_ARGS` appends driver flags (`testplant.slurm`, `codesign.slurm`; per arm `ARM_<L>_ARGS` in `pair.slurm`).
 - **`pair.slurm` runs a queue** (`ARM_A`, `ARM_B`, `ARM_C`, ...): two at a time, the next arm on the half that frees first (section 7).
 - Found on the way: `run_case_epi.py --help` raised TypeError (an unescaped `%` in the `--sqp-stat` help), now `%%`.
+- Checks (sandbox, 2026-10-17):
+  - the no-strip asynchronous path bit for bit: one round, `--inner-maxit 4`, 2 ranks, central from the 151.48 record; the code at ac20964 with `STRIP=0 --lattice-async on` against this commit's defaults. The SQP traces are identical (10 records: 4 iterations, 4 level-set calls, 3 look-aheads kept, wall aside), and so are the 38 record arrays; gamma 144.89246119629905 in both (9584 s / 8976 s on a shared machine);
+  - GL frozen path 10.231285164411261; `bash -n` on every script; pyflakes: the warnings of the previous commit only;
+  - `pair.slurm` under a fake Slurm (Hydra fork launcher, two 2-CPU halves, a stub `testplant.slurm`): a queue of 3, arm C on B's half 1 s after B ended, `ARM_C_ARGS` appended to `EXTRA_ARGS`, `ASYNC=0` in one arm; a failing arm's exit is the job's; a queued arm with 99 s left reported and not started; `STRIP=1` (common or an arm's), no `OUT`, one `OUT` twice, `EXTRA_ARGS` in an arm's words and `ASYNC=2` refused before any launch;
+  - `testplant.slurm` and `codesign.slurm` with stubs for the plant and the driver: the directory names (no suffix, `_sync` with `ASYNC=0`), `EXTRA_ARGS` passed last, `STRIP=1` refused, an old `*_nostrip` run resumed with its `OUT=`; `run_bfs.sh` passes `--lattice-async on|off`, `--stop-progress 8:0.0015 --sqp-stat pred` and refuses `STRIP=1`; the driver refuses `--lattice-strip`, the SQP `LAT_STRIP`.
 
 ## 9. Open items
 
