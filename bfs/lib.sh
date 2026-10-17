@@ -7,6 +7,9 @@
 #                          one winner); without squeue, one older than 3 h is
 #   drop_lock DIR          release it (only our own)
 #   job_alive ID           true while the job is queued or running
+#   strip_refused WORDS... false, with the reason, when STRIP (the environment's,
+#                          or a STRIP=... among WORDS) asks for the strip
+#   lattice_async_flag     the --lattice-async word of ASYNC (refused: other values)
 #
 # 2026-10-08: jobs 765560-765562 built the same files at once and corrupted
 # them; 766730: flock was node-local on sator.  20261010j: the owner check
@@ -63,4 +66,33 @@ run_lock() {
         echo "=== run lock of job ${owner:-?} (no longer in the queue) taken over ==="
     fi
     echo "${SLURM_JOB_ID:-pid$$}" > "$d/owner"
+}
+
+# strip_refused [WORDS...]: the strip arm (--lattice-strip on, the default until
+# 20261010n) was REMOVED on 2026-10-16 (user, after the 20261010n A/B: it bought
+# no stability, cost ~45 % more evaluations a round, and only the no-strip path
+# runs the level set beside the next iteration; BFS.md 8).  STRIP=1 (or any value
+# but 0) is refused before anything runs; STRIP=0, what the code now always does,
+# is accepted and noted.  WORDS: an arm's VAR=value words (pair.slurm).
+strip_refused() {
+    local v=${STRIP:-} w
+    for w in "$@"; do case "$w" in STRIP=*) v=${w#STRIP=} ;; esac; done
+    case "$v" in
+        '') return 0 ;;
+        0)  echo "=== STRIP=0: the only path since 2026-10-16 (no strip; the variable is no longer needed) ==="; return 0 ;;
+        *)  echo "*** STRIP=$v: the strip arm was removed on 2026-10-16 (BFS.md 8: the 20261010n A/B); the lattice runs without"
+            echo "    the strip, as STRIP=0 did.  Unset STRIP.  A run made with the strip continues without it (RESUME=1 or"
+            echo "    CONTINUE=1 OUT=<its directory>); an old *_nostrip* directory continues with its explicit OUT="
+            return 1 ;;
+    esac
+}
+
+# lattice_async_flag: --lattice-async from ASYNC (2026-10-16: on by default, the
+# synchronous call with ASYNC=0 for measurements; directories get _sync)
+lattice_async_flag() {
+    case "${ASYNC:-1}" in
+        1) echo on ;;
+        0) echo off ;;
+        *) echo "*** ASYNC=$ASYNC: 1 (default, the level set beside the next SQP iteration) or 0 (synchronous)" >&2; return 1 ;;
+    esac
 }

@@ -28,7 +28,10 @@
 #             (--sqp-partial-shrink on; default 0 since 20261008c)
 #   LATTICE_K with ORACLE=lattice: eigenvalues per disk centre of the line, each with its
 #             stability row (--lattice-k; default 1)
-#   STRIP     with ORACLE=lattice: 0 = no strip (--lattice-strip off; default 1)
+#   STRIP     refused (bfs/lib.sh strip_refused): the strip arm (--lattice-strip on) was removed on
+#             2026-10-16 (BFS.md 8); STRIP=0, the only path, is accepted
+#   ASYNC     with ORACLE=lattice: 0 = the missed-peak level set synchronous (--lattice-async off, for
+#             measurements); default 1, beside the next SQP iteration (--lattice-async on, since 2026-10-16)
 #   CROSS     with ORACLE=lattice: cut = trials across the closed loop's line halved (--lattice-cross cut;
 #             default merit)
 #   MODAL     0 = the tridiagonal compensator (--ctrl-modal off: a run made before 20261010e); default 1,
@@ -72,12 +75,27 @@
 # plant, 20-40 min on the full mesh, BFS.md 9) is the user's call; the save-time
 # count right of -eps vetoes (the record falls back to the last accepted design
 # whose count is 0; --veto-counts).
+# --stop-progress 8:0.0015 (2026-10-16; 3:0.0015 before, for every case): LESSONS
+# 1 ("use 8 rounds for MIMO and field cases": GL central stopped at 0.126 % over
+# 3 rounds, then gained 2 % in 24 more), and the 20261010n central async arm
+# stopped on 3:0.0015 at a design a sandbox probe shows is not stationary.  The
+# same rule for SISO.
+# --sqp-stat pred for SISO too (2026-10-16; MIMO had it through auto): auto =
+# rel for SISO fired code 0 on a loose threshold -- the SISO records 554.97 and
+# 598.11 stopped at stat 12.6 and 6.0 against thresholds 15.5 and 27.0 (gradient
+# scales 1.55e5 and 2.7e5) while a certified linear-model step still gains 0.20 %
+# (the sandbox probe of 2026-10-16, STAGE6 6.14's mechanism).  GL untouched: its
+# scripts pass their own flags, and the driver's default stays auto.
+# Driver flags after INIT come last and win (argparse): testplant.slurm's
+# EXTRA_ARGS, an e2e test's --inner-maxit.
 set -eo pipefail
 out=$1; init=$2; shift 2
 [ -n "$out" ] && [ -n "$init" ] || { echo "usage: run_bfs.sh OUTDIR INIT [flags]"; exit 2; }
 out=$(realpath -m "$out"); init=$(realpath -m "$init")
 mkdir -p "$out"
 cd "$(dirname "$0")/.."
+source bfs/lib.sh
+strip_refused || exit 2
 STAB=()
 [ "${STABILISE:-1}" = "1" ] && STAB=(--stabilise)
 ORC=(--oracle reduced --oracle-inputs on --row-workers mpi --oracle-union new)
@@ -92,9 +110,6 @@ if [ "${ORACLE:-reduced}" = "lattice" ]; then
     # stability row (default 1; an eigenvalue behind another, seen from the
     # line, then gets a row too)
     ORC+=(--lattice-k "${LATTICE_K:-1}")
-    # STRIP=0: no strip -- the stability rows are those of the eigenvalues the
-    # line's disks see (as before 20261009a); the A/B of whether the strip pays
-    ORC+=(--lattice-strip "$([ "${STRIP:-1}" = 0 ] && echo off || echo on)")
     # CROSS=cut: a trial across the closed loop's line from an admissible iterate
     # is halved (2026-10-06 to 20261010c); default merit (sqp_inner.LAT_CROSS)
     ORC+=(--lattice-cross "${CROSS:-merit}")
@@ -106,10 +121,12 @@ if [ "${ORACLE:-reduced}" = "lattice" ]; then
     # script's, not the code defaults' (LESSONS 18 rule 3).  No knobs: an A/B of one
     # of them needs its own directory suffix first (testplant.slurm, codesign.slurm)
     ORC+=(--lattice-base 48 --lattice-costs static --lattice-memo 2 --lattice-row-merge 0)
-    # 20261010j stage D: the no-strip level set beside the next SQP iteration stays OFF here
-    # until a cluster run has measured it (--lattice-async on after INIT, in a directory of
-    # its own; the same iterates by construction, a different placement of the tasks)
-    ORC+=(--lattice-async off)
+    # the missed-peak level set beside the next SQP iteration (20261010j stage D), on
+    # since 2026-10-16: measured in 20261010n, traces identical to the synchronous
+    # arms' over 8 central and 11 decentral rounds, rounds 0.71-0.80 x their wall
+    # (BFS.md 8).  ASYNC=0: the synchronous call, for measurements
+    AF=$(lattice_async_flag) || exit 2
+    ORC+=(--lattice-async "$AF")
 elif [ "${ORACLE:-reduced}" != "reduced" ]; then
     echo "run_bfs.sh: ORACLE must be reduced or lattice (got ${ORACLE})"; exit 2
 fi
@@ -128,4 +145,4 @@ exec ${LAUNCH} ${PY:-python} -u run_case_epi.py --plant bfs --ops "${OPS:-bfs/da
     --gate-prefix 1 --post 1 --sqp-pen adaptive --cert-disk strict --cert-near-k 4 --cert-climb slope --wind-ctrl exact --cert-rtol 1e-6 --alpha-argmax on \
     --enroll-rel 0.05 --peak-follow on --row-screen 0.05 --converge --inner sqp --sqp-carry --sqp-trust 0.01 \
     --sqp-ctrl block --sqp-row-res-tol 1e-5 --sqp-refine 1e-4 --sqp-clblock on --sigma2-active-gap 0.15 \
-    --follow-scan 0 --stop-progress 3:0.0015 --wind-accept off --cont-accept-winding --dense_check 0 --outdir "$out" "${MIMOF[@]}" "${MODF[@]}" "$@"
+    --follow-scan 0 --stop-progress 8:0.0015 --sqp-stat pred --wind-accept off --cont-accept-winding --dense_check 0 --outdir "$out" "${MIMOF[@]}" "${MODF[@]}" "$@"

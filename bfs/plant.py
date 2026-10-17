@@ -412,33 +412,216 @@ class BFSPlant(FECoDesign):
             self._Llu_ = sparse_lu.factor(self.L[self._Lv][:, self._Lv].tocsc())
         return self._Llu_
 
+    def _mvv_floor(self):
+        """A certified lower bound on lambda_min(M_vv), the velocity mass on the
+        free velocity dofs (_Lv), with no factor and no inverse of it (the user's
+        rule, massops.FORBIDDEN): the element floor of note_algebra (the GL
+        tail's thrift level (b)).  M = sum_e P_e^T M_e P_e gives x^H M x >=
+        min_e lambda_min(M_e) ||x||^2 (every dof is in an element), and M_vv is a
+        principal submatrix of the assembled mass (Cauchy interlacing).  A P2
+        component on a straight triangle has M_e = |T| M_ref, so the floor is
+        lambda_min(M_ref) min |T|.  The premise is CHECKED: M is reassembled from
+        pts / tri / xy (dofs matched by coordinates) and compared with the stored
+        one on the free velocity block; the floor is lowered by a bound on the
+        difference's norm, sqrt(||E||_1 ||E||_inf).  None when the reassembly does
+        not match (another element, a curved geometry): the caller then has no
+        L2 tail (gbound falls back to the H^1 bound alone).  Once per plant
+        (test plant, 2026-10-16: 1.94e-5, a match to 6e-17; the true lambda_min
+        is 1.08e-4)."""
+        if getattr(self, '_mvv_floor_', 0) != 0:
+            return self._mvv_floor_
+        from math import factorial
+        from scipy.spatial import cKDTree
+        self._mvv_floor_ = None
+        T = np.asarray(self.tri)
+        if T.ndim != 2 or T.shape[1] != 3:
+            print(f"    gbound: no velocity-mass floor (geometry cells of {T.shape[-1]} nodes, not straight "
+                  f"triangles): the H^1 tail alone", flush=True)
+            return None
+        # M_ref / |T|: P2 Lagrange basis in barycentric coordinates, lam_i (2 lam_i - 1)
+        # at the vertices, 4 lam_j lam_k at the midpoint of edge (j, k); int over T of
+        # lam^a = 2 |T| a1! a2! a3! / (a1 + a2 + a3 + 2)!
+        basis = []
+        for i in range(3):
+            e2 = [0, 0, 0]; e2[i] = 2; e1 = [0, 0, 0]; e1[i] = 1
+            basis.append({tuple(e2): 2.0, tuple(e1): -1.0})
+        for (j, k) in ((1, 2), (0, 2), (0, 1)):
+            e = [0, 0, 0]; e[j] = 1; e[k] = 1
+            basis.append({tuple(e): 4.0})
+        Mref = np.zeros((6, 6))
+        for p_ in range(6):
+            for q_ in range(6):
+                Mref[p_, q_] = sum(ca * cb * 2.0 * np.prod([factorial(x + y) for x, y in zip(ea, eb)])
+                                   / factorial(sum(ea) + sum(eb) + 2)
+                                   for ea, ca in basis[p_].items() for eb, cb in basis[q_].items())
+        X = np.asarray(self.pts, float)[T]
+        area = 0.5 * np.abs((X[:, 1, 0] - X[:, 0, 0]) * (X[:, 2, 1] - X[:, 0, 1])
+                            - (X[:, 2, 0] - X[:, 0, 0]) * (X[:, 1, 1] - X[:, 0, 1]))
+        nodes = np.concatenate([X, 0.5 * (X[:, [1, 0, 0]] + X[:, [2, 2, 1]])], axis=1).reshape(-1, 2)
+        scale = float(np.ptp(self.pts, axis=0).max())
+        rows, cols, vals, covered = [], [], [], []
+        for comp in (0, 1):
+            idx = np.where(self.comp == comp)[0]
+            dist, j = cKDTree(self.xyd[idx]).query(nodes)
+            if dist.max() > 1e-9 * scale:
+                print(f"    gbound: no velocity-mass floor (a P2 node of the mesh is {dist.max():.2g} from every "
+                      f"dof of component {comp}): the H^1 tail alone", flush=True)
+                return None
+            dofs = idx[j].reshape(-1, 6)
+            rows.append(np.repeat(dofs, 6, axis=1).ravel()); cols.append(np.tile(dofs, (1, 6)).ravel())
+            vals.append((area[:, None, None] * Mref[None]).ravel()); covered.append(dofs.ravel())
+        Mre = sp.csr_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
+                            shape=self.M.shape)
+        Lv = self._Lv
+        if not np.isin(Lv, np.concatenate(covered)).all():
+            print("    gbound: no velocity-mass floor (a free velocity dof in no element): the H^1 tail alone", flush=True)
+            return None
+        E = abs(self.M.tocsr()[Lv][:, Lv] - Mre[Lv][:, Lv])
+        e_nrm = float(np.sqrt(E.sum(axis=0).max() * E.sum(axis=1).max())) if E.nnz else 0.0
+        floor = float(np.linalg.eigvalsh(Mref).min()) * float(area.min())
+        # (1 - 1e-9): the rounding of the 6 x 6 eigenvalue and of the areas
+        floor = floor * (1.0 - 1e-9) - e_nrm
+        if not (e_nrm <= 1e-8 * floor) or floor <= 0.0:
+            print(f"    gbound: no velocity-mass floor (the reassembled P2 mass differs from M by {e_nrm:.3g} "
+                  f"in norm, floor {floor:.3g}): the H^1 tail alone", flush=True)
+            return None
+        self._mvv_floor_ = floor
+        return floor
+
+    def tail_norms(self, c):
+        """(cL, cM) of the sensor matrix c: cL = ||C||_{L^-1} = sqrt(lambda_max(C^H
+        L^-1 C)) (H^1 tail) and cM = ||C||_{M_vv^-1} = sqrt(lambda_max(C_v^H M_vv^-1
+        C_v)) (L2 tail; None where it does not apply), cached per sensor
+        configuration (the bytes of c: the veto screens and counts several).
+
+        cM never factorises or inverts the velocity mass (the user's rule): CG on
+        M_vv (Jacobi-preconditioned, M_vv is SPD and well conditioned), then the
+        residual-corrected bound, exact up to rounding: with R = C_v - M_vv Y,
+        C_v^H M_vv^-1 C_v = C_v^H Y + Y^H R + R^H M_vv^-1 R, hence lambda_max <=
+        lambda_max(sym(C_v^H Y + Y^H R)) + ||R||_2^2 / lambda_floor (_mvv_floor).
+        CG's tolerance sets only how tight it is (test plant, the 369.87 record:
+        64 iterations, 0.3 s, cM = 738.0455, the LU value), and a CG that does not
+        converge only loosens it.  It needs C zero off the free velocity dofs
+        (Cauchy-Schwarz in M_vv): checked, else None; None too, logged, when the
+        L2 computation fails at all, the element floor included (the H^1 tail then
+        stands alone: a failure here must not become a failed count).  A C with
+        entries on pressure dofs has no tail bound at all (cL = inf: neither bound
+        sees c^H p)."""
+        import hashlib
+        c = np.asarray(c, complex)
+        self._Llu()
+        cv = c[self._Lv]
+        key = hashlib.blake2b(np.ascontiguousarray(c).tobytes() + str(c.shape).encode(), digest_size=16).hexdigest()
+        cache = getattr(self, '_tail_norm_cache', None)
+        if cache is None:
+            cache = self._tail_norm_cache = {}
+        if key in cache:
+            return cache[key]
+        Cv = cv.reshape(cv.shape[0], -1)
+        LC = np.column_stack([self._Llu_.solve(Cv[:, j]) for j in range(Cv.shape[1])])
+        cL = float(np.sqrt(max(np.linalg.eigvalsh(Cv.conj().T @ LC).max(), 0.0)))
+        cM = None
+        cr = c.reshape(self.n, -1)
+        off = np.ones(self.n, bool); off[self._Lv] = False
+        if np.any(cr[self.comp >= 2] != 0):
+            # c^H x then reads the pressure, which neither bound controls (both bound
+            # c^H u through the velocity alone): no tail bound at all -- gbound inf, the
+            # count's TailBoundError before any march -- not the H^1 bound on c_v this
+            # branch claimed (the review of 2026-10-17; the shear sensor has no pressure
+            # entries, so no run took it)
+            print("    gbound: the sensor has entries on pressure dofs: no tail bound (neither the H^1 nor the L2 "
+                  "one bounds c^H p)", flush=True)
+            cL = np.inf
+        elif np.any(cr[off] != 0):
+            # on the Dirichlet dofs only: the response is zero there (M's rows are zero,
+            # A's -I), so c^H x = c_v^H u_v and the H^1 bound holds; the L2 one keeps its
+            # stricter premise
+            print("    gbound: the sensor has entries on Dirichlet dofs: the H^1 tail alone", flush=True)
+        else:
+            # the floor inside the try too (the review of 2026-10-17): a failure of its
+            # reassembly must leave the H^1 tail, not fail the count
+            try:
+                lf = self._mvv_floor()
+                if lf is not None:
+                    cM = self._cM_bound(Cv, lf)
+            except Exception as _e:
+                print(f"    gbound: the L2 tail norm failed ({type(_e).__name__}: {_e}): the H^1 tail alone", flush=True)
+        if len(cache) >= 8:
+            cache.pop(next(iter(cache)))
+        cache[key] = (cL, cM)
+        return cL, cM
+
+    def _cM_bound(self, Cv, lf):
+        """sqrt of the certified upper bound on lambda_max(C_v^H M_vv^-1 C_v) of
+        tail_norms: Jacobi-preconditioned CG on M_vv (scipy's, or the same few
+        lines where its keywords differ), never a factor of it."""
+        import scipy.sparse.linalg as spla
+        Mvv = getattr(self, '_Mvv_', None)
+        if Mvv is None:
+            Mvv = self._Mvv_ = self.M.tocsr()[self._Lv][:, self._Lv].tocsr()
+        dg = Mvv.diagonal()
+        P = spla.LinearOperator(Mvv.shape, matvec=lambda x: x / dg, dtype=float)
+
+        def _cg(rhs):
+            try:
+                return spla.cg(Mvv, rhs, rtol=1e-13, atol=0.0, maxiter=20000, M=P)[0]
+            except TypeError:                   # scipy < 1.12 calls rtol tol
+                return spla.cg(Mvv, rhs, tol=1e-13, atol=0.0, maxiter=20000, M=P)[0]
+        cols = []
+        for j in range(Cv.shape[1]):
+            # M_vv is real: the real and imaginary parts are two real solves
+            y = np.zeros(Cv.shape[0], complex)
+            for part, unit in ((Cv[:, j].real, 1.0), (Cv[:, j].imag, 1j)):
+                if np.any(part):
+                    y = y + unit * _cg(part)
+            cols.append(y)
+        Y = np.column_stack(cols)
+        R = Cv - Mvv @ Y
+        S = Cv.conj().T @ Y + Y.conj().T @ R
+        ub = float(np.linalg.eigvalsh(0.5 * (S + S.conj().T)).max()) + float(np.linalg.norm(R, 2)) ** 2 / lf
+        if not np.isfinite(ub):
+            raise FloatingPointError(f"the bound is {ub}")
+        # (1 + 1e-9): the rounding of the length-n_v products (n_v eps ~ 6e-12 relative)
+        return float(np.sqrt(max(ub, 0.0) * (1.0 + 1e-9)))
+
     def gbound(self, pa, c, line):
         """w -> a bound on |G(line + i w')| for every |w'| >= w, G = c^H (s M -
-        A)^-1 M psi_a, M-free (note_algebra BFS section):
-            |G| <= ||c||_{L^-1} ||psi_a||_M sqrt((1/d + (beta - line)_+ / d^2) / nu1)
-        with d <= dist(line + i w, W) from the heights.  The shear sensor is
-        not of the form M psi (no M-norm bound): an H^1 estimate instead, the
-        viscous term controlling ||u||_L."""
+        A)^-1 M psi_a, M-free (note_algebra BFS section), the smaller of two:
+            H1  |G| <= ||c||_{L^-1} ||psi_a||_M sqrt((1/d + (beta - line)_+ / d^2) / nu1)
+            L2  |G| <= ||c||_{M_vv^-1} ||psi_a||_M / d
+        with d <= dist(line + i w, W) from the heights (non-decreasing in w, so
+        both bounds hold beyond w).  The response x = (u, p) has u = 0 on the
+        Dirichlet dofs and B u = 0, and step (i) of the note's derivation gives
+        ||u||_M <= ||psi_a||_M / d.  The shear sensor is not of the form M psi;
+        H1 bounds c^H u by ||u||_L (the viscous term), L2 by Cauchy-Schwarz in
+        M_vv: |c^H u| = |(M_vv^-1 c_v)^H M_vv u| <= ||c||_{M_vv^-1} ||u||_M, c being
+        zero off the free velocity dofs (tail_norms checks it).  H1 decays like
+        d^-1/2, L2 like 1/d: L2 is the smaller from w ~ 100 up (369.87 record:
+        51.9 vs 102.5 at w = 100, 1.5e-4 vs 0.16 at 5e6), and the cutoff W_T it
+        needs grows linearly in the feedthrough instead of with its square
+        (2026-10-16; with H1 alone the 369.87 record needed W_T 7.9e6 against the
+        count's cap of 1e7 and every later decentral design of 20261010n raised).
+        The returned function carries the norms (gb.norms: cL, cM, pM) for the
+        driver's tail line."""
         from sparse_spectrum import numrange_distance
         s_far, Hd, beta, nu1 = self.range_data()
-        lu = self._Llu(); cv = np.asarray(c, complex)[self._Lv]
-        if cv.ndim == 2:
-            # MIMO: operator norms, ||G||_2 <= ||C||_{L^-1} ||Psi_a||_M sqrt(...) with
-            # ||C||_{L^-1}^2 = lambda_max(C^H L^-1 C), ||Psi_a||_M^2 = lambda_max(Psi_a^H M Psi_a)
-            LC = np.column_stack([lu.solve(cv[:, j]) for j in range(cv.shape[1])])
-            PA = np.asarray(pa, complex)
-            cL = float(np.sqrt(max(np.linalg.eigvalsh(cv.conj().T @ LC).max(), 0.0)))
+        cL, cM = self.tail_norms(c)
+        PA = np.asarray(pa, complex)
+        if PA.ndim == 2:
+            # MIMO: operator norms, ||G||_2 <= ||C|| ||Psi_a||_M (...) with
+            # ||Psi_a||_M^2 = lambda_max(Psi_a^H M Psi_a)
             pM = float(np.sqrt(max(np.linalg.eigvalsh(PA.conj().T @ (self.M @ PA)).max(), 0.0)))
         else:
-            cL = float(np.sqrt(max(np.real(np.vdot(cv, lu.solve(cv))), 0.0)))
-            pM = float(np.sqrt(max(np.real(np.vdot(pa, self.M @ pa)), 0.0)))
+            pM = float(np.sqrt(max(np.real(np.vdot(PA, self.M @ PA)), 0.0)))
         ex = max(beta - line, 0.0)
 
         def gb(w):
             d = numrange_distance(w, s_far, Hd, line=line)
             if d <= 0:
                 return np.inf
-            return cL * pM * np.sqrt((1.0 / d + ex / d ** 2) / nu1)
+            g1 = cL * pM * np.sqrt((1.0 / d + ex / d ** 2) / nu1)
+            return g1 if cM is None else min(g1, cM * pM / d)
+        gb.norms = dict(cL=cL, cM=cM, pM=pM)
         return gb
 
     def plant_poles(self, line, keep=0.6):
@@ -483,6 +666,18 @@ class BFSPlant(FECoDesign):
         return wc.winding_count(self.A, self.M, b, c, arow, nvec, K, line=line, mc=self.mc, p_plant=cnt, hot=hot,
                                 zeros_hint=zeros_hint, ctrl_exact=True, gbound=self.gbound(pa, c, line), real_sym=True,
                                 hmin_abs=hmin_abs)
+
+    def tail_check(self, pa, b, c, arow, nvec, K, line):
+        """The tail cutoff `winding` would march to, without the march
+        (winding_cert.tail_check with this plant's gbound; milliseconds once the
+        sensor's norms are cached): dict(wtail, wstar, q, kgb, kD, cL, cM, pM).
+        Raises winding_cert.TailBoundError where the count would (the driver's
+        veto pre-screen and its tail line at each acceptance, 2026-10-16)."""
+        import winding_cert as wc
+        gb = self.gbound(pa, c, line)
+        out = wc.tail_check(self.A, self.M, b, c, arow, nvec, K, line=line, mc=self.mc, gbound=gb)
+        out.update(gb.norms)
+        return out
 
     def cl(self, b, c):
         if np.ndim(b) == 2 or np.ndim(c) == 2:

@@ -11,7 +11,8 @@
 #
 # tools/check_lattice.py on the MPI ranks (BFS.md 5, 8): the lattice's rows,
 # followed peaks, LEVEL SET (in-solve missed peaks; with LEVEL_REF=1 against the
-# 2n certificate, certify_sparse.certify_greater), line and strip at a record.
+# 2n certificate, certify_sparse.certify_greater), line and strip at a record
+# (the strip a diagnostic since 2026-10-16: no optimiser path covers it, BFS.md 8).
 #
 #   REC=path/to/K_B_C_s0_bfs_mimo2x2_central.npz MIMO="2 2 central" sbatch bfs/slurm/check_lattice.slurm
 #   REC=path/to/K_B_C_s0_bfs.npz sbatch bfs/slurm/check_lattice.slurm            (SISO)

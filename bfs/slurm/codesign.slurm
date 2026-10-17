@@ -32,10 +32,15 @@
 #   ORACLE=lattice LATTICE_K=2 ... sbatch ...
 #        (two eigenvalues per disk centre of the stability line, each with its
 #         row, --lattice-k 2; the directories get _k2)
-#   ORACLE=lattice STRIP=0 ... sbatch ...
-#        (no strip, --lattice-strip off: the stability rows are those of the
-#         eigenvalues the line's disks see -- the A/B of whether the strip pays;
-#         the directories get _nostrip)
+#   ORACLE=lattice ASYNC=0 ... sbatch ...
+#        (the missed-peak level set synchronous, --lattice-async off: the
+#         measurement arm; by default since 2026-10-16 it runs beside the next
+#         SQP iteration, the same iterates; the directories get _sync)
+#   EXTRA_ARGS="--flag value ..." ... sbatch ...
+#        (driver flags appended last, as in testplant.slurm; the directory name
+#         does not change)
+#   STRIP=1 is refused: the strip arm was removed on 2026-10-16 (BFS.md 8; a
+#         lattice directory without _nostrip made before then held a strip run)
 #   ORACLE=lattice CROSS=cut ... sbatch ...
 #        (a trial across the closed loop's line from an admissible iterate is
 #         halved, as up to 20261010c, instead of weighed by the merit; the
@@ -76,6 +81,11 @@ cd "$SLURM_SUBMIT_DIR"
 mkdir -p logs
 source ./env.sh
 python bfs/version_check.py || { echo "*** mixed code versions (bfs/version_check.py): stop"; exit 1; }
+source bfs/lib.sh
+strip_refused || exit 1                                # STRIP=1: removed on 2026-10-16 (BFS.md 8)
+unset STRIP
+AF=$(lattice_async_flag) || exit 1                     # ASYNC: 1 (default) or 0
+read -ra XA <<< "${EXTRA_ARGS:-}"                      # EXTRA_ARGS: driver flags, appended last
 LAUNCHER=${LAUNCHER:-mpiexec}
 SEED=${SEED:-0}; NSTART=${NSTART:-64}
 OUT=${OUT:-results_bfs}
@@ -91,22 +101,22 @@ if [ "${ORACLE:-reduced}" = lattice ]; then SUF="${SUF}_lat"; fi
 if [ "${ORACLE:-reduced}" = lattice ] && [ -n "${RETIRE:-}" ]; then SUF="${SUF}_ret"; fi
 if [ "${ORACLE:-reduced}" = lattice ] && [ "${SHRINK:-0}" = 1 ]; then SUF="${SUF}_shr"; fi
 if [ "${ORACLE:-reduced}" = lattice ] && [ "${LATTICE_K:-1}" != 1 ]; then SUF="${SUF}_k${LATTICE_K}"; fi
-if [ "${ORACLE:-reduced}" = lattice ] && [ "${STRIP:-1}" = 0 ]; then SUF="${SUF}_nostrip"; fi
 if [ "${ORACLE:-reduced}" = lattice ] && [ "${CROSS:-merit}" = cut ]; then SUF="${SUF}_cut"; fi
-export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-16} RETIRE=${RETIRE:-} SHRINK=${SHRINK:-0} LATTICE_K=${LATTICE_K:-1} STRIP=${STRIP:-1} CROSS=${CROSS:-merit}
+if [ "${ORACLE:-reduced}" = lattice ] && [ "$AF" = off ]; then SUF="${SUF}_sync"; fi     # ASYNC=0 (2026-10-16)
+export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-16} RETIRE=${RETIRE:-} SHRINK=${SHRINK:-0} LATTICE_K=${LATTICE_K:-1} CROSS=${CROSS:-merit} ASYNC=${ASYNC:-1}
 TAG=K_B_C_s0_bfs                                       # the driver's record name
 if [ "$MIMO" = 1 ]; then TAG=K_B_C_s0_bfs_mimo${M}x${P}_${STRUCT}; fi
 NAME=$(printf "%s_%03d" "$KIND" "$IDX")
 RUN=$OUT/${KIND}${SUF}_$(printf "%03d" "$IDX")
 echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none} (array ${SLURM_ARRAY_JOB_ID:-}_$IDX)  $(date -Is) ==="
 echo "=== python: $(command -v python) ($(python -V 2>&1)); start $NAME (seed $SEED, order $R) -> $RUN ==="
+[ ${#XA[@]} -eq 0 ] || echo "=== EXTRA_ARGS: ${XA[*]} (appended to bfs/run_bfs.sh's flags) ==="
 # the full mesh's plant files: their content-id directory (bfs/plant_id.py,
 # 20261010j), made by smoke.slurm (operators) and plant_cert.slurm (range, poles)
 PD=$(python bfs/plant_id.py --dir fx)
 OPS=$PD/ops_fx.npz
 [ -f "$OPS" ] || { echo "*** $OPS missing: run bfs/slurm/smoke.slurm first (this code's plant id)"; exit 1; }
 [ -f "$PD/ops_fx_range.npz" ] || { echo "*** $PD/ops_fx_range.npz missing: run bfs/slurm/plant_cert.slurm first"; exit 1; }
-source bfs/lib.sh
 post() {      # the figures and data of the saved record (bfs/postproc.py, BFS.md 7)
     timeout 3600 $LAUNCHER -n "${SLURM_NTASKS:-24}" python -u bfs/postproc.py --ops "$OPS" --rec "$RUN/$TAG.npz" \
         || echo "*** postproc failed (the record is saved; rerun: sbatch the same array)"
@@ -148,7 +158,7 @@ python bfs/hifoo_init.py --ops "$OPS" --n "$NSTART" --seed "$SEED" --kind "$KIND
 # certificate and count (bfs/slurm_remaining.py)
 export OPS OUTER=${OUTER:-40} DEADLINE=${DEADLINE:-$(python bfs/slurm_remaining.py --reserve 2700)} PY=python
 export LAUNCH="$LAUNCHER -n ${SLURM_NTASKS:-24}"
-bash bfs/run_bfs.sh "$RUN" "$RUN/catalogue/$NAME.npz" "${CONT[@]}"
+bash bfs/run_bfs.sh "$RUN" "$RUN/catalogue/$NAME.npz" "${CONT[@]}" "${XA[@]}"
 # the figures: made by the driver itself (--post 1); a bounded second launch only if missing
 [ -f "$RUN/$TAG.json" ] && [ ! -f "$RUN/${TAG}_post/post.json" ] && post
 echo "=== done $(date -Is) ==="

@@ -16,7 +16,9 @@
 #                     diagnoses (missed peak / t lag / within tol, 20261010j),
 #                     the resume and provenance lines, the anchor's count, gate
 #                     refusals in full, deadline stops, the winding certificate
-#                     and its veto (20261010j stage B), errors, the final state
+#                     and its veto (20261010j stage B), the count's tail at
+#                     each acceptance, the final-design file and the checkpoint
+#                     the save left (2026-10-16), errors, the final state
 #                     (the first thing to read)
 #   version.txt       bfs/version_check.py (code version, git commit)
 #   logs/             this version's job logs: those whose version_check line names
@@ -25,9 +27,12 @@
 #                     still queued or that are not older than this version's
 #                     oldest log
 #   runs/<run>/       per run directory those logs name (testplant_bfs/*,
-#                     results_bfs/*, smoke_bfs/*): the record's JSON and npz (not
-#                     the checkpoint), starts.json, code_versions.txt, the
-#                     figures' post.json
+#                     results_bfs/*, smoke_bfs/*): the record's JSON and npz, the
+#                     checkpoint's JSON (not its npz), each job's final design
+#                     (<tag>_final_<jobid>.npz/.json) and the accepted-design
+#                     ledger (<tag>_accepted.npz; a few kB per design: since
+#                     2026-10-16 no accepted design is lost, 20261010n lost five),
+#                     starts.json, code_versions.txt, the figures' post.json
 #   figs/<run>/       the run's figures (*_post/*.png)
 #   NOTE.txt          NOTE="..." when given
 # Since 20261010i logs/ and the run directories are shared by every code
@@ -100,8 +105,11 @@ for run in "${runs[@]}"; do
     name=$(echo "$run" | tr '/' '_')
     mkdir -p "$OUTD/runs/$name"
     for f in "$run/starts.json" "$run/code_versions.txt"; do [ -f "$f" ] && cp -p "$f" "$OUTD/runs/$name/"; done
+    # every JSON and npz of the run, the checkpoint's JSON and the _final_ / _accepted
+    # files included, but not the checkpoint's npz (its design is in those) nor the
+    # ledger's temporary file while it is being rewritten
     for f in "$rd"/*.json "$rd"/*.npz "$rd"/*_post/post.json; do
-        case "$f" in *_ckpt*) continue ;; esac
+        case "$f" in *_ckpt*.npz|*.tmp.npz) continue ;; esac
         cpcap "$f" "$OUTD/runs/$name/"
     done
     pngs=("$rd"/*_post/*.png)
@@ -122,7 +130,7 @@ done
         echo "================ $f ($(stat -c %y "$f" | cut -c1-19))"
         # the job's own output: slurm appends the script itself after "Command=",
         # whose echo lines would match too; its State / wall lines are kept
-        awk '/^Command=/{s=1} !s || /^State:|^Job Wall-clock/' "$f" | grep -E "^=== host|^record |^version_check|^  outer [0-9]+:|^    lattice:|refusal:|missed peak:|t lag:|within tol:|^activity:|QP failed|crossing \(it|REJECTS|REFUSED|refused|INCONCLUSIVE|^  \[ledger\] lattice|^(rows|sigma_2 blocks|sweep|follow|level set|  2n certificate|line|strip|moved design)|Traceback|Error|\*\*\* |^State:|^Job Wall-clock|best gamma after each round|final gamma|=== done|^resume:|^CONTINUE:|^RESUME:|DEADLINE STOP|sqp: deadline|cut by the deadline|^winding certificate|^continuation anchor|gate refusal|veto:|winding count right of|^FATAL" \
+        awk '/^Command=/{s=1} !s || /^State:|^Job Wall-clock/' "$f" | grep -E "^=== host|^record |^version_check|^  outer [0-9]+:|^    lattice:|refusal:|missed peak:|t lag:|within tol:|^activity:|QP failed|crossing \(it|REJECTS|REFUSED|refused|INCONCLUSIVE|^  \[ledger\] lattice|^(rows|sigma_2 blocks|sweep|follow|level set|  2n certificate|line|strip|moved design)|Traceback|Error|\*\*\* |^State:|^Job Wall-clock|best gamma after each round|final gamma|=== done|^resume:|^CONTINUE:|^RESUME:|DEADLINE STOP|sqp: deadline|cut by the deadline|^winding certificate|^continuation anchor|gate refusal|veto:|winding count right of|^FATAL|^final design:|^    tail:|^    checkpoint:" \
             | grep -v "^#" | cut -c1-1000 || true
     done
 } > "$OUTD/SUMMARY.txt"

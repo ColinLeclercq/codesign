@@ -352,55 +352,60 @@ def _seg_task(t):
 SEG_PER_WORKER = 4      # segments per worker when the pool is up (dynamic load balance)
 
 
-def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
-                  mc=1.0, p_plant=None, tail=None, hot=None, zeros_hint=None,
-                  hmin_frac=1e-6, maxpts=20000, verbose=False, ctrl_exact=False, gbound=None, real_sym=False,
-                  hmin_abs=None):
-    """#{closed-loop eigenvalues with Re > line}, by the argument principle.
+# THE TAIL CUTOFF (2026-10-16).  winding_count marches up to W_T, the first rung
+# w0 2^k of a doubling ladder where the certified bound on ||k(s) G(s)|| over
+# |w'| >= W_T is below q.  The ladder is kept (a design that passed keeps its W_T,
+# its knots and its march points); its cap, 1e7 since STAGE5, is now a sanity cap
+# of 1e9: with the BFS's H^1 tail alone (decaying like d^-1/2, W_T growing with
+# the SQUARE of the feedthrough) the decentral 369.87 record needed 7.9e6, the
+# last rung below 1e7, and every later decentral design of 20261010n raised --
+# an artefact of the bound (the discrete ||G|| decays like 1/w), not of the
+# design.  The plant's L2 tail (BFSPlant.gbound) brings that W_T to 7680.
+WT_CAP = 1e9
 
-    `hot` is the list of (Im p, dist-to-line) for near-line PLANT poles (from
-    plant_pole_data); near-line A_c poles are added here per design.
-    `zeros_hint` is a list of complex NEAR-LINE CLOSED-LOOP eigenvalues (e.g.
-    the watch list the SMV disk sweep harvests anyway): the fast-phase
-    features of f sit at its zeros, which are exactly those eigenvalues, so
-    hinted zeros get the same mandatory resolution as known poles.  Unhinted
-    zeros are caught by midpoint validation (every accepted step is checked
-    at its midpoint, so an aliased feature must fool three collinear samples,
-    not two).
 
-    Returns dict(count, winding, p_plant, p_ctrl, npts, nsolve, wtail, ok).
-    ok=False means the tracker could not validate a segment down to the step
-    floor (f passes too close to zero -- an eigenvalue essentially ON the
-    line) and the count must not be trusted; the caller should move the line.
-    """
-    mimo = np.ndim(b) == 2 or np.ndim(c) == 2
-    F = (_FM if mimo else _F)(A, M, b, c, arow, nvec, K, mc=mc)
-    pol = np.linalg.eigvals(F.Ac) if F.r else np.zeros(0)
-    p_ctrl = int(np.count_nonzero(pol.real > line))
-    # CTRL_EXACT (2026-09-26, STAGE5 30): track g = det(sI - A_c) f instead of
-    # f.  The compensator's poles are poles of f; on the pair's face S two of
-    # them sit 1e-6 from the margin line (a near-double pole), where f swings
-    # through ~2 pi (twice) over a width ~1e-6 -- the tracker hit its step floor
-    # and the count came back INCONCLUSIVE in half the continuation refusals.
-    # g has no poles there; the phase of det(sI - A_c) along the line is added
-    # back in closed form from its (exact, r x r) roots.
-    ctrl_exact = bool(ctrl_exact and F.r and np.any(F.nv))
-    if ctrl_exact:
-        F.ctrl_exact = True
-        F.lam_c = pol
-        if not mimo:
-            F.lam_c2 = np.linalg.eigvals(F.Ac - np.outer(F.Bc, F.nv))
-    if p_plant is None or hot is None:
-        p_plant2, hot2 = plant_pole_data(A, M, line)
-        p_plant = p_plant2 if p_plant is None else p_plant
-        hot = hot2 if hot is None else hot
-    hot = list(hot) + ([] if ctrl_exact else
-                       [(float(p.imag), max(1e-6, float(abs(p.real - line))))
-                        for p in pol if abs(p.real - line) < 0.6])
-    for z in (zeros_hint or []):
-        z = complex(z)
-        if abs(z.real - line) < 0.6:
-            hot.append((float(z.imag), max(1e-6, float(abs(z.real - line)))))
+class TailBoundError(RuntimeError):
+    """No tail cutoff: the certified |k| gb(W) stays >= q on every rung up to
+    WT_CAP.  Raised BEFORE the march (no LU of the pencil, no time spent), so a
+    caller can tell it from a count: the save-time veto does not charge it
+    against --veto-counts (run_case_epi.winding_veto).  W the last rung tried,
+    kgb = |k| gb there, q the tail's threshold."""
+    def __init__(self, W, kgb, q):
+        self.W, self.kgb, self.q = float(W), float(kgb), float(q)
+        super().__init__(f"no tail cutoff up to W = {self.W:.6g} (cap {WT_CAP:.0e}): |k| gb(W) = {self.kgb:.4g} "
+                         f">= q = {self.q:g} (the plant's tail bound times the compensator's high-frequency gain)")
+
+    def __reduce__(self):                  # picklable across the pool
+        return (TailBoundError, (self.W, self.kgb, self.q))
+
+
+def tail_cutoff(kgb, q, w0=30.0):
+    """(W_T, W*) for kgb(w), a bound on ||k(s) G(s)|| valid for every |w'| >= w
+    (non-increasing in w): W_T the first rung max(w0, 1) 2^k with kgb < q (the
+    count's truncation), W* the threshold itself, bisected (geometric, to 1e-6)
+    inside the last doubling -- for the logs, which show how far a design is
+    from needing a longer march or from the cap.  TailBoundError when no rung up
+    to WT_CAP certifies."""
+    WT = max(w0, 1.0)
+    while not kgb(WT) < q:
+        if 2.0 * WT > WT_CAP:
+            raise TailBoundError(WT, kgb(WT), q)
+        WT *= 2.0
+    lo, hi = (0.5 * WT if WT > max(w0, 1.0) else 1.0), WT
+    if kgb(lo) < q:
+        return WT, lo
+    while hi > lo * (1.0 + 1e-6):
+        mid = float(np.sqrt(lo * hi))
+        if kgb(mid) < q:
+            hi = mid
+        else:
+            lo = mid
+    return WT, hi
+
+
+def _tail_bound(F, mimo, A, M, line, tail, gbound):
+    """(kgb, q): w -> the certified bound on ||k(s) G(s)|| for |w'| >= w (inf
+    where none), and the threshold q below which f cannot wind on the tails."""
     if gbound is not None:
         # the plant supplies its own bound on |G(line + i w)| (the backward-
         # facing step: no M^-1, a wall-shear sensor not of the form M psi;
@@ -446,27 +451,90 @@ def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
             return abs(F.K) + np.linalg.norm(F.nv) * np.linalg.norm(F.Bc) / (w - a_c)
         return abs(F.K)
 
-    def tail_ok(w):
-        # a bound on |G| valid for EVERY |w'| >= w (all three are non-increasing in w)
+    def kgb(w):
+        # a bound on ||k G|| valid for EVERY |w'| >= w (the bounds on |G| and |k| are
+        # non-increasing in w); inf where either has none
         if gbound is not None:
             gb = gbound(w)
             km = kmax_at(w)
-            return np.isfinite(gb) and np.isfinite(km) and km * gb < q_tail
+            return km * gb if (np.isfinite(gb) and np.isfinite(km)) else np.inf
         s_abs = np.hypot(line, w)
         gb = nrm_bc / (lam_min * (s_abs - nu)) if s_abs > nu else np.inf
         dnr = numrange_distance(w, s_far_nr, Hd_nr, line=line)
         if dnr > 0:
             gb = min(gb, beta_nr / dnr)
         km = kmax_at(w)
-        return np.isfinite(gb) and np.isfinite(km) and km * gb < q_tail
+        return km * gb if (np.isfinite(gb) and np.isfinite(km)) else np.inf
+    return kgb, q_tail
 
-    # find the tail truncation W_T: start from w0, double until certified
-    WT = max(w0, 1.0)
-    while not tail_ok(WT):
-        WT *= 2.0
-        if WT > 1e7:
-            raise RuntimeError("winding_count: tail bound never certifies; "
-                               "check nu/lam_min estimates")
+
+def tail_check(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0, mc=1.0, tail=None, gbound=None):
+    """winding_count's tail cutoff for a design, without the march (no LU of the
+    pencil; milliseconds with a plant gbound): dict(wtail, wstar, q, kD, kgb)
+    with kD = ||D_c||_2 (|K| SISO) and kgb the bound at W_T.  Raises
+    TailBoundError exactly where winding_count would (the driver's pre-screen
+    and its tail line at each acceptance, 2026-10-16)."""
+    mimo = np.ndim(b) == 2 or np.ndim(c) == 2
+    F = (_FM if mimo else _F)(A, M, b, c, arow, nvec, K, mc=mc)
+    kgb, q = _tail_bound(F, mimo, A, M, line, tail, gbound)
+    WT, Ws = tail_cutoff(kgb, q, w0)
+    return dict(wtail=float(WT), wstar=float(Ws), q=float(q), kgb=float(kgb(WT)),
+                kD=float(np.linalg.norm(F.K, 2)) if mimo else float(abs(F.K)))
+
+
+def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
+                  mc=1.0, p_plant=None, tail=None, hot=None, zeros_hint=None,
+                  hmin_frac=1e-6, maxpts=20000, verbose=False, ctrl_exact=False, gbound=None, real_sym=False,
+                  hmin_abs=None):
+    """#{closed-loop eigenvalues with Re > line}, by the argument principle.
+
+    `hot` is the list of (Im p, dist-to-line) for near-line PLANT poles (from
+    plant_pole_data); near-line A_c poles are added here per design.
+    `zeros_hint` is a list of complex NEAR-LINE CLOSED-LOOP eigenvalues (e.g.
+    the watch list the SMV disk sweep harvests anyway): the fast-phase
+    features of f sit at its zeros, which are exactly those eigenvalues, so
+    hinted zeros get the same mandatory resolution as known poles.  Unhinted
+    zeros are caught by midpoint validation (every accepted step is checked
+    at its midpoint, so an aliased feature must fool three collinear samples,
+    not two).
+
+    Returns dict(count, winding, p_plant, p_ctrl, npts, nsolve, wtail, wstar, ok)
+    (wtail the march's cutoff W_T, wstar the tail bound's threshold W* <= W_T;
+    TailBoundError before any march when no W_T up to WT_CAP certifies).
+    ok=False means the tracker could not validate a segment down to the step
+    floor (f passes too close to zero -- an eigenvalue essentially ON the
+    line) and the count must not be trusted; the caller should move the line.
+    """
+    mimo = np.ndim(b) == 2 or np.ndim(c) == 2
+    F = (_FM if mimo else _F)(A, M, b, c, arow, nvec, K, mc=mc)
+    pol = np.linalg.eigvals(F.Ac) if F.r else np.zeros(0)
+    p_ctrl = int(np.count_nonzero(pol.real > line))
+    # CTRL_EXACT (2026-09-26, STAGE5 30): track g = det(sI - A_c) f instead of
+    # f.  The compensator's poles are poles of f; on the pair's face S two of
+    # them sit 1e-6 from the margin line (a near-double pole), where f swings
+    # through ~2 pi (twice) over a width ~1e-6 -- the tracker hit its step floor
+    # and the count came back INCONCLUSIVE in half the continuation refusals.
+    # g has no poles there; the phase of det(sI - A_c) along the line is added
+    # back in closed form from its (exact, r x r) roots.
+    ctrl_exact = bool(ctrl_exact and F.r and np.any(F.nv))
+    if ctrl_exact:
+        F.ctrl_exact = True
+        F.lam_c = pol
+        if not mimo:
+            F.lam_c2 = np.linalg.eigvals(F.Ac - np.outer(F.Bc, F.nv))
+    if p_plant is None or hot is None:
+        p_plant2, hot2 = plant_pole_data(A, M, line)
+        p_plant = p_plant2 if p_plant is None else p_plant
+        hot = hot2 if hot is None else hot
+    hot = list(hot) + ([] if ctrl_exact else
+                       [(float(p.imag), max(1e-6, float(abs(p.real - line))))
+                        for p in pol if abs(p.real - line) < 0.6])
+    for z in (zeros_hint or []):
+        z = complex(z)
+        if abs(z.real - line) < 0.6:
+            hot.append((float(z.imag), max(1e-6, float(abs(z.real - line)))))
+    kgb, q_tail = _tail_bound(F, mimo, A, M, line, tail, gbound)
+    WT, Wstar = tail_cutoff(kgb, q_tail, w0)
 
     # MANDATORY KNOTS.  The adaptive step is bounded only by WT/8, and WT is
     # set by the tail bound (WT ~ 500-4000 at ne = 200 since nu = ||M^-1 A||
@@ -569,7 +637,7 @@ def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
     return dict(count=Wint + p_plant + p_ctrl, winding=Wint,
                 winding_raw=float(Wnum), p_plant=int(p_plant),
                 p_ctrl=p_ctrl, npts=npts, nsolve=F.nsolve, wtail=float(WT),
-                ok=bool(ok))
+                wstar=float(Wstar), ok=bool(ok))
 
 
 # ---------------------------------------------------------------- CLI
