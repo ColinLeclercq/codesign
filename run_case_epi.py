@@ -2082,12 +2082,21 @@ def ctrl_form_keys(pk):
 def ctrl_form_line(pk, z):
     """One line on the modal compensator's representative at z (20261010s):
     the largest det M / om^2 mismatch (either way; normal form: om is fixed for
-    the job) and the largest block eigenvector condition number."""
+    the job), the largest block eigenvector condition number, ||A_c||_2 against
+    max |lambda_c| (the winding count's tail needs W_T > ||A_c||_2), the closest
+    roots of two different blocks (a shared root is a flat direction of any
+    block-diagonal form) and, central, the pivot columns' controllability
+    score against the best column's (the pivot chart is local)."""
     aa = pk.unpack(np.asarray(z, float))[0]
     d_, e_, f_ = (np.real(np.asarray(x_)) for x_ in aa[:3])
     cv = max(ctl.block_cond(pk.modal, d_, e_, f_), default=1.0)
+    Ac = ctl.A_of(d_, e_, f_).real
+    lam = np.linalg.eigvals(Ac)
+    xr, kl = ctl.cross_block_roots(pk.modal, d_, e_, f_)
+    common = (f"||A_c||_2 {np.linalg.norm(Ac, 2):.4g} (max |lambda| {np.abs(lam).max():.4g}), cross-block roots "
+              f"{xr:.2e} apart" + (f" (blocks {kl[0]}, {kl[1]})" if kl else ''))
     if getattr(pk, 'ctrl_form', None) != 'normal':
-        return f"modal blocks (general form): block cond(V) max {cv:.3g}"
+        return f"modal blocks (general form): block cond(V) max {cv:.3g}, {common}"
     mis = 1.0
     for bl_, om_ in zip(pk.modal, pk.modal_s):
         if om_ is None:
@@ -2095,8 +2104,14 @@ def ctrl_form_line(pk, z):
         i_, j_ = bl_
         q_ = abs(d_[i_] * d_[j_] - e_[i_] * f_[i_]) / om_ ** 2
         mis = max(mis, q_, 1.0 / q_ if q_ > 0 else np.inf)
+    piv = ''
+    if getattr(pk, 'mimo', False) and pk.f.get('struct', 'central') != 'decentral':
+        pr = ctl.pivot_report(pk.modal, d_, e_, f_, aa[3], pk.f.get('ctrl_pivots'))
+        if pr:
+            q_ = min(pr, key=lambda t_: t_[0] / max(t_[1], 1e-300))
+            piv = f", pivot score min {q_[0]:.3g} (best column {q_[1]:.3g})"
     return (f"normal form: det/om^2 mismatch max {mis:.3g} (om fixed since the job start; a resume re-centres it), "
-            f"block cond(V) max {cv:.3g}, ties {ctl.normal_check(pk.modal, d_, e_, f_):.1e}")
+            f"block cond(V) max {cv:.3g}, ties {ctl.normal_check(pk.modal, d_, e_, f_):.1e}, {common}{piv}")
 
 
 def write_final_design(base, final, record, veto, arrays_of, extra=None, jobid=None, log=print):
@@ -3249,7 +3264,13 @@ def main():
             return csp.stability_gate(D.A, D.M, b_, c_, ctl.A_of(*arow_), ctl.Bc_of(arow_, D.r, D.mc), nvec_, K_, **kw)
         eps_ = float(kw.get('eps', 1e-3)); lim_ = max(-eps_, float(kw.get('ctrl_max', 0.0)))
         pol_ = np.linalg.eigvals(np.asarray(ctl.A_of(*arow_), complex))
-        if pol_.size and float(np.max(pol_.real)) > lim_ + 1e-8:
+        if getattr(pk, 'ctrl_form', None) == 'normal':
+            # the normal form: each block's abscissa from its trace and discriminant
+            # (exact at a double root on the line; controller.block_abscissa, 20261010s)
+            _ba = ctl.block_abscissa(pk.modal, *arow_[:3])
+            if _ba and max(_ba) > lim_ + 1e-8:
+                return False, f"controller pole Re={max(_ba):+.6g} > allowance {lim_:+.6g} (block {int(np.argmax(_ba))})", 0
+        elif pol_.size and float(np.max(pol_.real)) > lim_ + 1e-8:
             j_ = int(np.argmax(pol_.real))
             return False, f"controller pole Re={pol_[j_].real:+.6g} > allowance {lim_:+.6g}", 0
         al_, lam_, _, _, _, clr_ = D.alpha_certified(arow_, nvec_, K_, b_, c_, eps=eps_)

@@ -291,6 +291,42 @@ def block_cond(blocks, d, e, f):
     return out
 
 
+def block_abscissa(blocks, d, e, f):
+    """The rightmost real part of each block from its trace and discriminant,
+    tr^2/4 - det = (a - g)^2/4 + e f, one within its rounding bound read as 0:
+    at a double root tr/2 exactly, where computed eigenvalues split by
+    ~sqrt(eps |M|^2) (3e-8 at |M| ~ 2, past the 1e-8 tolerance of the
+    admissibility tests), and a complex pair's tr/2 exactly.  The normal
+    form's decisions on the compensator line read this, consistent with its
+    exact rows (20261010s)."""
+    d, e, f = (np.real(np.asarray(x)) for x in (d, e, f))
+    out = []
+    for b in blocks:
+        if len(b) == 1:
+            out.append(float(d[b[0]]))
+            continue
+        i, j = b
+        h = 0.5 * (d[i] - d[j]); ef = e[i] * f[i]
+        disc = h * h + ef
+        out.append(float(0.5 * (d[i] + d[j]) + (np.sqrt(disc) if disc > 8.0 * np.finfo(float).eps * (h * h + abs(ef)) else 0.0)))
+    return out
+
+
+def cross_block_roots(blocks, d, e, f):
+    """(min distance between two roots of DIFFERENT blocks, (k, l)): blocks
+    sharing a root are not identifiable from K(s) -- a flat direction in any
+    block-diagonal form (the literature refresh's caution 2)."""
+    A = A_of(np.real(d), np.real(e), np.real(f)).real
+    roots = [np.linalg.eigvals(A[np.ix_(b, b)]) for b in blocks]
+    best = (np.inf, None)
+    for k in range(len(blocks)):
+        for l_ in range(k + 1, len(blocks)):
+            dk = float(np.min(np.abs(roots[k][:, None] - roots[l_][None, :])))
+            if dk < best[0]:
+                best = (dk, (k, l_))
+    return best
+
+
 def _pivot_score(M, b):
     """sigma_min of [b / |b|, M b / |M b|]: how far b is from an eigenvector of M
     (0: the block is not controllable from b), independent of the scales of b
@@ -299,6 +335,23 @@ def _pivot_score(M, b):
     if nb == 0 or nMb == 0:
         return 0.0
     return float(np.linalg.svd(np.column_stack([b / nb, Mb / nMb]), compute_uv=False)[-1])
+
+
+def pivot_report(blocks, d, e, f, Bc, pivots):
+    """Central normal form: per 2 x 2 block (score of its pivot column, best
+    score of any column) by _pivot_score -- the pivot chart is local; a chart
+    switch is due where the pivot's score falls far below the best (a block
+    nearly uncontrollable from its pivot)."""
+    A = A_of(np.real(d), np.real(e), np.real(f)).real
+    B = np.real(np.asarray(Bc)).reshape(A.shape[0], -1)
+    out = []
+    for k, b in enumerate(blocks):
+        if len(b) != 2 or pivots is None or pivots[k] is None:
+            continue
+        M = A[np.ix_(b, b)]
+        sc_ = [_pivot_score(M, B[list(b), q]) for q in range(B.shape[1])]
+        out.append((sc_[int(pivots[k])], max(sc_)))
+    return out
 
 
 def normal_convert(d, e, f, Bc, Cc, blocks, fixed_b, pivots=None):

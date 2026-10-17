@@ -834,6 +834,20 @@ def main(argv=None):
       f"eps_s {eps_s:g}, margin {a.margin:g}, sqp_trust {trust}; packer round trip {rt_err:.1e}"
       + (f"; {sc_note}" if sc_note else '') + f"; stop: {stop_txt}")
     P(f"  groups: " + ', '.join(f"{k} {len(v)}" for k, v in groups))
+    if getattr(pk, 'modal', None):
+        # blocks sharing a root are not identifiable from K(s) (20261010s, the literature refresh's caution 2):
+        # each shared root is a flat direction of any block-diagonal form, so the effective dimension is at most
+        # NZ minus their number (exactly that for SISO loops)
+        ar_ = [np.real(np.asarray(x_)) for x_ in pk.unpack(z0)[0][:3]]
+        Ac_ = ctl.A_of(*ar_).real
+        rts_ = [np.linalg.eigvals(Ac_[np.ix_(list(b_), list(b_))]) for b_ in pk.modal]
+        shared_ = sum(int(abs(p_ - q_) <= 1e-6 * max(1.0, abs(p_)))
+                      for k_ in range(len(rts_)) for l_ in range(k_ + 1, len(rts_)) for p_ in rts_[k_] for q_ in rts_[l_])
+        xr_, kl_ = ctl.cross_block_roots(pk.modal, *ar_)
+        out['cross_block'] = dict(min_distance=float(xr_), blocks=(list(kl_) if kl_ else None), shared_roots=int(shared_),
+                                  effective_dim_max=int(NZ - shared_))
+        P(f"  cross-block roots: closest {xr_:.2e} apart" + (f" (blocks {kl_[0]}, {kl_[1]})" if kl_ else '')
+          + f"; {shared_} shared within 1e-6 (relative): the effective dimension is at most NZ - {shared_} = {NZ - shared_}")
     # ---------------------------------------------------------------- the oracle
     lattice.LU_CAP = int(a.lu_cap)
     fullpar.start(1, D=D)

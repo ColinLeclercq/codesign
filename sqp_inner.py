@@ -822,6 +822,11 @@ class Evaluator:
         al_ctrl = max((r_[0] for r_ in ctrl_rows), default=-np.inf)
         if ctrl_rows and getattr(pk, 'modal', None):
             al_ctrl = float(np.max(np.linalg.eigvals(Acm).real))     # the abscissa itself (the rows are not real parts)
+            if getattr(pk, 'ctrl_form', None) == 'normal':
+                # the normal form: the abscissa from each block's trace and
+                # discriminant (controller.block_abscissa), exact at a double root
+                # parked on the line, where eigvals splits it by ~sqrt(eps) (20261010s)
+                al_ctrl = float(max(self.ctl.block_abscissa(pk.modal, arow[0], arow[1], arow[2])))
         # ---- compensator constraint in Burke-Overton's coordinates (TRACKER H):
         # the two rightmost poles compressed to a 2x2 block with biorthogonal
         # bases; Hermite's criterion on the block's shifted polynomial is a
@@ -1658,6 +1663,8 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
         """The compensator's abscissa at zn_ as the evaluation reports it
         (al_ctrl; on the pair's face al_ctrl_rest, the pair excluded): an r x r
         eigenproblem, no plant work."""
+        if getattr(pk, 'ctrl_form', None) == 'normal':
+            return float(max(ev_fn.ctl.block_abscissa(pk.modal, *pk.unpack(zn_)[0][:3])))   # as the Evaluator's al_ctrl
         lam_ = np.linalg.eigvals(ev_fn.ctl.A_of(*pk.unpack(zn_)[0]))
         if ev_fn.pair_mode:
             pl_ = ev_fn.pair_data(zn_)['lam']
