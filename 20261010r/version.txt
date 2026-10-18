@@ -1,0 +1,2 @@
+version_check: code version 20261010r, 73 files consistent
+version_check: git HEAD 15cdfcb, clean

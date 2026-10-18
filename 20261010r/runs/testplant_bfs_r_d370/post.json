@@ -1,0 +1,50 @@
+{
+ "rec": "/tmp_user/sator/cleclerc/BFS/testplant_bfs/r_d370/run/K_B_C_s0_bfs_mimo2x2_decentral.npz",
+ "n": 33593,
+ "band": [
+  0.0,
+  10.0
+ ],
+ "nfreq": 432,
+ "gamma_record": 366.5897449518343,
+ "peak_open": {
+  "omega": 0.74,
+  "sigma": [
+   1463.8688220460842,
+   32.603471985272115,
+   24.947719900192755
+  ]
+ },
+ "peak_closed": {
+  "omega": 0.226058,
+  "sigma": [
+   366.5897449512667,
+   47.09238858231088,
+   35.678415507851625
+  ]
+ },
+ "closed_over_gamma": 0.9999999999984517,
+ "vec_omega": [
+  0.74,
+  0.226058,
+  0.3,
+  1.5
+ ],
+ "sigma1_vec_open": [
+  1463.8688220460851,
+  346.0220292007119,
+  531.9791496533215,
+  347.259102753101
+ ],
+ "sigma1_vec_closed": [
+  358.7208483150697,
+  366.58974495129365,
+  353.26898090208095,
+  359.5407149395882
+ ],
+ "seconds": {
+  "curves": 29.9,
+  "vectors": 2.1
+ },
+ "pool": "full-model pool (48 workers): 6916 tasks in 703 calls, 23063.3 s of task time in 2364.0 s wall (x9.76; on 11 / 23 / 95 workers ~2598.8 / 2296.0 / 2236.4 s)"
+}

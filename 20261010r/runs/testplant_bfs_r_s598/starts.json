@@ -1,0 +1,23 @@
+{
+ "out": "testplant_bfs/zero_o10_lat_nostrip_s0_r300/starts",
+ "n": 1,
+ "seed": 0,
+ "r": 10,
+ "margin": 0.05,
+ "positions": "paper",
+ "kind": "zero",
+ "starts": [
+  {
+   "name": "zero_000",
+   "xa": [
+    0.6,
+    1.0
+   ],
+   "xs": [
+    2.0
+   ],
+   "K": 0.0,
+   "alpha_ctrl": 0.946
+  }
+ ]
+}

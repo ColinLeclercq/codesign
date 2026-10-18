@@ -1,0 +1,2 @@
+2026-10-17T18:16:34+02:00 copied from /tmp_user/sator/cleclerc/BFS/testplant_bfs/zero_o10_lat_s0_r300 (bfs/abcopy.sh)
+2026-10-17T19:20:22+02:00 20261010r 15cdfcb 776142 coarse-8d283f5726c7c91f

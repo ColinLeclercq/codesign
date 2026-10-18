@@ -1,0 +1,4 @@
+2026-10-15T22:28:23+02:00 copied from /tmp_user/sator/cleclerc/BFS/testplant_bfs/zero_m2p2_central_o10_lat_nostrip_s0_r300 (bfs/abcopy.sh)
+2026-10-15T22:28:39+02:00 20261010n ee6149d 774364 coarse-8d283f5726c7c91f
+2026-10-17T18:16:35+02:00 copied from /tmp_user/sator/cleclerc/BFS/testplant_bfs/pr_c151_nostrip_async (bfs/abcopy.sh)
+2026-10-17T19:28:24+02:00 20261010r 15cdfcb 776143 coarse-8d283f5726c7c91f

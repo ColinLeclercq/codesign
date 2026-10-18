@@ -1,0 +1,99 @@
+==========================================
+SLURM_JOB_ID = 776145
+SLURM_JOB_NODELIST = n1236
+==========================================
+version_check: code version 20261010r, 73 files consistent
+version_check: git HEAD 15cdfcb, clean
+=== host n1236  job 776145  2026-10-18T09:56:25+02:00  15cdfcb  ops /tmp_user/sator/cleclerc/BFS/data/coarse-8d283f5726c7c91f/ops_coarse.npz ===
+=== 2026-10-18T09:56:25+02:00 testplant_bfs/r_s555/run/K_B_C_s0_bfs.npz -> testplant_bfs/r_s555/run/K_B_C_s0_bfs_stationarity.log ===
+      the certified design: testplant_bfs/r_s555/run/K_B_C_s0_bfs_stationarity_certified.npz
+    VERDICT: NOT STATIONARY (certified: a design 7.8e-03 gamma lower at Delta 1e-05, admissible on the line test Im in [0, 13] -- the winding count over all w not run; above the progress rule's ~1.9e-04 per round (8:0.0015)): stationary to rho_2/(sum lam_i |g_i|) = 4.6e-03 at eps = 1e-02 (4 piece(s), 4 active constraint(s); rho_2/gscale (mean |g_i|) 1.1e-03; rho_2/min|g_i| 0.0073; rho_1/(sum lam_i |g_i|_1) 7.9e-03; worst group-wise necessary condition n 0.029 (scale-free); MFCQ margin 5.0e-01); Clarke at the certificate's eps = 1e-6: rho_2/(sum lam_i |g_i|) = 1.0e+00; over P(0.05) the residual falls to 4.0e-04 only at eps = 1.2e-02 (5 pieces: eps-stationary at that scale only); first-order decrease available pred_inf(Delta_v)/gamma = 8.3e-03 at Delta_v = 1e-04 (measured 7.7e-03 at the re-located tops of P(0.05); certified gamma <= 519.386766 at Delta 1e-05); piece set uncertified (--complete off: rho an upper bound); stop: deadline (last round code 4: iteration budget, stat_value 3.007, 21 inner iterations)
+=== 2026-10-18T09:59:44+02:00 testplant_bfs/r_s598/run/K_B_C_s0_bfs.npz -> testplant_bfs/r_s598/run/K_B_C_s0_bfs_stationarity.log ===
+      the certified design: testplant_bfs/r_s598/run/K_B_C_s0_bfs_stationarity_certified.npz
+    VERDICT: NOT STATIONARY (certified: a design 3.8e-04 gamma lower at Delta 1e-06, admissible on the line test Im in [0, 13] -- the winding count over all w not run; above the progress rule's ~1.9e-04 per round (8:0.0015)): stationary to rho_2/(sum lam_i |g_i|) = 2.9e-05 at eps = 1e-02 (5 piece(s), 3 active constraint(s); rho_2/gscale (mean |g_i|) 1.9e-05; rho_2/min|g_i| 0.00019; rho_1/(sum lam_i |g_i|_1) 4.2e-05; worst group-wise necessary condition n 1.4e-05 (scale-free); MFCQ margin 3.8e-01); Clarke at the certificate's eps = 1e-6: rho_2/(sum lam_i |g_i|) = 1.0e+00; first-order decrease available pred_inf(Delta_v)/gamma = 4.0e-04 at Delta_v = 1e-04 (measured 2.8e-04 at the re-located tops of P(0.05); certified gamma <= 558.492712 at Delta 1e-06); piece set uncertified (--complete off: rho an upper bound); stop: deadline (last round code 4: iteration budget, stat_value 2.506, 17 inner iterations)
+=== 2026-10-18T10:03:39+02:00 testplant_bfs/r_c124/run/K_B_C_s0_bfs_mimo2x2_central.npz -> testplant_bfs/r_c124/run/K_B_C_s0_bfs_mimo2x2_central_stationarity.log ===
+      the certified design: testplant_bfs/r_c124/run/K_B_C_s0_bfs_mimo2x2_central_stationarity_certified.npz
+    VERDICT: NOT STATIONARY (certified: a design 7.6e-04 gamma lower at Delta 1e-05, admissible on the line test Im in [0, 31.4574] -- the winding count over all w not run; above the progress rule's ~1.9e-04 per round (8:0.0015)): stationary to rho_2/(sum lam_i |g_i|) = 4.0e-04 at eps = 1e-02 (14 piece(s), 0 active constraint(s); rho_2/gscale (mean |g_i|) 1.8e-04; rho_2/min|g_i| 0.0038; rho_1/(sum lam_i |g_i|_1) 7.5e-04; worst group-wise necessary condition Cc 0.00058 (scale-free)); Clarke at the certificate's eps = 1e-6: rho_2/(sum lam_i |g_i|) = 1.0e+00; first-order decrease available pred_inf(Delta_v)/gamma = 7.8e-04 at Delta_v = 1e-05 (measured 7.6e-04 with the level set's tops; certified gamma <= 123.300689 at Delta 1e-05); piece set uncertified (--complete off: rho an upper bound); stop: deadline (last round code 4: iteration budget, stat_value 388, 29 inner iterations)
+=== 2026-10-18T10:08:10+02:00 testplant_bfs/r_c152/run/K_B_C_s0_bfs_mimo2x2_central.npz -> testplant_bfs/r_c152/run/K_B_C_s0_bfs_mimo2x2_central_stationarity.log ===
+      the certified design: testplant_bfs/r_c152/run/K_B_C_s0_bfs_mimo2x2_central_stationarity_certified.npz
+    VERDICT: NOT STATIONARY (certified: a design 1.1e-02 gamma lower at Delta 1e-04, admissible on the line test Im in [0, 14.5135] -- the winding count over all w not run; above the progress rule's ~1.9e-04 per round (8:0.0015)): stationary to rho_2/(sum lam_i |g_i|) = 1.0e+00 at eps = 1e-06 (1 piece(s), 0 active constraint(s); rho_2/gscale (mean |g_i|) 1.0e+00; rho_2/min|g_i| 1 = no cancellation; rho_1/(sum lam_i |g_i|_1) 1.0e+00; worst group-wise necessary condition d 1 (scale-free)); Clarke at the certificate's eps = 1e-6: rho_2/(sum lam_i |g_i|) = 1.0e+00; over P(0.05) the residual falls to 1.3e-02 only at eps = 2.0e-02 (12 pieces: eps-stationary at that scale only); first-order decrease available pred_inf(Delta_v)/gamma = 1.2e-02 at Delta_v = 1e-04 (measured 1.1e-02 with the level set's tops; certified gamma <= 135.952538 at Delta 1e-04); piece set uncertified (--complete off: rho an upper bound); stop: deadline (last round code 4: iteration budget, stat_value 398.3, 30 inner iterations)
+=== 2026-10-18T10:11:33+02:00 testplant_bfs/r_d370/run/K_B_C_s0_bfs_mimo2x2_decentral.npz -> testplant_bfs/r_d370/run/K_B_C_s0_bfs_mimo2x2_decentral_stationarity.log ===
+      the certified design: testplant_bfs/r_d370/run/K_B_C_s0_bfs_mimo2x2_decentral_stationarity_certified.npz
+    VERDICT: NOT STATIONARY (certified: a design 3.4e-03 gamma lower at Delta 1e-04, admissible on the line test Im in [0, 13] -- the winding count over all w not run; above the progress rule's ~1.9e-04 per round (8:0.0015)): stationary to rho_2/(sum lam_i |g_i|) = 9.9e-04 at eps = 1e-02 (7 piece(s), 3 active constraint(s); rho_2/gscale (mean |g_i|) 9.9e-04; rho_2/min|g_i| 0.0019; rho_1/(sum lam_i |g_i|_1) 1.4e-03; worst group-wise necessary condition Cc 0.00038 (scale-free); MFCQ margin 5.9e-01); Clarke at the certificate's eps = 1e-6: rho_2/(sum lam_i |g_i|) = 1.0e+00; first-order decrease available pred_inf(Delta_v)/gamma = 3.6e-03 at Delta_v = 1e-04 (measured 3.4e-03 with the level set's tops; certified gamma <= 365.346843 at Delta 1e-04); piece set uncertified (--complete off: rho an upper bound); stop: deadline (last round code 4: iteration budget, stat_value 0.5862, 40 inner iterations)
+=== 2026-10-18T10:14:45+02:00 testplant_bfs/r_d412/run/K_B_C_s0_bfs_mimo2x2_decentral.npz -> testplant_bfs/r_d412/run/K_B_C_s0_bfs_mimo2x2_decentral_stationarity.log ===
+      the certified design: testplant_bfs/r_d412/run/K_B_C_s0_bfs_mimo2x2_decentral_stationarity_certified.npz
+    VERDICT: NOT STATIONARY (certified: a design 5.1e-04 gamma lower at Delta 1e-05, admissible on the line test Im in [0, 13] -- the winding count over all w not run; above the progress rule's ~1.9e-04 per round (8:0.0015)): stationary to rho_2/(sum lam_i |g_i|) = 6.1e-04 at eps = 1e-02 (7 piece(s), 4 active constraint(s); rho_2/gscale (mean |g_i|) 5.6e-04; rho_2/min|g_i| 0.0015; rho_1/(sum lam_i |g_i|_1) 6.4e-04; worst group-wise necessary condition Cc 2.3e-05 (scale-free); MFCQ margin 5.0e-01); Clarke at the certificate's eps = 1e-6: rho_2/(sum lam_i |g_i|) = 1.0e+00; first-order decrease available pred_inf(Delta_v)/gamma = 5.2e-04 at Delta_v = 1e-05 (measured 5.1e-04 with the level set's tops; certified gamma <= 387.055792 at Delta 1e-05); piece set uncertified (--complete off: rho an upper bound); stop: deadline (last round code 4: iteration budget, stat_value 0.6938, 21 inner iterations)
+=== done 2026-10-18T10:19:11+02:00 ===
+
+-----------------------------------------------------
+Command=/tmp_user/sator/cleclerc/BFS/v/20261010r/tools/stationarity.slurm
+-----------------------------------------------------
+#!/bin/bash
+#SBATCH --comment=36973004F
+#SBATCH --job-name=bfs-stat
+#SBATCH --partition=intel
+#SBATCH --nodes=1
+#SBATCH --ntasks=96
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=450G
+#SBATCH --time=04:00:00
+#SBATCH --output=logs/bfs_stat_%j.log
+#
+# tools/bfs_stationarity.py on the MPI ranks: how far each record is from
+# Clarke stationarity (SISO, MIMO decentral, MIMO central), the first-order
+# decrease still available, and a certified lower design when there is one
+# (LESSONS.md 21; the tool's docstring says what each number means).
+#
+#   RECS="testplant_bfs/r_c124/run/K_B_C_s0_bfs_mimo2x2_central.npz testplant_bfs/r_d370/run/K_B_C_s0_bfs_mimo2x2_decentral.npz" \
+#       sbatch tools/stationarity.slurm
+#   RECS="..." DESCENT=on COMPLETE=on sbatch tools/stationarity.slurm   (no certificate; the level-set completeness of the pieces)
+#
+# One job for several records, one after the other, on the whole node: sator
+# runs one job of a user per node (BFS.md 8), so records are queued here, not
+# as separate jobs.  Each record's report goes to <record>_stationarity.log and
+# .json next to it (bfs/report.sh copies the run directory's *.json).
+# A record is a finished record (.npz) or a checkpoint (_ckpt.npz).  The tool
+# reads the structure (SISO / MIMO, central / decentral) from the record.
+set -eo pipefail
+cd "$SLURM_SUBMIT_DIR"
+mkdir -p logs
+source ./env.sh
+python bfs/version_check.py || { echo "*** mixed code versions (bfs/version_check.py): stop"; exit 1; }
+LAUNCHER=${LAUNCHER:-mpiexec}
+[ -n "${RECS:-}" ] || { echo "stationarity.slurm: set RECS=\"record.npz [record.npz ...]\""; exit 2; }
+OPS=${OPS:-$(python bfs/plant_id.py --dir coarse)/ops_coarse.npz}
+echo "=== host $(hostname)  job ${SLURM_JOB_ID:-none}  $(date -Is)  $(git rev-parse --short HEAD 2>/dev/null || echo -)  ops $OPS ==="
+rc=0
+for REC in $RECS; do
+    [ -f "$REC" ] || { echo "*** $REC: no such record"; rc=1; continue; }
+    base=${REC%.npz}
+    echo "=== $(date -Is) $REC -> ${base}_stationarity.log ==="
+    if timeout "${PER_REC:-5400}" $LAUNCHER -n "${SLURM_NTASKS:-96}" python -u tools/bfs_stationarity.py "$REC" --ops "$OPS" \
+            --eps "${EPS:-1e-6,1e-5,1e-4,1e-3,1e-2}" --fd "${FD:-6}" --descent "${DESCENT:-certify}" \
+            --complete "${COMPLETE:-off}" --json "${base}_stationarity.json" > "${base}_stationarity.log" 2>&1; then
+        grep -E "^(verdict|VERDICT)|stationary to|NOT STATIONARY|certified" "${base}_stationarity.log" | tail -4 | sed 's/^/    /'
+    else
+        r=$?; rc=$r
+        echo "*** $REC: the tool ended with exit $r (timeout ${PER_REC:-5400} s = 124); its last lines:"; tail -5 "${base}_stationarity.log" | sed 's/^/    /'
+    fi
+done
+echo "=== done $(date -Is) ==="
+exit $rc
+
+-----------------------------------------------------
+StartTime=2026-10-18T09:56:15
+EndTime=2026-10-18T10:19:11
+NodeList=n1236
+-----------------------------------------------------
+Job ID: 776145
+Cluster: sator_new
+User/Group: cleclerc/daaa
+State: COMPLETED (exit code 0)
+Nodes: 1
+Cores per node: 96
+CPU Utilized: 1-11:41:20
+CPU Efficiency: 97.26% of 1-12:41:36 core-walltime
+Job Wall-clock time: 00:22:56
+Memory Utilized: 80.71 GB
+Memory Efficiency: 17.94% of 450.00 GB (450.00 GB/node)
+-----------------------------------------------------
