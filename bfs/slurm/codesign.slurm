@@ -45,9 +45,16 @@
 #        (a trial across the closed loop's line from an admissible iterate is
 #         halved, as up to 20261010c, instead of weighed by the merit; the
 #         directories get _cut)
-#   ORACLE=lattice SHRINK=1 ... sbatch ...
-#        (trust radius 2 alpha |d| after a partial step, --sqp-partial-shrink on;
-#         off by default since 20261008c; the directories get _shr)
+#   ORACLE=lattice TRUST=legacy SHRINK=1 ... sbatch ...
+#        (trust radius 2 alpha |d| after a partial step, --sqp-partial-shrink on,
+#         under the legacy rule; off by default since 20261008c; the directories
+#         get _shr_leg)
+#   TRUST=legacy ... sbatch ...
+#        (the trust-radius rule of every run before 2026-10-17, --sqp-trust-rule
+#         legacy; the default is the ratio rule; the directories get _leg)
+#   TRUST_PARTIAL=0 ... sbatch ...
+#        (the ratio rule without its partial-step leg, --sqp-trust-partial off;
+#         the directories get _nopart)
 #   ORACLE=lattice RETIRE=0.95:3 ... sbatch ...
 #        (members of Omega below 0.95 gamma for 3 rounds retire, --omega-retire;
 #         the directories get _ret, e.g. zero_m2p2_central_o10_lat_ret_s0_r300)
@@ -103,7 +110,9 @@ if [ "${ORACLE:-reduced}" = lattice ] && [ "${SHRINK:-0}" = 1 ]; then SUF="${SUF
 if [ "${ORACLE:-reduced}" = lattice ] && [ "${LATTICE_K:-1}" != 1 ]; then SUF="${SUF}_k${LATTICE_K}"; fi
 if [ "${ORACLE:-reduced}" = lattice ] && [ "${CROSS:-merit}" = cut ]; then SUF="${SUF}_cut"; fi
 if [ "${ORACLE:-reduced}" = lattice ] && [ "$AF" = off ]; then SUF="${SUF}_sync"; fi     # ASYNC=0 (2026-10-16)
-export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-16} RETIRE=${RETIRE:-} SHRINK=${SHRINK:-0} LATTICE_K=${LATTICE_K:-1} CROSS=${CROSS:-merit} ASYNC=${ASYNC:-1}
+if [ "${TRUST:-ratio}" = legacy ]; then SUF="${SUF}_leg"; fi                            # TRUST=legacy (2026-10-17)
+if [ "${TRUST_PARTIAL:-1}" = 0 ]; then SUF="${SUF}_nopart"; fi                         # TRUST_PARTIAL=0 (2026-10-17)
+export ORACLE=${ORACLE:-reduced} LATTICE_CAP=${LATTICE_CAP:-16} RETIRE=${RETIRE:-} SHRINK=${SHRINK:-0} LATTICE_K=${LATTICE_K:-1} CROSS=${CROSS:-merit} ASYNC=${ASYNC:-1} TRUST=${TRUST:-ratio} TRUST_PARTIAL=${TRUST_PARTIAL:-1}
 TAG=K_B_C_s0_bfs                                       # the driver's record name
 if [ "$MIMO" = 1 ]; then TAG=K_B_C_s0_bfs_mimo${M}x${P}_${STRUCT}; fi
 NAME=$(printf "%s_%03d" "$KIND" "$IDX")

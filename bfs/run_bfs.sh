@@ -25,7 +25,11 @@
 #   LATTICE_CAP  with ORACLE=lattice: plant factorisations kept per rank (default 24; 133 MB each on
 #             the test plant, ~1.05 GB on the full mesh -- size the ranks per node accordingly)
 #   SHRINK    with ORACLE=lattice: 1 = trust radius 2 alpha |d| after a partial step
-#             (--sqp-partial-shrink on; default 0 since 20261008c)
+#             (--sqp-partial-shrink on; default 0 since 20261008c; only with TRUST=legacy)
+#   TRUST     the SQP's trust-radius rule (--sqp-trust-rule): ratio (default since 2026-10-17) or
+#             legacy (the rule of every run before; directories get _leg)
+#   TRUST_PARTIAL  with TRUST=ratio: 0 = the radius kept after a step accepted at alpha < 1 instead of
+#             2 alpha |d| (--sqp-trust-partial off, an A/B arm; directories get _nopart); default 1
 #   LATTICE_K with ORACLE=lattice: eigenvalues per disk centre of the line, each with its
 #             stability row (--lattice-k; default 1)
 #   STRIP     refused (bfs/lib.sh strip_refused): the strip arm (--lattice-strip on) was removed on
@@ -146,6 +150,26 @@ case "${MODAL:-}" in
     ''|normal) MODF=(--ctrl-modal normal) ;;
     *) echo "run_bfs.sh: MODAL=${MODAL}: 0 (tridiagonal), 1 (general modal blocks) or unset (the normal form)"; exit 2 ;;
 esac
+# TRUST (2026-10-17): the trust radius by the ratio rule (sqp_inner.TRUST_RULE): the
+# line search from alpha = 1, the radius 2 alpha |d| after a partial step, x 2 / x 1 /
+# |d| / 2 by the ratio of the merit's decrease to the model's after a full one, a
+# failed QP retried with bounded equilibration.  Under the legacy rule (TRUST=legacy,
+# every run before) the radius stood 100-1000 x the accepted step on the BFS, 37-40
+# of 40 QP steps on its boundary at alpha 2^-9 .. 2^-10 (20261010n, LESSONS 21)
+case "${TRUST:-ratio}" in
+    ratio|legacy) ;;
+    *) echo "run_bfs.sh: TRUST must be ratio (default) or legacy (got ${TRUST})"; exit 2 ;;
+esac
+if [ "${TRUST:-ratio}" = ratio ] && [ "${SHRINK:-0}" = 1 ]; then
+    echo "run_bfs.sh: SHRINK=1 (--sqp-partial-shrink on) is a legacy-rule arm: give TRUST=legacy with it"; exit 2
+fi
+case "${TRUST_PARTIAL:-1}" in
+    1) ;;
+    0) [ "${TRUST:-ratio}" = ratio ] || { echo "run_bfs.sh: TRUST_PARTIAL=0 is a leg of TRUST=ratio"; exit 2; } ;;
+    *) echo "run_bfs.sh: TRUST_PARTIAL must be 1 (default) or 0 (got ${TRUST_PARTIAL})"; exit 2 ;;
+esac
+TRF=(--sqp-trust-rule "${TRUST:-ratio}")
+if [ "${TRUST:-ratio}" = ratio ]; then TRF+=(--sqp-trust-partial "$([ "${TRUST_PARTIAL:-1}" = 0 ] && echo off || echo on)"); fi
 exec ${LAUNCH} ${PY:-python} -u run_case_epi.py --plant bfs --ops "${OPS:-bfs/data/ops_fx.npz}" --lu-order mumps \
     --init "$init" --cold --case K+B+C --r "${R:-5}" --eps 0.05 --start 0 --nproc 1 --cert_nseg "${CERT_NSEG:-16}" --cert-split "${CERT_SPLIT:-23}" --wlo 0 --whi 10 \
     --outer "${OUTER:-40}" --deadline "${DEADLINE:-0}" --wall "${WALL:-54000}" "${STAB[@]}" \
@@ -154,4 +178,4 @@ exec ${LAUNCH} ${PY:-python} -u run_case_epi.py --plant bfs --ops "${OPS:-bfs/da
     --gate-prefix 1 --post 1 --sqp-pen adaptive --cert-disk strict --cert-near-k 4 --cert-climb slope --wind-ctrl exact --cert-rtol 1e-6 --alpha-argmax on \
     --enroll-rel 0.05 --peak-follow on --row-screen 0.05 --converge --inner sqp --sqp-carry --sqp-trust 0.01 \
     --sqp-ctrl block --sqp-row-res-tol 1e-5 --sqp-refine 1e-4 --sqp-clblock on --sigma2-active-gap 0.15 \
-    --follow-scan 0 --stop-progress 8:0.0015 --sqp-stat pred --wind-accept off --cont-accept-winding --dense_check 0 --outdir "$out" "${MIMOF[@]}" "${MODF[@]}" "$@"
+    --follow-scan 0 --stop-progress 8:0.0015 --sqp-stat pred --wind-accept off --cont-accept-winding --dense_check 0 --outdir "$out" "${MIMOF[@]}" "${MODF[@]}" "${TRF[@]}" "$@"
