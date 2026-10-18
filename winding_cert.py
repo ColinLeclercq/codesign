@@ -66,7 +66,7 @@ from __future__ import annotations
 import os
 for _v in ('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS'):
     os.environ.setdefault(_v, '1')
-import argparse, glob, json, sys
+import argparse, glob, json, sys, time
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
@@ -328,6 +328,62 @@ def _march(F, line, wa, wb, knots, hot, hmin, WT, maxpts):
     return dict(total=total, w=w, f=f, f0=f0, npts=npts, ok=ok, nsolve=F.nsolve)
 
 
+def _piece_task(t):
+    """One piece of a split segment (SEG_SPLIT_ON): _seg_task with the piece's
+    point budget; returns the march with the piece's ends and budget."""
+    (base, wa, wb, budget, root, parent) = t
+    import fullpar
+    (b, c, arow, nvec, K, mc, ctrl_exact, lam_c, lam_c2, line, knots, hot, hmin, WT) = base
+    D = fullpar.CTX['D']
+    F = _make_F(D.A, D.M, b, c, arow, nvec, K, mc, ctrl_exact, lam_c, lam_c2)
+    t0 = time.perf_counter()
+    out = _march(F, line, wa, wb, knots, hot, hmin, WT, budget)
+    out.update(wa=float(wa), wb=float(wb), budget=int(budget), root=int(root), parent=parent, dt=time.perf_counter() - t0)
+    return out
+
+
+SPLIT_LOG = []          # (diagnostics) the last split count's pieces: (wa, w reached, wb, points, seconds, root,
+                        #   its parent's (wa, wb) or None)
+SPLIT_INFO = {}         # (diagnostics) its first segments' edges, and those the count had before 20261010s
+
+
+def _split_march(F, b, c, arow, nvec, K, mc, ctrl_exact, line, edges, knots, hot, hmin, WT, maxpts):
+    """The march over [edges[0], edges[-1]] as segments between the edges,
+    each split where it has taken SEG_BUDGET points (SEG_SPLIT_ON): every piece
+    on the pool (fullpar.pqueue), returned in w order with its ends (wa, w).  A
+    piece that ended short of its end without using its budget (the step floor)
+    is returned as it is (ok False; its rest is not marched).  The points a
+    segment's pieces may take are maxpts in all."""
+    import fullpar
+    lc2 = getattr(F, 'lam_c2', None)
+    base = (b, c, arow, nvec, K, mc, ctrl_exact, (F.lam_c if ctrl_exact else None), lc2, line, knots, hot, hmin, WT)
+    used = {}
+
+    def first(j):
+        return (base, float(edges[j]), float(edges[j + 1]), int(min(SEG_BUDGET, maxpts)), j, None)
+
+    def more(a_, r_):
+        (_, wa, wb, budget, root, _) = a_
+        used[root] = used.get(root, 0) + int(r_['npts'])
+        if not (r_['ok'] and r_['w'] < wb):
+            return []                                  # done, or failed (the step floor)
+        left = maxpts - used[root]
+        if left <= 1:
+            return []                                  # the segment's points spent: open, not a count
+        w0 = float(r_['w'])
+        if w0 >= 1.0 and wb > 2.0 * w0:
+            cut = w0 * (wb / w0) ** (np.arange(1, SEG_SPLIT) / SEG_SPLIT)
+        else:
+            cut = w0 + (wb - w0) * np.arange(1, SEG_SPLIT) / SEG_SPLIT
+        e_ = [w0] + [float(x) for x in cut if w0 < x < wb] + [wb]
+        bud = int(max(2, min(SEG_BUDGET, left // max(len(e_) - 1, 1))))
+        return [(base, e_[k], e_[k + 1], bud, root, (float(wa), float(wb))) for k in range(len(e_) - 1)]
+    res = fullpar.pqueue(_piece_task, [first(j) for j in range(len(edges) - 1)], more)
+    pieces = sorted((r_ for _, r_ in res), key=lambda p_: p_['wa'])
+    SPLIT_LOG[:] = [(p_['wa'], p_['w'], p_['wb'], p_['npts'], p_['dt'], p_['root'], p_['parent']) for p_ in pieces]
+    return pieces
+
+
 def _make_F(A, M, b, c, arow, nvec, K, mc, ctrl_exact, lam_c, lam_c2):
     mimo = np.ndim(b) == 2 or np.ndim(c) == 2
     F = (_FM if mimo else _F)(A, M, b, c, arow, nvec, K, mc=mc)
@@ -350,6 +406,22 @@ def _seg_task(t):
 
 
 SEG_PER_WORKER = 4      # segments per worker when the pool is up (dynamic load balance)
+# SPLIT SEGMENTS (20261010s; the real-system count, real_sym: the backward-facing
+# step).  The segments between knots cost very unequal numbers of points: with
+# the compensator's phase tracked exactly (ctrl_exact), g ~ w^r far out, the
+# step grows like w and the last segment alone, [W_core, W_T] (30 to 7680 on
+# the decentral 369.87 record), took several times the mean -- the counts ran
+# 15-21 % busy on 48 ranks, one segment setting the wall.  Now the band beyond
+# the last knot starts in doublings, and a segment that has taken SEG_BUDGET
+# points stops where it is and its rest goes on as SEG_SPLIT pieces (equal in w,
+# or geometric where the rest spans more than a doubling), each to the next
+# free worker (fullpar.pqueue).  The phase changes of the pieces add up to the
+# segment's, each validated as the segment's own steps are: the count is the
+# same, the points differ (every piece restarts its step rule).  A segment and
+# its pieces together take at most maxpts points, as the segment alone did.
+SEG_BUDGET = 48         # points a piece takes before its rest is split
+SEG_SPLIT = 4           # pieces the rest is split into
+SEG_SPLIT_ON = True     # False: the segments of before 20261010s (one task each, the last to W_T)
 
 
 # THE TAIL CUTOFF (2026-10-16).  winding_count marches up to W_T, the first rung
@@ -588,7 +660,32 @@ def winding_count(A, M, b, c, arow, nvec, K, line=-0.025, w0=30.0,
     # over [-W_T, W_T] is twice the change over [0, W_T]; f(line - i W_T) =
     # conj f(line + i W_T) closes the contour.  Half the points.
     w_lo = 0.0 if real_sym else -WT
-    if nseg <= 1:
+    pieces = None
+    if nseg > 1 and real_sym and SEG_SPLIT_ON:
+        kn_ = knots[knots > w_lo]
+        idx = np.unique(np.rint(np.linspace(0, len(kn_) - 1, nseg + 1)).astype(int))[1:-1]
+        edges = [w_lo] + [float(kn_[j]) for j in idx if w_lo < kn_[j] < WT]
+        SPLIT_INFO.clear(); SPLIT_INFO.update(edges_old=list(edges) + [WT])      # (diagnostics) the segments before
+        wl_ = max(edges[-1], float(kn_[-1]) if len(kn_) and kn_[-1] < WT else edges[-1], 1.0)
+        if wl_ > edges[-1]:
+            edges.append(wl_)
+        nd = max(1, int(np.ceil(np.log2(WT / wl_)))) if WT > 2.0 * wl_ else 1
+        edges += [float(x) for x in wl_ * (WT / wl_) ** (np.arange(1, nd) / nd)] + [WT]
+        SPLIT_INFO.update(edges=list(edges), knots=len(knots), nseg=int(nseg))
+        pieces = _split_march(F, b, c, arow, nvec, K, mc, ctrl_exact, line, edges, knots, hot, hmin, WT, maxpts)
+        total = float(sum(p_['total'] for p_ in pieces))
+        npts = int(sum(p_['npts'] for p_ in pieces))
+        F.nsolve += int(sum(p_['nsolve'] for p_ in pieces))
+        # the pieces tile [w_lo, W_T]: each starts where the one before ended -- at its end (a
+        # piece done: _march stops at w >= wb) or where it stopped on its budget (its rest's
+        # first piece starts there); one short of its end otherwise (the step floor, or the
+        # segment's points spent) leaves the contour open: not a count
+        ok = all(p_['ok'] for p_ in pieces) and pieces[0]['wa'] == w_lo and pieces[-1]['w'] >= WT and \
+            all(pieces[j + 1]['wa'] == (pieces[j]['wb'] if pieces[j]['w'] >= pieces[j]['wb'] else pieces[j]['w'])
+                for j in range(len(pieces) - 1))
+        w, f = pieces[-1]['w'], pieces[-1]['f']
+        args = [np.angle(pieces[0]['f0'])]
+    elif nseg <= 1:
         mr = _march(F, line, w_lo, WT, knots, hot, hmin, WT, maxpts)
         total, w, f, npts, ok = mr['total'], mr['w'], mr['f'], mr['npts'], mr['ok']
         ok = ok and w >= WT          # stopped short (the point budget): the contour is open, not a count

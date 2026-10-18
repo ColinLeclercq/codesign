@@ -176,6 +176,65 @@ def pmap(fn, args):
     return out
 
 
+def pqueue(fn, args, more):
+    """A dynamic task queue (20261010s, the winding count's split segments):
+    fn(a) for every a of args and, for each task's result r, for every a' of
+    more(a, r) (its follow-up tasks).  Returns [(a, r)] for every task run, in
+    no particular order (the caller sorts).  On the MPI pool each task goes to
+    a worker the moment one is free (MPIPool.post / recv_any), a follow-up as
+    soon as its parent is in; on a fork pool the tasks run in generations (one
+    pmap each: a task's follow-ups in the next); without a pool, here, in turn.
+    The tasks run and their results do not depend on the pool or the order:
+    more() sees only its own task and result."""
+    pend = list(args)
+    out = []
+    if POOL is None or POOL is not _MPI or getattr(POOL, 'size', 1) < 2 or getattr(POOL, '_posted', 0):
+        while pend:
+            res = pmap(fn, pend)
+            nxt = []
+            for a_, r_ in zip(pend, res):
+                out.append((a_, r_))
+                nxt += list(more(a_, r_))
+            pend = nxt
+        return out
+    if _stamp() != _STAMP:
+        start(NPROC, **dict(CTX))            # the workers' context is stale: sent again
+    site = _site()
+    t0 = _time.perf_counter()
+    free = list(range(1, POOL.size))
+    fly, seq, dts, err = {}, 0, [], None
+    try:
+        while pend or fly:
+            while pend and free and err is None:
+                w = free.pop(0); a_ = pend.pop(0)
+                POOL.post(w, _call, (fn, a_, site), seq); fly[seq] = a_; seq += 1
+            if not fly:
+                break
+            src, tid, ok, res = POOL.recv_any()
+            a_ = fly.pop(tid); free.append(src)
+            if not ok:
+                err = err or f"MPI worker {src} failed: {res}"
+                continue
+            r_, d_, dt_ = res
+            dts.append(dt_); STATS['work'] += dt_
+            if d_ is not None:
+                _merge(site, d_)
+            out.append((a_, r_))
+            if err is None:
+                pend[:0] = list(more(a_, r_))   # follow-ups first: the long chains start early
+    finally:
+        while fly:                           # an error: every task out received, none left for a later call
+            src, tid, _, _ = POOL.recv_any()
+            fly.pop(tid, None)
+    if err is not None:
+        raise RuntimeError(err)
+    STATS['wall'] += _time.perf_counter() - t0
+    STATS['calls'] += 1; STATS['tasks'] += len(dts)
+    if dts:
+        CALLS.append((len(dts), float(sum(dts)), float(max(dts)), getattr(fn, '__name__', '?')))
+    return out
+
+
 def estimate(W):
     """Seconds the recorded pmap calls would take on W workers (dynamic
     scheduling, no dispatch cost): per call max(work / W, longest task)."""

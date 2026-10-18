@@ -1,7 +1,7 @@
 """check_lattice.py -- the lattice oracle (lattice.py) against the serial full
 model, on a record of the backward-facing step (BFS.md 8).
 
-    python tools/check_lattice.py RECORD.npz [--mimo m p struct] [--out OUT.npz] [--ref REF.npz]
+    python tools/check_lattice.py RECORD.npz [--mimo m p struct] [--out OUT.npz] [--ref REF.npz] [--strip on]
     mpiexec -n 3 python tools/check_lattice.py ...       (the same on MPI ranks)
 
 Checks, at the record's design:
@@ -18,11 +18,12 @@ Checks, at the record's design:
           peaks) just above and just below the largest top found: clear above,
           a region found below; --level-ref: the same decisions by the 2n
           certificate (certify_sparse.certify_greater);
-  strip   the strip [-eps - ROW_REACH, -eps] (evaluate(strip=True), a
-          diagnostic since 2026-10-16: no optimiser path covers it, BFS.md 8):
-          complete, and every eigenvalue an independent search finds in it (30
-          nearest eigenvalues at shifts every 0.5 along its middle) among the
-          exhibited ones;
+  strip   (--strip on only: a debugging diagnostic, not run unless asked --
+          user, 2026-10-17) the strip [-eps - ROW_REACH, -eps] (evaluate(strip=
+          True), a diagnostic since 2026-10-16: no optimiser path covers it,
+          BFS.md 8): complete, and every eigenvalue an independent search finds
+          in it (30 nearest eigenvalues at shifts every 0.5 along its middle)
+          among the exhibited ones;
   reuse   the same calls at a design moved by 1e-4 (the followed rows and the
           line in one evaluation, as the SQP calls them): waves, shifts,
           factorisations; the line again alone and from scratch.
@@ -49,6 +50,8 @@ ap.add_argument('--out', default=None)
 ap.add_argument('--ref', default=None)
 ap.add_argument('--eps', type=float, default=0.05)
 ap.add_argument('--whi', type=float, default=10.0)
+ap.add_argument('--strip', choices=['off', 'on'], default='off',
+                help='the strip stage, a debugging diagnostic (default off: not run unless asked)')
 ap.add_argument('--level-ref', dest='level_ref', action='store_true',
                 help='the level set also against the 2n certificate (certify_greater; minutes per decision)')
 # 20261010j stage C: the run's settings (run_case_epi --lattice-base / -costs / -memo / -row-merge); --base 4
@@ -206,23 +209,26 @@ vec = lat.vectors(z0, L['rows'][:2])
 print(f"  vectors of the two rightmost: {[None if q is None else q[0].shape for q in vec]}", flush=True)
 out['line_alpha'] = L['alpha']; out['line_clear'] = L['clear']
 
-# ---- strip: complete, and nothing an independent search finds missing from it
-t0 = time.perf_counter(); _, _, _, _, _, LS = lat.evaluate(z0, np.zeros(0), line=(a.eps, 0.0, a.whi), strip=True); t1 = time.perf_counter()
-st = LS['strip']
-inside = [l_ for l_ in LS['seen'] if -a.eps - lattice.ROW_REACH <= l_.real <= -a.eps]
-print(f"strip [{-a.eps - lattice.ROW_REACH:.3f}, {-a.eps:.3f}] x [0, {a.whi:g}]: {'complete' if st['complete'] else 'INCOMPLETE'}, "
-      f"{st['shifts']} shifts in {st['waves']} waves, {t1 - t0:.1f} s; {len(inside)} eigenvalues in it, {len(LS['rows'])} rows "
-      f"({LS.get('rows_dup', 0)} copies {_dup_lab})", flush=True)
-dref = lattice._design(lat.design(z0))
-ref = []
-for th in np.arange(0.0, a.whi + 1e-9, 0.5):
-    lams_, _, _ = lattice._nearest(dref['cl'], complex(-a.eps - 0.5 * lattice.ROW_REACH, th), lat.design(z0), 30)
-    ref += [l_ for l_ in lams_ if -a.eps - lattice.ROW_REACH <= l_.real <= -a.eps and 0.0 <= l_.imag <= a.whi
-            and all(abs(l_ - q) > 1e-8 for q in ref)]
-miss = [l_ for l_ in ref if min((abs(l_ - q) for q in LS['seen']), default=np.inf) > lattice.STRIP_RHO]
-print(f"  independent search: {len(ref)} eigenvalues in the strip, {len(miss)} not exhibited by the cover"
-      + (f": {[f'{l_:.4f}' for l_ in miss]}" if miss else ''), flush=True)
-out['strip_n'] = len(inside); out['strip_miss'] = len(miss)
+# ---- strip (--strip on only: a debugging diagnostic): complete, and nothing an independent search finds missing
+if a.strip == 'on':
+    t0 = time.perf_counter(); _, _, _, _, _, LS = lat.evaluate(z0, np.zeros(0), line=(a.eps, 0.0, a.whi), strip=True); t1 = time.perf_counter()
+    st = LS['strip']
+    inside = [l_ for l_ in LS['seen'] if -a.eps - lattice.ROW_REACH <= l_.real <= -a.eps]
+    print(f"strip [{-a.eps - lattice.ROW_REACH:.3f}, {-a.eps:.3f}] x [0, {a.whi:g}]: {'complete' if st['complete'] else 'INCOMPLETE'}, "
+          f"{st['shifts']} shifts in {st['waves']} waves, {t1 - t0:.1f} s; {len(inside)} eigenvalues in it, {len(LS['rows'])} rows "
+          f"({LS.get('rows_dup', 0)} copies {_dup_lab})", flush=True)
+    dref = lattice._design(lat.design(z0))
+    ref = []
+    for th in np.arange(0.0, a.whi + 1e-9, 0.5):
+        lams_, _, _ = lattice._nearest(dref['cl'], complex(-a.eps - 0.5 * lattice.ROW_REACH, th), lat.design(z0), 30)
+        ref += [l_ for l_ in lams_ if -a.eps - lattice.ROW_REACH <= l_.real <= -a.eps and 0.0 <= l_.imag <= a.whi
+                and all(abs(l_ - q) > 1e-8 for q in ref)]
+    miss = [l_ for l_ in ref if min((abs(l_ - q) for q in LS['seen']), default=np.inf) > lattice.STRIP_RHO]
+    print(f"  independent search: {len(ref)} eigenvalues in the strip, {len(miss)} not exhibited by the cover"
+          + (f": {[f'{l_:.4f}' for l_ in miss]}" if miss else ''), flush=True)
+    out['strip_n'] = len(inside); out['strip_miss'] = len(miss)
+else:
+    print("strip: not run (--strip on: a debugging diagnostic)", flush=True)
 
 # ---- reuse at a moved design
 rng = np.random.default_rng(0)
@@ -253,4 +259,7 @@ if a.out:
 if a.ref:
     ref = np.load(a.ref)
     for k in out:
+        if k not in ref.files:
+            print(f"  vs ref {k}: not in the reference", flush=True)
+            continue
         print(f"  vs ref {k}: max abs diff {np.max(np.abs(np.asarray(out[k], float) - np.asarray(ref[k], float))):.1e}", flush=True)
