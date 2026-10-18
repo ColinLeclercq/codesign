@@ -10,6 +10,7 @@ measured check of that promise.
         [--strip off|on] [--cl-line problem|qp] [--fd-cl on|off]
         [--descent off|on|certify] [--descent-deltas 1e-7,...,1e-3] [--descent-ts 1]
         [--scale-from FILE.npz] [--wpad 3] [--margin 0.05] [--progress 8:0.0015] [--lu-cap 8]
+        [--form normal|record]
     python tools/bfs_stationarity.py --selftest      # the convex core on designed toys (no plant, no MPI)
 
 Run from the repository (the sandbox: PATH=<mamba>/fx/bin:$PATH OMP_NUM_THREADS=1
@@ -23,7 +24,13 @@ the closed loop Re lambda_j <= -eps_s, the modal compensator rows v <= L
 position_rows).  z is the SQP's own packed vector (packer.Packer /
 PackerMIMO, built with ctrl_modal on when the record is modal -- tools/
 check_lattice.py omits it, and with it off the cut e/f entries become
-variables: the measure would test a larger space than the SQP's).  The trust
+variables: the measure would test a larger space than the SQP's).  --form
+normal (the default, 20261010s): a modal record is first brought to the
+normal form (controller.normal_convert, an exact similarity per block: the
+same transfer function, printed), so z has no similarity gauge and the
+residual is not measured along flat directions; --form record: the record's
+own representative (a 20261010e-r record: the general blocks, gauge kept; a
+normal-form record: its normal form, om as recorded).  The trust
 box, the displacement cone, the elastic slacks are solver devices, not
 constraints, and are left out.
 
@@ -56,8 +63,8 @@ the smallest active |g_i|, over the minimiser's own weights sum lam_i |g_i|
 (blocks: sum_a Y_aa |Hs_aa|), and over that plus sum mu_j |h_j| (the
 cancellation ratio in [0, 1]); per variable group the same cancellation ratio
 on the group's coordinates, invariant under a uniform rescaling of the group
-(the packed coordinates are badly scaled: sc, sx, the modal 2 x 2 blocks'
-2-dimensional similarity gauge).  None of these is coordinate-free; the
+(the packed coordinates are badly scaled: sc, sx, and with --form record on a
+20261010e-r record the modal 2 x 2 blocks' 2-dimensional similarity gauge).  None of these is coordinate-free; the
 measured decrease below is the number the verdict rests on.  The constraint
 qualification: the distance from 0 to the hull of the unit active constraint
 gradients (MFCQ when > 0; the residual's normalisation sum lam + sum tr Y = 1
@@ -478,8 +485,8 @@ def load_record(path):
     return z, J, js
 
 
-def _pk_from(D, flags, z, mimo):
-    from packer import Packer, PackerMIMO
+def _parts(z, mimo):
+    """The record's design: arow, nvec, K, xa, xs as the packers take them."""
     R = len(np.atleast_1d(z['d']))
     if mimo:
         m, p = int(z['m']), int(z['p'])
@@ -487,16 +494,40 @@ def _pk_from(D, flags, z, mimo):
                 np.asarray(z['Bc'], complex).reshape(R, p))
         nvec = np.asarray(z['nvec'], complex).reshape(m, R); K = np.asarray(z['K'], complex).reshape(m, p)
         xa = np.asarray(z['xa'], float).reshape(m, 2); xs = np.asarray(z['xs'], float).reshape(p, 1)
-        return PackerMIMO(D, flags, arow, nvec, K, xa, xs, None, None), (arow, nvec, K, xa, xs)
+        return arow, nvec, K, xa, xs
     arow = tuple(np.asarray(z[k], complex) for k in ('d', 'e', 'f'))
     nvec = np.asarray(z['nvec'], complex); K = complex(np.asarray(z['K']).ravel()[0])
     xa = np.asarray(z['xa'], float).ravel(); xs = np.atleast_1d(np.asarray(z['xs'], float))
-    return Packer(D, flags, arow, nvec, K, xa, xs, None, None), (arow, nvec, K, xa, xs)
+    return arow, nvec, K, xa, xs
 
 
-def build(z, J, ops, margin, scale_from=None):
+def _normal_parts(D, flags, parts, mimo, blocks):
+    """The design in the normal form (controller.normal_convert, as run_case_epi converts a start): the parts,
+    the conversion's info and its relative change of K(jw) on 72 frequencies."""
+    import controller as ctl
+    arow, nvec, K, xa, xs = parts
+    R = len(arow[0])
+    B0 = np.asarray(arow[3], complex).reshape(R, -1) if mimo else np.full((R, 1), D.mc, complex)
+    C0 = np.asarray(nvec, complex).reshape(-1, R)
+    d1, e1, f1, B1, C1, info = ctl.normal_convert(arow[0], arow[1], arow[2], B0, C0, blocks,
+                                                  fixed_b=(not mimo or flags.get('struct') == 'decentral'),
+                                                  pivots=flags.get('ctrl_pivots'))
+    wg = np.concatenate([[0.0], np.logspace(-3, 4, 71)])
+    K0s = ctl.tf_samples(arow[0], arow[1], arow[2], B0, C0, K, wg)
+    dK = float(np.abs(ctl.tf_samples(d1, e1, f1, B1, C1, K, wg) - K0s).max())
+    arow1 = (d1 + 0j, e1 + 0j, f1 + 0j) + ((B1 + 0j,) if mimo else ())
+    return (arow1, (C1 + 0j).reshape(np.shape(nvec)), K, xa, xs), info, (dK / float(np.abs(K0s).max()) if np.any(K0s) else dK)
+
+
+def _pk_from(D, flags, parts, mimo):
+    from packer import Packer, PackerMIMO
+    return (PackerMIMO if mimo else Packer)(D, flags, *parts, None, None)
+
+
+def build(z, J, ops, margin, scale_from=None, form='normal'):
     """BFSPlant, flags (real controller, ctrl_modal from the record's modal cut, MIMO), the packer from the
-    record (its scales, or --scale-from's), and the round-trip error."""
+    record (its scales, or --scale-from's) -- form 'normal': a modal record in the normal form first (exact;
+    20261010s), 'record': its own representative -- and the round-trip error."""
     from bfs.plant import BFSPlant
     from fe_codesign import parse_case
     import controller as ctl
@@ -511,16 +542,34 @@ def build(z, J, ops, margin, scale_from=None):
     if mimo:
         flags.update(m=int(z['m']), p=int(z['p']), struct=struct,
                      loop_orders=[int(v) for v in np.atleast_1d(z['loop_orders'])])
-    pk, parts = _pk_from(D, flags, z, mimo)
+    rec_normal = 'ctrl_form' in z.files and str(z['ctrl_form']) == 'normal'
+    if flags['ctrl_modal'] and (form == 'normal' or rec_normal):
+        flags['ctrl_form'] = 'normal'
+        if 'ctrl_pivots' in z.files:
+            flags['ctrl_pivots'] = [None if int(q_) < 0 else int(q_) for q_ in np.atleast_1d(z['ctrl_pivots'])]
+    parts = _parts(z, mimo)
     note = None
+    if flags.get('ctrl_form') == 'normal' and not (rec_normal and form == 'record'):
+        blocks = ctl.modal_blocks(orders)
+        cv0 = max(ctl.block_cond(blocks, *parts[0][:3]))
+        parts, info, tf_err = _normal_parts(D, flags, parts, mimo, blocks)
+        flags['ctrl_pivots'] = list(info['pivots'])
+        note = (f"the normal form ({'re-centred' if rec_normal else 'converted from the record'}: K(jw) relative change "
+                f"{tf_err:.1e}, block cond(V) max {cv0:.3g} -> {max(ctl.block_cond(blocks, *parts[0][:3])):.3g})")
+        if not tf_err <= 1e-8:
+            raise SystemExit(f"--form normal: the conversion changed K(jw) by {tf_err:.2e} (rel); use --form record")
+    pk = _pk_from(D, flags, parts, mimo)
     if scale_from:
         z2 = np.load(scale_from, allow_pickle=True)
-        pk2, _ = _pk_from(D, flags, z2, mimo)
+        parts2 = _parts(z2, mimo)
+        if flags.get('ctrl_form') == 'normal' and not (form == 'record' and 'ctrl_form' in z2.files):
+            parts2 = _normal_parts(D, flags, parts2, mimo, ctl.modal_blocks(orders))[0]
+        pk2 = _pk_from(D, flags, parts2, mimo)
         same = (np.array_equal(pk2.free, pk.free) if mimo else
                 (pk2.cmask is None and pk.cmask is None) or np.array_equal(pk2.cmask, pk.cmask))
         if not same or np.shape(pk2.sc) != np.shape(pk.sc):
             raise SystemExit(f"--scale-from {scale_from}: its free mask (gauge / modal cut) differs from the record's")
-        pk.sc = np.array(pk2.sc, float); note = f"scales from {scale_from}"
+        pk.sc = np.array(pk2.sc, float); note = (note + '; ' if note else '') + f"scales from {scale_from}"
     z0 = pk.z0()
     u = pk.unpack(z0)
     arow, nvec, K, xa, xs = parts
@@ -690,6 +739,9 @@ def _args(argv):
     ap.add_argument('--descent-deltas', dest='descent_deltas', default='1e-7,1e-6,1e-5,1e-4,1e-3')
     ap.add_argument('--descent-ts', dest='descent_ts', default='1')
     ap.add_argument('--scale-from', dest='scale_from', default=None)
+    ap.add_argument('--form', choices=['normal', 'record'], default='normal',
+                    help="normal (default): a modal record in the normal form first (controller.normal_convert: the same "
+                         "K(s), no similarity gauge in z; 20261010s); record: the record's own representative")
     ap.add_argument('--wpad', type=float, default=3.0, help="the line's band beyond whi (the run's --wpad)")
     ap.add_argument('--margin', type=float, default=0.05, help="the ports' margin (the run's --bfs-margin)")
     ap.add_argument('--progress', default=PROGRESS,
@@ -770,7 +822,7 @@ def main(argv=None):
     eps_all = sorted(set(eps_list + [CERT_RTOL]))
     deltas = [float(v) for v in a.deltas.split(',')]
     trust = a.trust if a.trust is not None else (float(z['sqp_trust']) if 'sqp_trust' in z.files else None)
-    D, flags, pk, z0, rt_err, struct, sc_note = build(z, J, a.ops, a.margin, a.scale_from)
+    D, flags, pk, z0, rt_err, struct, sc_note = build(z, J, a.ops, a.margin, a.scale_from, a.form)
     NZ = len(z0)
     names = coord_names(pk, flags, NZ); groups = groups_of(names)
     stop_txt, stop_rec = stop_reason(J)
@@ -778,10 +830,24 @@ def main(argv=None):
                eps_s=eps_s, whi=whi, line_band=[0.0, whi + a.wpad], eps_max=eps_max, trust=trust, stop=stop_rec,
                args=vars(a), scale_note=sc_note, coord_names=names)
     P(f"record {a.record}")
-    P(f"  {struct}, gamma {gam:.6f}, NZ {NZ} (modal {flags['ctrl_modal']}), band [0, {whi:.4f}], line [0, {whi + a.wpad:.4f}], "
+    P(f"  {struct}, gamma {gam:.6f}, NZ {NZ} (modal {flags['ctrl_modal']}{', normal form' if getattr(pk, 'ctrl_form', None) == 'normal' else ''}), band [0, {whi:.4f}], line [0, {whi + a.wpad:.4f}], "
       f"eps_s {eps_s:g}, margin {a.margin:g}, sqp_trust {trust}; packer round trip {rt_err:.1e}"
       + (f"; {sc_note}" if sc_note else '') + f"; stop: {stop_txt}")
     P(f"  groups: " + ', '.join(f"{k} {len(v)}" for k, v in groups))
+    if getattr(pk, 'modal', None):
+        # blocks sharing a root are not identifiable from K(s) (20261010s, the literature refresh's caution 2):
+        # each shared root is a flat direction of any block-diagonal form, so the effective dimension is at most
+        # NZ minus their number (exactly that for SISO loops)
+        ar_ = [np.real(np.asarray(x_)) for x_ in pk.unpack(z0)[0][:3]]
+        Ac_ = ctl.A_of(*ar_).real
+        rts_ = [np.linalg.eigvals(Ac_[np.ix_(list(b_), list(b_))]) for b_ in pk.modal]
+        shared_ = sum(int(abs(p_ - q_) <= 1e-6 * max(1.0, abs(p_)))
+                      for k_ in range(len(rts_)) for l_ in range(k_ + 1, len(rts_)) for p_ in rts_[k_] for q_ in rts_[l_])
+        xr_, kl_ = ctl.cross_block_roots(pk.modal, *ar_)
+        out['cross_block'] = dict(min_distance=float(xr_), blocks=(list(kl_) if kl_ else None), shared_roots=int(shared_),
+                                  effective_dim_max=int(NZ - shared_))
+        P(f"  cross-block roots: closest {xr_:.2e} apart" + (f" (blocks {kl_[0]}, {kl_[1]})" if kl_ else '')
+          + f"; {shared_} shared within 1e-6 (relative): the effective dimension is at most NZ - {shared_} = {NZ - shared_}")
     # ---------------------------------------------------------------- the oracle
     lattice.LU_CAP = int(a.lu_cap)
     fullpar.start(1, D=D)
@@ -1392,7 +1458,8 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
         """The compensator's abscissa and the modal rows' max v - L at zz (exact, r x r)."""
         ar_ = pk.unpack(zz)[0]
         al_ = float(np.max(np.linalg.eigvals(ctl.A_of(*ar_)).real))
-        mv_ = max((v_ - Lc for v_, _ in ctl.modal_rows(pk.modal, *[np.asarray(x_) for x_ in ar_[:3]], Lc)), default=np.nan) \
+        mv_ = max((v_ - Lc for v_, _ in ctl.modal_rows(pk.modal, *[np.asarray(x_) for x_ in ar_[:3]], Lc,
+                                                          scales=getattr(pk, 'modal_s', None))), default=np.nan) \
             if getattr(pk, 'modal', None) else np.nan
         return al_, mv_
 
@@ -1400,7 +1467,7 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
         """The modal rows at zz as h <= 0 and their packed gradients (sqp_inner _modal_h, the Evaluator's rows)."""
         ar_ = pk.unpack(zz)[0]; rr_ = len(ar_[0])
         H_, G_ = [], []
-        for v_, gd_ in ctl.modal_rows(pk.modal, ar_[0], ar_[1], ar_[2], Lc):
+        for v_, gd_ in ctl.modal_rows(pk.modal, ar_[0], ar_[1], ar_[2], Lc, scales=getattr(pk, 'modal_s', None)):
             gc = pk.zero_grad() if (getattr(pk, 'mimo', False) or getattr(pk, 'vec_pos', False)) \
                 else dict(n=np.zeros(rr_, complex), K=0j, xa=0.0, xs=0.0)
             gd = np.zeros(rr_, complex); ge = np.zeros(max(rr_ - 1, 0), complex); gf = ge.copy()
@@ -1571,6 +1638,12 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
                     for k_ in ('m', 'p', 'struct', 'loop_orders'):
                         if k_ in z.files:
                             des[k_] = z[k_]
+                    if getattr(pk, 'ctrl_form', None) == 'normal':
+                        # the normal form's keys (run_case_epi.ctrl_form_keys): a resume re-centres om
+                        des.update(ctrl_form=np.array('normal'),
+                                   ctrl_om=np.array([np.nan if s_ is None else s_ for s_ in pk.modal_s], float),
+                                   ctrl_pivots=np.array([-1 if q_ is None else int(q_)
+                                                         for q_ in (flags.get('ctrl_pivots') or [None] * len(pk.modal))], int))
                     cert['design'] = dict(z=np.asarray(zc_, float), **{k_: v_ for k_, v_ in des.items() if k_ not in ('struct',)})
                     if a.json:
                         fn_ = os.path.splitext(a.json)[0] + '_certified.npz'
@@ -1709,14 +1782,18 @@ def _run(a, P, out, tm, z, J, gam, eps_s, mg, Lc, whi, eps_list, eps_max, eps_al
 
 def modal_frozen(ctl, pk, z, zref, L):
     """The modal rows at z with each 2 x 2 block's v2 scale s = |a - L| + |g - L| frozen at zref, as
-    controller.modal_rows' gradient has it (exact where v2 is active, det = 0): the rows' FD reference."""
+    controller.modal_rows' gradient has it (exact where v2 is active, det = 0): the rows' FD reference.  The
+    normal form's s is the constant om (pk.modal_s): nothing to freeze."""
     ar = pk.unpack(z)[0]; ar0 = pk.unpack(zref)[0]
-    v = np.array([v_ for v_, _ in ctl.modal_rows(pk.modal, *[np.asarray(x_) for x_ in ar[:3]], L)])
+    ms = getattr(pk, 'modal_s', None)
+    v = np.array([v_ for v_, _ in ctl.modal_rows(pk.modal, *[np.asarray(x_) for x_ in ar[:3]], L, scales=ms)])
     d, d0 = np.real(np.asarray(ar[0])), np.real(np.asarray(ar0[0]))
     k = 0
-    for bl in pk.modal:
+    for q, bl in enumerate(pk.modal):
         if len(bl) == 1:
             k += 1; continue
+        if ms is not None and ms[q] is not None:
+            k += 2; continue
         i, j = bl
         s_, s0 = (max(abs(x_[i] - L) + abs(x_[j] - L), 1e-3) for x_ in (d, d0))
         v[k + 1] = L - (L - v[k + 1]) * s_ / s0              # det(M - L I) / s0

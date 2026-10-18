@@ -49,6 +49,7 @@ class Packer:
         # MODAL compensator (flags['ctrl_modal'], 20261010e; controller.modal_*):
         # e = f = 0 between the 2 x 2 blocks, those entries out of z
         self.modal = self.cmask = None
+        self.ctrl_form = self.modal_s = self.ties = None
         if flags.get('ctrl_modal'):
             import controller as _ctl
             r_ = len(self.d0)
@@ -58,6 +59,18 @@ class Packer:
                 if self.e0[i_] != 0 or self.f0[i_] != 0:
                     raise ValueError('ctrl_modal: the start compensator is not in modal 2 x 2 blocks')
                 self.cmask[r_ + i_] = False; self.cmask[2 * r_ - 1 + i_] = False
+            if flags.get('ctrl_form') == 'normal':
+                # the NORMAL FORM (controller.normal_*, 20261010s): inside each 2 x 2
+                # block f_i follows d_i and e_i follows d_j -- tied, out of z
+                if not _ctl.normal_check(self.modal, self.d0, self.e0, self.f0) <= _ctl.NORMAL_TIE_TOL:
+                    raise ValueError('ctrl_form normal: the start compensator is not in the normal form '
+                                     '(controller.normal_convert)')
+                o_ = dict(d=0, e=r_, f=2 * r_ - 1)
+                self.ties = [(o_[dk] + di, o_[sk] + si) for (dk, di), (sk, si) in _ctl.normal_ties(self.modal)]
+                for dst_, _ in self.ties:
+                    self.cmask[dst_] = False
+                self.ctrl_form = 'normal'
+                self.modal_s = _ctl.normal_scales(self.modal, self.d0, self.e0)
             self.th0 = th
         # backward-facing step (BFS.md 2): a REAL controller (only the real
         # parts are design variables) and vector placements (D.pos_dims: the
@@ -114,6 +127,8 @@ class Packer:
                     th[sel] = z[i:i+kk] * self.sc[:k][sel] + 0j; i += kk
                 else:
                     th[sel] = (z[i:i+kk] + 1j*z[i+kk:i+2*kk]) * self.sc[:k][sel]; i += 2*kk
+                for dst_, src_ in (self.ties or ()):
+                    th[dst_] = th[src_] + (self.th0[dst_] - self.th0[src_])
             elif self.real_ctrl:
                 th = z[i:i+k] * self.sc[:k] + 0j; i += k
             else:
@@ -192,6 +207,8 @@ class Packer:
             k = self.nth if m == 'full' else self.nth - 1
             if self.cmask is not None:
                 sel = self.cmask[:k]
+                for dst_, src_ in (self.ties or ()):
+                    gc[src_] += gc[dst_]                    # the tied entry's share (normal form)
                 out += [np.real(gc[:k][sel])*self.sc[:k][sel]] + ([] if self.real_ctrl else [-np.imag(gc[:k][sel])*self.sc[:k][sel]])
             else:
                 out += [np.real(gc[:k])*self.sc[:k]] + ([] if self.real_ctrl else [-np.imag(gc[:k])*self.sc[:k]])
@@ -314,7 +331,12 @@ class PackerMIMO:
     m + p > 2 max(|theta0|, 0.1 x the median nonzero magnitude of its group, at
     least 1e-3 x the group's max), so a weak loop and the cross couplings step
     with their group.  Central: one entry per row of B_c fixed (the similarity
-    gauge; the SISO gauge at m = p = 1)."""
+    gauge; the SISO gauge at m = p = 1).  Normal form (flags['ctrl_form'] =
+    'normal', with ctrl_modal; controller.normal_*): f_i and e_i of each 2 x 2
+    block tied to d_i and d_j (self.ties: th[dst] = th[src] + th0[dst] -
+    th0[src], the gradient folded back), and, central, both entries of the
+    block's pivot input column (flags['ctrl_pivots']) fixed in place of one per
+    row: no similarity gauge is left (self.modal_s: om per block)."""
 
     def __init__(self, D, flags, arow0, nvec0, K0, xa0, xs0, va0, vs0):
         self.D, self.f = D, flags
@@ -344,6 +366,7 @@ class PackerMIMO:
         mode = flags.get('ctrl_mode', 'full')
         free = np.zeros(len(self.th0), bool)
         self.modal = None
+        self.ctrl_form = self.modal_s = self.ties = None
         if flags['K']:
             if mode in ('full', 'sp'):
                 free[:] = True
@@ -377,6 +400,37 @@ class PackerMIMO:
                             raise ValueError('ctrl_modal: the start compensator is not in modal 2 x 2 blocks')
                         free[self.off['e'][0] + i_] = False; free[self.off['f'][0] + i_] = False
                     self.modal = _ctl.modal_blocks(orders_)
+                    if flags.get('ctrl_form') == 'normal':
+                        # the NORMAL FORM (controller.normal_*, 20261010s): inside each 2 x 2
+                        # block f_i follows d_i and e_i follows d_j (tied, out of z); central:
+                        # the block's pivot input column fixed (beta [1, 1]) in place of one
+                        # entry per row -- together the block's whole similarity gauge
+                        d_, e_, f_ = (self.th0[slice(*self.off[k_])] for k_ in ('d', 'e', 'f'))
+                        if not _ctl.normal_check(self.modal, d_, e_, f_) <= _ctl.NORMAL_TIE_TOL:
+                            raise ValueError('ctrl_form normal: the start compensator is not in the normal form '
+                                             '(controller.normal_convert)')
+                        self.ties = [(self.off[dk][0] + di, self.off[sk][0] + si)
+                                     for (dk, di), (sk, si) in _ctl.normal_ties(self.modal)]
+                        for dst_, _ in self.ties:
+                            free[dst_] = False
+                        if flags.get('struct', 'central') != 'decentral':
+                            piv_ = list(flags.get('ctrl_pivots') or [None] * len(self.modal))
+                            for k_, bl_ in enumerate(self.modal):
+                                if len(bl_) != 2:
+                                    continue
+                                q_ = piv_[k_] if k_ < len(piv_) else None
+                                if q_ is None:
+                                    # no pivot given: the column where the block's two entries are equal
+                                    eq_ = [c_ for c_ in range(p) if Bc0[bl_[0], c_] == Bc0[bl_[1], c_] != 0]
+                                    if len(eq_) != 1:
+                                        raise ValueError(f'ctrl_form normal: block {bl_}: no unique pivot column of B_c')
+                                    q_ = eq_[0]
+                                ob_ = self.off['Bc'][0]
+                                for i_ in bl_:
+                                    free[ob_ + i_ * p:ob_ + (i_ + 1) * p] = True
+                                    free[ob_ + i_ * p + int(q_)] = False
+                        self.ctrl_form = 'normal'
+                        self.modal_s = _ctl.normal_scales(self.modal, d_, e_)
                 if mode == 'sp':
                     free[slice(*self.off['K'])] = False
             elif mode in ('gain',):
@@ -458,6 +512,8 @@ class PackerMIMO:
                 th[self.free] = z[i:i + k] * sc + 0j; i += k
             else:
                 th[self.free] = (z[i:i + k] + 1j * z[i + k:i + 2 * k]) * sc; i += 2 * k
+            for dst_, src_ in (self.ties or ()):
+                th[dst_] = th[src_] + (self.th0[dst_] - self.th0[src_])
         g = lambda nm_: th[slice(*self.off[nm_])]
         arow = (g('d'), g('e'), g('f'), g('Bc').reshape(r, p))
         nvec = g('n').reshape(m, r); K = g('K').reshape(m, p)
@@ -508,6 +564,8 @@ class PackerMIMO:
         if self.nth:
             gz = self.zero_grad()
             gc = np.concatenate([np.asarray(g.get(k_, gz[k_]), complex).ravel() for k_ in ('d', 'e', 'f', 'Bc', 'n', 'K')])
+            for dst_, src_ in (self.ties or ()):
+                gc[src_] += gc[dst_]                        # the tied entry's share (normal form)
             gc = gc[self.free]; sc = self.sc[self.free]
             out += [np.real(gc) * sc] + ([] if self.real_ctrl else [-np.imag(gc) * sc])
         if self.f['B']:

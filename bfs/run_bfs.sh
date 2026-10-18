@@ -34,8 +34,10 @@
 #             measurements); default 1, beside the next SQP iteration (--lattice-async on, since 2026-10-16)
 #   CROSS     with ORACLE=lattice: cut = trials across the closed loop's line halved (--lattice-cross cut;
 #             default merit)
-#   MODAL     0 = the tridiagonal compensator (--ctrl-modal off: a run made before 20261010e); default 1,
-#             the modal 2 x 2 blocks
+#   MODAL     0 = the tridiagonal compensator (--ctrl-modal off: a run made before 20261010e); 1 = the
+#             modal 2 x 2 blocks in their general form (--ctrl-modal on: 20261010e-r, their similarity
+#             gauge kept; for comparisons); default the blocks in the normal form (--ctrl-modal normal,
+#             20261010s: no gauge, the stability rows linear; a modal record converts exactly)
 #   RETIRE    with ORACLE=lattice: FRAC:ROUNDS, members of Omega below FRAC x gamma for ROUNDS
 #             rounds retire (--omega-retire, e.g. 0.95:3); unset = Omega only grows
 #
@@ -135,8 +137,15 @@ if [ "${M:-1}" != 1 ] || [ "${P:-1}" != 1 ]; then
     MIMOF=(--n-act "$M" --n-sens "$P" --ctrl-struct "${STRUCT:-central}" --mimo-start "$init")
 fi
 # MODAL=0: the tridiagonal compensator (older records, a resume of a run made
-# before 20261010e); default the modal 2 x 2 blocks (--ctrl-modal, BFS.md 5)
-MODF=(--ctrl-modal "$([ "${MODAL:-1}" = 0 ] && echo off || echo on)")
+# before 20261010e); MODAL=1: the modal 2 x 2 blocks in their general form
+# (20261010e-r); default the blocks in the normal form (--ctrl-modal normal,
+# controller.normal_*, 20261010s)
+case "${MODAL:-}" in
+    0) MODF=(--ctrl-modal off) ;;
+    1) MODF=(--ctrl-modal on) ;;
+    ''|normal) MODF=(--ctrl-modal normal) ;;
+    *) echo "run_bfs.sh: MODAL=${MODAL}: 0 (tridiagonal), 1 (general modal blocks) or unset (the normal form)"; exit 2 ;;
+esac
 exec ${LAUNCH} ${PY:-python} -u run_case_epi.py --plant bfs --ops "${OPS:-bfs/data/ops_fx.npz}" --lu-order mumps \
     --init "$init" --cold --case K+B+C --r "${R:-5}" --eps 0.05 --start 0 --nproc 1 --cert_nseg "${CERT_NSEG:-16}" --cert-split "${CERT_SPLIT:-23}" --wlo 0 --whi 10 \
     --outer "${OUTER:-40}" --deadline "${DEADLINE:-0}" --wall "${WALL:-54000}" "${STAB[@]}" \

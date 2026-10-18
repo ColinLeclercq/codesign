@@ -2062,7 +2062,56 @@ def design_arrays(pk, z, mimo, loop_orders=None):
     if mimo:
         out.update(Bc=np.asarray(aa[3]), loop_orders=np.asarray(loop_orders))
     out.update({k_: np.asarray(v_) for k_, v_ in (('va', va), ('vs', vs)) if v_ is not None})
+    out.update(ctrl_form_keys(pk))
     return out
+
+
+def ctrl_form_keys(pk):
+    """The normal form's record keys (20261010s; {} for the other forms):
+    ctrl_form 'normal', ctrl_om (the packer's om per block, nan for a 1 x 1),
+    ctrl_pivots (the input column fixed to beta [1, 1] per block, -1 for a
+    1 x 1).  A resume re-centres om and keeps the pivots (normal_convert)."""
+    if getattr(pk, 'ctrl_form', None) != 'normal':
+        return {}
+    piv = list(pk.f.get('ctrl_pivots') or [None] * len(pk.modal))
+    return dict(ctrl_form=np.array('normal'),
+                ctrl_om=np.array([np.nan if s_ is None else float(s_) for s_ in pk.modal_s], float),
+                ctrl_pivots=np.array([-1 if q_ is None else int(q_) for q_ in piv], int))
+
+
+def ctrl_form_line(pk, z):
+    """One line on the modal compensator's representative at z (20261010s):
+    the largest det M / om^2 mismatch (either way; normal form: om is fixed for
+    the job), the largest block eigenvector condition number, ||A_c||_2 against
+    max |lambda_c| (the winding count's tail needs W_T > ||A_c||_2), the closest
+    roots of two different blocks (a shared root is a flat direction of any
+    block-diagonal form) and, central, the pivot columns' controllability
+    score against the best column's (the pivot chart is local)."""
+    aa = pk.unpack(np.asarray(z, float))[0]
+    d_, e_, f_ = (np.real(np.asarray(x_)) for x_ in aa[:3])
+    cv = max(ctl.block_cond(pk.modal, d_, e_, f_), default=1.0)
+    Ac = ctl.A_of(d_, e_, f_).real
+    lam = np.linalg.eigvals(Ac)
+    xr, kl = ctl.cross_block_roots(pk.modal, d_, e_, f_)
+    common = (f"||A_c||_2 {np.linalg.norm(Ac, 2):.4g} (max |lambda| {np.abs(lam).max():.4g}), cross-block roots "
+              f"{xr:.2e} apart" + (f" (blocks {kl[0]}, {kl[1]})" if kl else ''))
+    if getattr(pk, 'ctrl_form', None) != 'normal':
+        return f"modal blocks (general form): block cond(V) max {cv:.3g}, {common}"
+    mis = 1.0
+    for bl_, om_ in zip(pk.modal, pk.modal_s):
+        if om_ is None:
+            continue
+        i_, j_ = bl_
+        q_ = abs(d_[i_] * d_[j_] - e_[i_] * f_[i_]) / om_ ** 2
+        mis = max(mis, q_, 1.0 / q_ if q_ > 0 else np.inf)
+    piv = ''
+    if getattr(pk, 'mimo', False) and pk.f.get('struct', 'central') != 'decentral':
+        pr = ctl.pivot_report(pk.modal, d_, e_, f_, aa[3], pk.f.get('ctrl_pivots'))
+        if pr:
+            q_ = min(pr, key=lambda t_: t_[0] / max(t_[1], 1e-300))
+            piv = f", pivot score min {q_[0]:.3g} (best column {q_[1]:.3g})"
+    return (f"normal form: det/om^2 mismatch max {mis:.3g} (om fixed since the job start; a resume re-centres it), "
+            f"block cond(V) max {cv:.3g}, ties {ctl.normal_check(pk.modal, d_, e_, f_):.1e}, {common}{piv}")
 
 
 def write_final_design(base, final, record, veto, arrays_of, extra=None, jobid=None, log=print):
@@ -2224,6 +2273,9 @@ def _mimo_setup(a, D, flags, tag):
     if orders is None:
         orders = [R // m] * m
     flags.update(m=m, p=p, struct=a.ctrl_struct, loop_orders=orders)
+    if 'ctrl_pivots' in z.files and flags.get('ctrl_form') == 'normal':
+        # the record's pivot input columns (normal form, 20261010s): kept by the conversion unless far worse
+        flags['ctrl_pivots'] = [None if int(q_) < 0 else int(q_) for q_ in np.atleast_1d(z['ctrl_pivots'])]
     if a.field_atoms:
         for key, fk, v0_, cnt in (('a', 'FB', va0, m), ('s', 'FC', vs0, p)):
             if not flags.get(fk):
@@ -2367,9 +2419,13 @@ def main():
     ap.add_argument('--lattice-sweep', dest='lattice_sweep', type=int, default=5,
                     help='--oracle lattice: the certificate\'s reference sweep on the lattice level 2^-N of the band '
                          '(the in-solve missed peaks are the level-set certificate, lattice.LatticeOracle.level)')
-    ap.add_argument('--ctrl-modal', dest='ctrl_modal', choices=['on', 'off'], default='off',
+    ap.add_argument('--ctrl-modal', dest='ctrl_modal', choices=['on', 'off', 'normal'], default='off',
                     help='the compensator in real 2 x 2 diagonal blocks (controller.modal_*), its stability as two '
                          'smooth exact rows per block (trace, determinant) -- merging poles stay smooth (BFS.md 5); '
+                         'normal: those blocks in the normal form (controller.normal_*, 20261010s: f_i = d_i, '
+                         'e_i = d_j + om, the pivot input column beta [1, 1]) -- no similarity gauge, the two rows '
+                         'linear in z; the start converted by an exact similarity, om re-centred at every job start; '
+                         'on: the general blocks of 20261010e-r (their 2-dimensional gauge per block); '
                          'off: the tridiagonal form (GL, older records)')
     ap.add_argument('--sqp-debug-ls', dest='sqp_debug_ls', choices=['on', 'off'], default='off',
                     help='print every line-search trial (merit components, the max row against its model) '
@@ -3208,7 +3264,13 @@ def main():
             return csp.stability_gate(D.A, D.M, b_, c_, ctl.A_of(*arow_), ctl.Bc_of(arow_, D.r, D.mc), nvec_, K_, **kw)
         eps_ = float(kw.get('eps', 1e-3)); lim_ = max(-eps_, float(kw.get('ctrl_max', 0.0)))
         pol_ = np.linalg.eigvals(np.asarray(ctl.A_of(*arow_), complex))
-        if pol_.size and float(np.max(pol_.real)) > lim_ + 1e-8:
+        if getattr(pk, 'ctrl_form', None) == 'normal':
+            # the normal form: each block's abscissa from its trace and discriminant
+            # (exact at a double root on the line; controller.block_abscissa, 20261010s)
+            _ba = ctl.block_abscissa(pk.modal, *arow_[:3])
+            if _ba and max(_ba) > lim_ + 1e-8:
+                return False, f"controller pole Re={max(_ba):+.6g} > allowance {lim_:+.6g} (block {int(np.argmax(_ba))})", 0
+        elif pol_.size and float(np.max(pol_.real)) > lim_ + 1e-8:
             j_ = int(np.argmax(pol_.real))
             return False, f"controller pole Re={pol_[j_].real:+.6g} > allowance {lim_:+.6g}", 0
         al_, lam_, _, _, _, clr_ = D.alpha_certified(arow_, nvec_, K_, b_, c_, eps=eps_)
@@ -3282,7 +3344,8 @@ def main():
         # order-r controller, the actuator centre (x, y) and the sensor window
         # start x_s; no seed catalogue, no rescaling
         flags['real_ctrl'] = True
-        flags['ctrl_modal'] = (a.ctrl_modal == 'on')
+        flags['ctrl_modal'] = (a.ctrl_modal in ('on', 'normal'))
+        flags['ctrl_form'] = 'normal' if a.ctrl_modal == 'normal' else None
         if MIMO:
             # MIMO (BFS.md 5): the start record (--mimo-start, bfs/hifoo_init.py --m --p),
             # read once here so the BFS start checks below see its m x p design
@@ -3625,6 +3688,44 @@ def main():
             print(f"modal compensator: the zero controller's poles in 2 x 2 blocks (loops {_ord}); "
                   f"abscissa {float(np.max(np.linalg.eigvals(_ctl_m.A_of(*_mf)).real)):+.6f}", flush=True)
             arow0 = tuple(_mf) + tuple(arow0[3:])
+        if flags.get('ctrl_form') == 'normal':
+            # THE NORMAL FORM (--ctrl-modal normal; 20261010s, controller.normal_*): the
+            # blocks' similarity gauge removed by an exact similarity per block (B_c's
+            # rows and C_c's columns follow), om re-centred at sqrt(det M) -- at every
+            # job start, so a resume rebalances the representative (the same K(s)).
+            # Not mid-job: the packed z of the round's best, the gate's path, the
+            # checkpoints and the lattice oracle's packer would all have to follow
+            _blk = _ctl_m.modal_blocks(_ord)
+            _r = len(np.atleast_1d(arow0[0]))
+            if MIMO:
+                _B0 = np.asarray(arow0[3], complex).reshape(_r, -1); _C0 = np.asarray(nvec0, complex).reshape(-1, _r)
+            else:
+                _B0 = np.full((_r, 1), D.mc, complex); _C0 = np.asarray(nvec0, complex).reshape(1, _r)
+            _was = 'normal form' if _ctl_m.normal_check(_blk, *arow0[:3]) <= _ctl_m.NORMAL_TIE_TOL else 'modal blocks'
+            _cv0 = max(_ctl_m.block_cond(_blk, *arow0[:3]))
+            try:
+                _d, _e, _f, _B, _C, _ninfo = _ctl_m.normal_convert(
+                    arow0[0], arow0[1], arow0[2], _B0, _C0, _blk, fixed_b=(not MIMO or flags.get('struct') == 'decentral'),
+                    pivots=flags.get('ctrl_pivots'))
+            except ValueError as _ex:
+                raise SystemExit(f"--ctrl-modal normal: {_ex}")
+            _wg = np.concatenate([[0.0], np.logspace(-3, 4, 71)])
+            _K0s = _ctl_m.tf_samples(arow0[0], arow0[1], arow0[2], _B0, _C0, K0, _wg)
+            _dK = float(np.abs(_ctl_m.tf_samples(_d, _e, _f, _B, _C, K0, _wg) - _K0s).max())
+            _tf_err = _dK / float(np.abs(_K0s).max()) if np.any(_K0s) else _dK
+            _om = [x_ for x_ in _ninfo['om'] if x_ is not None]
+            print(f"normal form (--ctrl-modal normal): the start's {_was} {'re-centred' if _was == 'normal form' else 'converted, om centred'} "
+                  f"({len(_om)} blocks, om {min(_om, default=np.nan):.4g} .. {max(_om, default=np.nan):.4g}, "
+                  f"cond [b, M b] <= {max([c_ for c_ in _ninfo['condQ'] if c_ is not None], default=np.nan):.3g}"
+                  + (f", pivots {_ninfo['pivots']}" if MIMO and flags.get('struct') != 'decentral' else '')
+                  + f"); block cond(V) max {_cv0:.3g} -> {max(_ctl_m.block_cond(_blk, _d, _e, _f)):.3g}; "
+                  f"K(jw) {'relative' if np.any(_K0s) else 'absolute'} change {_tf_err:.1e} on {len(_wg)} frequencies",
+                  flush=True)
+            if not _tf_err <= 1e-8:
+                raise SystemExit(f"--ctrl-modal normal: the conversion changed K(jw) by {_tf_err:.2e} (rel): refused")
+            arow0 = (_d.astype(complex), _e.astype(complex), _f.astype(complex)) + ((_B.astype(complex),) if MIMO else ())
+            nvec0 = _C.astype(complex).reshape(np.shape(nvec0))
+            flags['ctrl_pivots'] = list(_ninfo['pivots'])
     pk_args = (arow0, nvec0, K0, xa0, xs0, va0, vs0)
     if a.field_basis != 'none' and (flags.get('FB') or flags.get('FC')):
         # FREE FIELDS ON A TRUNCATED BASIS (STAGE5 6): va = Phi_a beta_a,
@@ -4474,6 +4575,7 @@ def main():
             np.savez(tag + '_ckpt.npz', d=aa_w[0], e=aa_w[1], f=aa_w[2],
                      nvec=nn_w, K=KK_w, xa=xa_w, xs=xs_w,
                      **(dict(Bc=np.asarray(aa_w[3]), loop_orders=np.array(flags['loop_orders'])) if MIMO else {}),
+                     **ctrl_form_keys(pk),
                      atoms_a_p=(_apa if _apa is not None else np.zeros(0)),
                      atoms_s_p=(_aps if _aps is not None else np.zeros(0)),
                      **_atoms_record_keys(D, _apa, _aps),
@@ -4529,6 +4631,10 @@ def main():
                       f"--deadline {a.deadline / 3600:.2f} h", flush=True)
                 _deadline_stop = True
                 break
+        if BFS and getattr(pk, 'modal', None) is not None and flags.get('K'):
+            # the modal compensator's representative this round (20261010s): the drift
+            # the normal form removes, measured
+            print(f"  [ctrl] round {it}: {ctrl_form_line(pk, zbest)}", flush=True)
         # ALWAYS restart the inner solve from the best CERTIFIED point.  The
         # inner problem only sees Omega, so its optimum can sit where an
         # unmodelled frequency is huge; accepting that point and continuing from
@@ -6365,6 +6471,7 @@ def main():
              psi_a=pa, psi_s=ps, gamma=gam, alpha=al, **(_pos_start if BFS else {}),
              **(dict(Bc=np.asarray(arow[3]), loop_orders=np.array(flags['loop_orders']), m=int(flags['m']),
                      p=int(flags['p']), struct=flags['struct']) if MIMO else {}),
+             **ctrl_form_keys(pk),
              alpha_dense=(al_d if al_d is not None else np.nan),
              n_active=nact,
              omega_grid=ws, gain=gain, gain_model=_gain_model, active_freqs=np.array(sorted(Omega)),
