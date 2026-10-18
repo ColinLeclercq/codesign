@@ -1557,6 +1557,10 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
     _D_start = Delta
     _D_ref = TRUST_REF_REL * max(float(np.linalg.norm(z)), 1.0)   # TRUST_RULE 'ratio': the exit's reference radius
     _trust_n = [0] * len(_TRUST_LEGS)   # TRUST_RULE 'ratio': how often each leg fired (_TRUST_LEGS)
+    _ref_bad = [False]                  # TRUST_RULE 'ratio': the model failed at the exit's reference radius since a
+                                        # full step there last held (a QP at >= _D_ref rejected, or accepted at alpha < 1):
+                                        # the exit is then not refused again (the review of 20261010s: a refusal put the
+                                        # radius back to _D_ref after every rejected search there, a loop to code 4 / 6)
     _trust_why = [0, 0, 0, 0]           # ... the failed trials that set a shrink: sigma rows, a stability row, an eigenvalue
                                         # without a row (a piece the QP did not contain), the compensator's line
     _trust_box = [0, 0, np.inf, 0.0]    # ... steps on the box, inside it (H or the rows limit them), min / max lambda_max(H)
@@ -1960,7 +1964,7 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                   sub_status_log=sub_status_log, stab_cross=stab_cross, cands=cands, added=added, n_soc=n_soc,
                   n_ctrl_cut=n_ctrl_cut, n_stab_cut=n_stab_cut, n_stab_unseen=n_stab_unseen, _last_adm=_last_adm,
                   _n_out=_n_out, n_back=n_back, _QP_DUMPED=_QP_DUMPED,   # (the QP dumps' count: theirs, not the look-ahead's)
-                  _trust_n=_trust_n, _trust_why=_trust_why, _trust_box=_trust_box, _QP_EQ=_QP_EQ)
+                  _trust_n=_trust_n, _trust_why=_trust_why, _trust_box=_trust_box, _QP_EQ=_QP_EQ, _ref_bad=_ref_bad)
         if _trace is not None:
             L_['_trace'] = _trace
         return L_
@@ -2207,6 +2211,8 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                     # Not gated on an eigenvalue without a row (the partial leg is): the
                     # iterate stays, its rows too, and the same QP would fail the same way
                     _D0 = Delta
+                    if _D0 >= _D_ref:
+                        _ref_bad[0] = True
                     Delta = min(0.5 * Delta, 4.0 * alpha * _tnorm(d))
                     _trust_note('rejected', _why, _D0, Delta, None, _tnorm(d), H)
                 else:
@@ -2248,6 +2254,8 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                         path_info.append(_pinfo(e, it=int(it), alpha=None, prev_adm=True, backs=0, how='pair entry'))
             if TRUST_RULE == 'ratio':
                 # (before the refine: the level set's look-ahead state at this C carries it)
+                if _D_qp >= _D_ref:
+                    _ref_bad[0] = alpha < 1.0                 # the model held a full step at the reference radius, or not
                 Delta, _leg, _rho = _trust_ratio(_D_qp, alpha, _tnorm(d), _ared, pred, t, _why)
                 _trust_note(_leg, _why, _D_qp, Delta, _rho, _tnorm(d), _H_qp)
             elif (PARTIAL_SHRINK or (PAIR_BALL and ev_fn.pair_mode)) and alpha < 1.0:
@@ -2382,13 +2390,15 @@ def _solve_epigraph_sqp(D, pk, flags, z0, Omega, t0, eps, maxit=25, ctrl_max=0.0
                                     disp=((z - z_start, float(max_disp)) if max_disp is not None else None),
                                     pen=nu / 100.0, relax=lattice is not None)
                 _pr = (merit(e, t) - (t + float(_sr['dt']))) if _sr is not None else None
-            _refuse = _pr is not None and _pr > pred_rel * max(abs(t), 1.0)
+            _refuse = _pr is not None and _pr > pred_rel * max(abs(t), 1.0) and not _ref_bad[0]
             if verbose:
                 print(f"    sqp: exit test (pred): QP pred {pred:.3e} at D {Delta:.2e}; at the reference radius "
                       f"{_D_ref:.2e}: " + (f"pred {_pr:.3e}" if _pr is not None else
                                            ('(not needed: D >= it)' if Delta >= _D_ref else '(its QP failed)'))
                       + f" against {pred_rel * max(abs(t), 1.0):.3e} -> "
-                      + ('exit REFUSED, the next QP at the reference radius' if _refuse else 'exit'), flush=True)
+                      + ('exit REFUSED, the next QP at the reference radius' if _refuse else
+                         ('exit (the model already failed at the reference radius)' if _ref_bad[0] and _pr is not None
+                          and _pr > pred_rel * max(abs(t), 1.0) else 'exit')), flush=True)
             if _refuse:
                 _pred_small = False
                 _trust_n[_TRUST_LEGS.index('exit_refused')] += 1

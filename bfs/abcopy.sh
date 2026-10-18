@@ -26,6 +26,7 @@ fi
 mkdir -p "$(dirname "$DST")"
 cp -a "$SRC" "$DST.tmp.$$"
 rm -rf "$DST.tmp.$$/.job.lockd"
+rm -f "$DST.tmp.$$"/run/*_start_perturb.json      # a copy is a new arm: its own --start-perturb (A/A), not its parent's
 mv "$DST.tmp.$$" "$DST"
 echo "$(date -Is) copied from $SRC (bfs/abcopy.sh)" >> "$DST/code_versions.txt"
 echo "$DST: a copy of $SRC ($(du -sh "$DST" | cut -f1)); continue it with CONTINUE=1 OUT=${2%/} ... sbatch ..."

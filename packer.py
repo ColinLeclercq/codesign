@@ -59,9 +59,11 @@ class Packer:
                 if self.e0[i_] != 0 or self.f0[i_] != 0:
                     raise ValueError('ctrl_modal: the start compensator is not in modal 2 x 2 blocks')
                 self.cmask[r_ + i_] = False; self.cmask[2 * r_ - 1 + i_] = False
-            if flags.get('ctrl_form') == 'normal':
+            if flags.get('ctrl_form') == 'normal' and flags.get('K'):
                 # the NORMAL FORM (controller.normal_*, 20261010s): inside each 2 x 2
-                # block f_i follows d_i and e_i follows d_j -- tied, out of z
+                # block f_i follows d_i and e_i follows d_j -- tied, out of z (with K
+                # free only, as PackerMIMO and the start conversion: a fixed
+                # compensator keeps its form)
                 if not _ctl.normal_check(self.modal, self.d0, self.e0, self.f0) <= _ctl.NORMAL_TIE_TOL:
                     raise ValueError('ctrl_form normal: the start compensator is not in the normal form '
                                      '(controller.normal_convert)')

@@ -3295,6 +3295,15 @@ def main():
         again), on the band of the abscissa certificate, which contains the
         gate's."""
         if _lat is None:
+            if getattr(pk, 'ctrl_form', None) == 'normal':
+                # the normal form's reading of the compensator line on this branch too (the
+                # lattice branch's below; the review of 20261010s): stability_gate's own pole
+                # test (eigvals) then waived -- its line sweep reads eps alone
+                lim_ = max(-float(kw.get('eps', 1e-3)), float(kw.get('ctrl_max', 0.0)))
+                _ba = ctl.block_abscissa(pk.modal, *arow_[:3])
+                if _ba and max(_ba) > lim_ + 1e-8:
+                    return False, f"controller pole Re={max(_ba):+.6g} > allowance {lim_:+.6g} (block {int(np.argmax(_ba))})", 0
+                kw = dict(kw, ctrl_max=1e9)
             return csp.stability_gate(D.A, D.M, b_, c_, ctl.A_of(*arow_), ctl.Bc_of(arow_, D.r, D.mc), nvec_, K_, **kw)
         eps_ = float(kw.get('eps', 1e-3)); lim_ = max(-eps_, float(kw.get('ctrl_max', 0.0)))
         pol_ = np.linalg.eigvals(np.asarray(ctl.A_of(*arow_), complex))
@@ -3830,15 +3839,29 @@ def main():
     z = pk.z0()
     _sp_rec = None
     _sp_file = tag + '_start_perturb.json'
+    _sp_old = None
     if a.start_perturb and os.path.exists(_sp_file):
-        # once per arm: a later job of the same arm (CONTINUE, the same flags) goes on from
-        # its own checkpoint, already moved -- not moved again at every job boundary
         try:
-            _sp_rec = json.load(open(_sp_file))
+            _sp_old = json.load(open(_sp_file))
         except Exception:
-            _sp_rec = dict(note='unreadable')
+            _sp_old = dict(note='unreadable')
+    if a.start_perturb and isinstance(_sp_old, dict) and _sp_old.get('saved') \
+            and _sp_old.get('outdir') == os.path.realpath(a.outdir):
+        # once per arm: a later job of the same arm (CONTINUE, the same flags) goes on from
+        # its own checkpoint, already moved -- not moved again at every job boundary.  Only
+        # when this arm SAVED a moved design (a checkpoint or record written after the move:
+        # 'saved'), in this directory: a job that died before its first save left the
+        # parent's unmoved checkpoint, and a copy (abcopy.sh drops the json) is a new arm
+        # (the review of 20261010s: either would have run unmoved, labelled moved)
+        _sp_rec = _sp_old
         print(f"start perturbed in an earlier job of this run ({_sp_file}: {_sp_rec}): not again", flush=True)
     elif a.start_perturb:
+        if _sp_old is not None:
+            print(f"start perturbed in an earlier job, but no moved design was saved in this directory "
+                  f"({_sp_file}: {_sp_old}): moved again (the same seed)", flush=True)
+        if _ctrl_borrowed:
+            raise SystemExit("--start-perturb: not with a borrowed controller (the start may be replaced by the default "
+                             "controller's after the move)")
         # THE A/A PAIR (20261010s): one arm from the parent as it is, the other from
         # the parent moved by --start-perturb (1e-12 moved GL paths by 9-20 % mid-run,
         # 0.014-0.7 % at the stop, LESSONS 21); never measured on the BFS
@@ -3851,8 +3874,13 @@ def main():
         import controller as _ctl_p
         _lim_p = max(-a.eps, a.ctrl_max)
         _up, _pp = pk.unpack(_z_un), pk.unpack(z)
-        _alc = [float(np.max(np.linalg.eigvals(_ctl_p.A_of(*u_[0][:3])).real)) if len(np.atleast_1d(u_[0][0])) else -np.inf
-                for u_ in (_up, _pp)]
+        if getattr(pk, 'ctrl_form', None) == 'normal':
+            # the normal form's own reading of the line (controller.block_abscissa, exact at a double root)
+            _alc = [max(_ctl_p.block_abscissa(pk.modal, *[np.real(np.asarray(x_)) for x_ in u_[0][:3]]), default=-np.inf)
+                    for u_ in (_up, _pp)]
+        else:
+            _alc = [float(np.max(np.linalg.eigvals(_ctl_p.A_of(*u_[0][:3])).real)) if len(np.atleast_1d(u_[0][0])) else -np.inf
+                    for u_ in (_up, _pp)]
         if flags.get('K') and _alc[0] <= _lim_p + 1e-8 < _alc[1]:
             raise SystemExit(f"--start-perturb {a.start_perturb:g}: the moved start's compensator abscissa {_alc[1]:+.10f} "
                              f"is right of its line {_lim_p:+g} (unmoved {_alc[0]:+.10f})")
@@ -3873,7 +3901,9 @@ def main():
                                  f"closed loop's line (alpha {_alp:+.10f}, clear {_clp})")
         _sp_rec = dict(eps=float(a.start_perturb), seed=int(a.start_perturb_seed), size=float(np.linalg.norm(_dz)),
                        inf=float(np.max(np.abs(_dz))), n=int(len(z)), job=os.environ.get('SLURM_JOB_ID'),
-                       when=time.strftime('%Y-%m-%dT%H:%M:%S'), code_version=_code_version())
+                       when=time.strftime('%Y-%m-%dT%H:%M:%S'), code_version=_code_version(),
+                       outdir=os.path.realpath(a.outdir), saved=False,
+                       **({'moved_again': True} if _sp_old is not None else {}))
         json.dump(_sp_rec, open(_sp_file, 'w'), indent=1)
         print(f"start perturbed (--start-perturb {a.start_perturb:g}, seed {a.start_perturb_seed}): |dz|_2 "
               f"{_sp_rec['size']:.3e}, |dz|_inf {_sp_rec['inf']:.3e} over {len(z)} packed coordinates; compensator "
@@ -4649,6 +4679,16 @@ def main():
                     tau_rho=float(_tau_rho if _tau_rho is not None else np.nan), tau_streak=int(_tau_streak),
                     code_version=_code_version())
 
+    def _sp_saved():
+        # --start-perturb: a design of the moved lineage is saved (a checkpoint, or the
+        # final record): a later job of this arm goes on from it and does not move again
+        if _sp_rec is not None and not _sp_rec.get('saved'):
+            _sp_rec['saved'] = True
+            try:
+                json.dump(_sp_rec, open(_sp_file, 'w'), indent=1)
+            except Exception as _e:
+                print(f"    {_sp_file}: write failed: {_e!r}", flush=True)
+
     def _write_ckpt(z_, g_, al_, freqs_, note_=None):
         """tag_ckpt.npz/.json for the design z_ (certified g_, abscissa al_) with
         the working set freqs_ and the loop state: written at every acceptance and,
@@ -4674,6 +4714,7 @@ def main():
                                           if getattr(certified_norm, 'last_provisional', False) else 'checkpoint'),
                            code_version=_code_version()),
                       open(tag + '_ckpt.json', 'w'))
+            _sp_saved()
         except Exception as _e:
             print(f"    checkpoint write failed: {_e!r}", flush=True)
     for it in range(a.outer):
@@ -6570,6 +6611,7 @@ def main():
              # omega-growth.md P6): CONTINUE=1 copies this file to the checkpoint, and the
              # resume reads the loop state and the band from it; the code that wrote it
              wlo=float(a.wlo), whi=float(a.whi), **_loop_state())
+    _sp_saved()                                     # (--start-perturb: the moved lineage's record)
     summ = dict(case=a.case, start=a.start, ne=a.ne, n=D.n, NZ=len(z) + 1,
                 gamma=float(gam), alpha=float(al),
                 alpha_dense=(float(al_d) if al_d is not None else None),

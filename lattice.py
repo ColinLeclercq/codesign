@@ -896,8 +896,9 @@ class LatticeOracle:
         self._lvl_last = {}              # level-set centre theta -> its disk's last count of solves
         self._lvl_tier = {}              # level-set centre theta -> its disk's last Arnoldi tier (0: the first or
                                          #   no pencil; 1, -1: the second or none -- paired next time, LEVEL_PAIR)
-        self._pstat = [0, 0, 0.0, 0, 0, 0.0]   # paired disks: pairs, settled by the second tier, the first tier's s
-                                         #   there; settled by the first, of which the second not sent, the second's s
+        self._pstat = [0, 0, 0.0, 0, 0, 0.0, 0]   # paired disks: pairs, settled by the second tier, the first tier's s
+                                         #   there; settled by the first, of which the second not sent, the second's s;
+                                         #   settled by the second with the halves in turn (asynchronous: no saving)
         self._sre_line = set()           # the lines' Re = -eps (a centre there is the line's, else the strip's)
         self._req = {}                   # ledger request kind -> [tasks, work s, critical s, factorisations, their s,
                                          #   longest s, solves]: critical = on each wave's slowest rank (sums to [3])
@@ -1483,6 +1484,12 @@ class LatticeOracle:
         res = o['out'][0]
         res['rank'] = src; res['dt_'] = float(rc[0])
         job.R[q] = res
+        if q[0] == 'levelp' and int(q[3]) == 0:
+            # did the pair's halves overlap (the ledger credits the pair's saving only then;
+            # the review of 20261010s: a second half sent after the first had returned ran in
+            # turn, and was counted as saving the first's seconds)
+            sib_ = ('levelp', q[1], q[2], 1)
+            res['sib_overlap'] = bool(sib_ in job.R or any(v_[1] == sib_ for v_ in job.out.values()))
         if q[0] == 'levelp' and int(q[3]) == 0 and (not res.get('pencil') or res.get('tier') == 0):
             # a paired disk's first tier final (LEVEL_PAIR): its second, if not yet sent, is not needed
             sib = ('levelp', q[1], q[2], 1)
@@ -1589,7 +1596,8 @@ class LatticeOracle:
             p_ = self._pstat
             out.append(f"lattice paired level disks (LEVEL_PAIR): {p_[0]} pairs; {p_[1]} settled by the second tier "
                        f"(the first tier's {p_[2]:.0f} s off their walls), {p_[3]} by the first ({p_[4]} second tiers "
-                       f"not sent, {p_[5]:.0f} s of second tiers wasted)")
+                       f"not sent, {p_[5]:.0f} s of second tiers wasted)"
+                       + (f"; {p_[6]} settled by the second tier with the halves in turn (no saving)" if p_[6] else ''))
         if self._proj:
             nr = len(ranks)
             out.append("lattice projection (requests replayed longest first; critical path / on " +
@@ -2109,8 +2117,10 @@ class LatticeOracle:
                     ps_[0] += 1
                     if not a_.get('pencil') or a_.get('tier') == 0 or b_.get('skipped'):
                         ps_[3] += 1; ps_[4] += int(bool(b_.get('skipped'))); ps_[5] += float(b_.get('dt_', 0.0))
-                    else:
+                    elif a_.get('sib_overlap', True):          # (synchronous waves: the halves on two ranks at once)
                         ps_[1] += 1; ps_[2] += float(a_.get('dt_', 0.0))
+                    else:
+                        ps_[6] += 1                             # settled by the second tier, the halves in turn: no saving
                 self._lvl_tier.pop(th, None)
                 self._lvl_tier[th] = (int(c_['tier']) if c_.get('pencil') and c_.get('tier') is not None else 0)
             while len(self._lvl_tier) > 4096:
